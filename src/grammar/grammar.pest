@@ -1,0 +1,18 @@
+program = { SOI ~ (statement ~ ";")* ~ EOI}
+statement = { assign_statement }
+
+assign_statement = { identifier ~ WHITESPACE* ~ "=" ~ WHITESPACE* ~ expression}
+
+expression = { string | number }
+
+identifier = { (alpha | digit)+ }
+
+alpha = { 'a'..'z' | 'A'..'Z' }
+
+number = {digit+ ~ ("." ~ digit*)?}
+
+digit = { '0'..'9' }
+
+string = @{ "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
+
+WHITESPACE = _{ " " }
