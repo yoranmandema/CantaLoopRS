@@ -4,7 +4,7 @@ mod parser;
 
 
 fn main() {
-    let input = "test = \"hello world!\";";
+    let input = "test = wawd;";
 
     let res = parse_program(input).unwrap();
 

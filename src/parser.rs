@@ -20,7 +20,8 @@ pub enum Statement {
 
 #[derive(Debug)]
 pub enum Expression {
-    Literal(Literal)
+    Literal(Literal),
+    identifier(String)
 }
 
 #[derive(Debug)]
@@ -54,6 +55,9 @@ fn build_expression (pair: Pair<Rule>) -> Result<Expression, pest::error::Error<
         },
         Rule::string => {
             build_string(expression_inner)
+        },
+        Rule::identifier => {
+            build_identifier_expr(expression_inner)
         }
         _ => unreachable!(),
     }
@@ -78,6 +82,11 @@ fn build_string (pair: Pair<Rule>) -> Result<Expression, pest::error::Error<Rule
     println!("String: {}", string_value);
 
     Ok(Expression::Literal(Literal::String(string_value)))
+}
+
+fn build_identifier_expr (pair: Pair<Rule>) -> Result<Expression, pest::error::Error<Rule>> {
+    Ok(Expression::identifier(pair.to_string()))
+
 }
 
 fn build_statement(pair: Pair<Rule>) -> Result<Statement, pest::error::Error<Rule>> {

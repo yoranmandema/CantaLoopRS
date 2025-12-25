@@ -3,7 +3,7 @@ statement = { assign_statement }
 
 assign_statement = { identifier ~ WHITESPACE* ~ "=" ~ WHITESPACE* ~ expression}
 
-expression = { string | number }
+expression = { string | number | identifier }
 
 identifier = { (alpha | digit)+ }
 
