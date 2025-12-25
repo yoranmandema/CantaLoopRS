@@ -7,10 +7,9 @@ expression = { string | number }
 
 identifier = { (alpha | digit)+ }
 
-alpha = { 'a'..'z' | 'A'..'Z' }
-
 number = {digit+ ~ ("." ~ digit*)?}
 
+alpha = { 'a'..'z' | 'A'..'Z' }
 digit = { '0'..'9' }
 
 string = @{ "\"" ~ (!"\"" ~ ANY)* ~ "\"" }

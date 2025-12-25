@@ -1,3 +1,5 @@
+use std::string;
+
 use pest::Parser as PestParser;
 use pest::iterators::Pair;
 use pest_derive::Parser;
@@ -13,7 +15,7 @@ pub struct Program {
 
 #[derive(Debug)]
 pub enum Statement {
-    Assign { identifier: String },
+    Assign { identifier: String, expression: Expression },
 }
 
 #[derive(Debug)]
@@ -47,9 +49,35 @@ fn build_expression (pair: Pair<Rule>) -> Result<Expression, pest::error::Error<
     let expression_inner = pair.into_inner().next().unwrap();
 
     match expression_inner.as_rule() {
-        Rule::
+        Rule::number => {
+            build_number(expression_inner)
+        },
+        Rule::string => {
+            build_string(expression_inner)
+        }
         _ => unreachable!(),
     }
+}
+
+fn build_number (pair: Pair<Rule>) -> Result<Expression, pest::error::Error<Rule>> {
+    let inner = pair.into_inner();
+
+    let value = inner.as_str().parse::<f64>().unwrap();
+
+    println!("Number: {}", value);
+
+    Ok(Expression::Literal(Literal::Number(value)))
+}
+
+fn build_string (pair: Pair<Rule>) -> Result<Expression, pest::error::Error<Rule>> {
+    let str_with_quotes = pair.as_str();
+
+    // Strip the surrounding quotes
+    let string_value = str_with_quotes[1..str_with_quotes.len()-1].to_string();
+
+    println!("String: {}", string_value);
+
+    Ok(Expression::Literal(Literal::String(string_value)))
 }
 
 fn build_statement(pair: Pair<Rule>) -> Result<Statement, pest::error::Error<Rule>> {
@@ -61,11 +89,9 @@ fn build_statement(pair: Pair<Rule>) -> Result<Statement, pest::error::Error<Rul
             let identifier = inner.next().unwrap();
             let expression = inner.next().unwrap();
 
-            println!("identifier: {}", identifier);
-            println!("expression: {}", expression);
-
             Ok(Statement::Assign {
                 identifier: identifier.to_string(),
+                expression: build_expression(expression)?
             })
         }
         _ => unreachable!(),
