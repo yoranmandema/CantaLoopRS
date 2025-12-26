@@ -1,0 +1,7 @@
+helloWorld = "Hello world!"
+
+print(helloWorld)
+
+x = 1
+
+x += 1

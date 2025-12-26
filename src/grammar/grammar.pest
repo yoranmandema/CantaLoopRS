@@ -1,17 +1,35 @@
-program = { SOI ~ (statement ~ ";")* ~ EOI}
-statement = { assign_statement }
+program = { SOI ~ (statement ~ (";" ~ WHITESPACE*)?)* ~ EOI}
+statement = { assign_statement | assign_increment_statement | assign_decrement_statement | expression }
 
 assign_statement = { identifier ~ WHITESPACE* ~ "=" ~ WHITESPACE* ~ expression}
+assign_increment_statement = { identifier ~ WHITESPACE* ~ "+=" ~ WHITESPACE* ~ expression}
+assign_decrement_statement = { identifier ~ WHITESPACE* ~ "-=" ~ WHITESPACE* ~ expression}
 
-expression = { string | number | identifier }
+expression  =   { prefix? ~ primary ~ (infix ~ prefix? ~ primary )* }
+    infix    =  _{ add | sub | mul | div | pow }
+      add    =   { "+" } // Addition
+      sub    =   { "-" } // Subtraction
+      mul    =   { "*" } // Multiplication
+      div    =   { "/" } // Division
+      pow    =   { "^" } // Exponentiation
+    prefix   =  _{ increment | decrement | neg | not }
+      increment    =   { "++" } // Increment (prefix)
+      decrement    =   { "--" } // Decrement (prefix)
+      neg    =   { "-" } // Negation
+      not    =   { "!" } // Not
+    primary  =  _{ value | call_expression | identifier | "(" ~ expression ~ ")" }
 
-identifier = { (alpha | digit)+ }
+call_expression = { identifier ~ "(" ~ expression_list? ~ ")" }
+expression_list = { expression ~ ("," ~ expression)* }
 
+value = { number | string }
+
+identifier = @{ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
 number = {digit+ ~ ("." ~ digit*)?}
+string = @{ "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
 
 alpha = { 'a'..'z' | 'A'..'Z' }
 digit = { '0'..'9' }
 
-string = @{ "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
-
-WHITESPACE = _{ " " }
+operator = { "+" | "-" | "*" | "/" | "=" | "!=" | ">" | "<" | ">=" | "<=" }
+WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
