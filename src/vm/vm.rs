@@ -1,16 +1,236 @@
-use crate::{bytecode::opcode::OpCode, engine::Engine};
+use crate::{bytecode::opcode::{OpCode, OPCODE_COUNT}, engine::Engine};
 
-#[derive(Debug, Clone)]
-pub enum Value {
-    Number(f64),
-    String(String),
-    Boolean(bool),
-    Function(u32), // function ID
-    Thunk {
-        func_id: u32,
-        args: Vec<Value>,
-    },
-    None,
+// Function pointer type for opcode handlers
+// Note: Handlers take frame_idx to access frame through VM, avoiding borrow conflicts
+type OpHandler = fn(&mut VM, usize, &OpCode) -> StepResult;
+
+// Result of executing a step - indicates control flow behavior
+#[derive(Debug, Clone, Copy)]
+enum StepResult {
+    Normal,    // Normal execution, IP was incremented
+    Continue,  // Special case (e.g., Ret), needs to restart loop
+}
+
+// Dispatch table for monomorphic, branch-predictable opcode execution
+static DISPATCH: [OpHandler; OPCODE_COUNT] = [
+    VM::op_ld_num,        // 0
+    VM::op_ld_str,        // 1
+    VM::op_ld_var,        // 2
+    VM::op_ld_const,      // 3
+    VM::op_ld_func,       // 4
+    VM::op_add,           // 5
+    VM::op_sub,           // 6
+    VM::op_mul,           // 7
+    VM::op_div,           // 8
+    VM::op_pow,           // 9
+    VM::op_eq,            // 10
+    VM::op_ne,            // 11
+    VM::op_gt,            // 12
+    VM::op_lt,            // 13
+    VM::op_ge,            // 14
+    VM::op_le,            // 15
+    VM::op_and,           // 16
+    VM::op_or,            // 17
+    VM::op_neg,           // 18
+    VM::op_not,           // 19
+    VM::op_st_var,        // 20
+    VM::op_print,         // 21
+    VM::op_call_stack,    // 22
+    VM::op_thunk,         // 23
+    VM::op_invoke,        // 24
+    VM::op_ret,           // 25
+    VM::op_jmp_if_false,  // 26
+    VM::op_jmp,           // 27
+];
+
+// Tagged union Value using NaN boxing
+// Numbers: valid f64 (not NaN)
+// Other types: NaN with tag bits in payload
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct Value {
+    raw: u64,
+}
+
+// Type tags for NaN values (using quiet NaN with specific payload)
+// QNAN has bits 0x7FF8 in the exponent, we use bits 48-51 for the tag
+// Note: Bit 51 must be set for quiet NaN, so tags use bits 48-50, with bit 51 always set
+const PAYLOAD_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;  // Bits 0-47 for payload (exclude tag bits 48-51)
+const QNAN_BASE: u64 = 0x7FF8_0000_0000_0000;  // Quiet NaN base (exponent=0x7FF, bit 51 set)
+const TAG_MASK: u64 = 0xF << 48;  // Bits 48-51 for tag
+const TAG_CLEAR_MASK: u64 = !TAG_MASK;  // Mask to clear tag bits
+const QNAN_BIT_51: u64 = 1 << 51;  // Bit 51 must be set for quiet NaN
+
+const TAG_STRING: u64 = 0x1;
+const TAG_BOOLEAN: u64 = 0x2;
+const TAG_FUNCTION: u64 = 0x3;
+const TAG_THUNK: u64 = 0x4;
+const TAG_NONE: u64 = 0x5;
+
+// Heap storage for VM - managed per VM instance
+pub struct ValueHeap {
+    pub(crate) strings: Vec<String>,
+    pub(crate) thunks: Vec<ThunkData>,
+}
+
+pub(crate) struct ThunkData {
+    func_id: u32,
+    args: Vec<Value>,
+}
+
+impl ValueHeap {
+    fn new() -> Self {
+        Self {
+            strings: Vec::new(),
+            thunks: Vec::new(),
+        }
+    }
+}
+
+impl Value {
+    #[inline(always)]
+    pub fn number(n: f64) -> Self {
+        // Ensure it's not NaN
+        debug_assert!(!n.is_nan(), "Cannot create Value::Number from NaN");
+        Self { raw: n.to_bits() }
+    }
+
+    #[inline(always)]
+    pub fn string_with_heap(s: String, heap: &mut ValueHeap) -> Self {
+        let idx = heap.strings.len();
+        heap.strings.push(s);
+        Self {
+            raw: (QNAN_BASE & TAG_CLEAR_MASK) | (TAG_STRING << 48) | QNAN_BIT_51 | (idx as u64),
+        }
+    }
+
+    #[inline(always)]
+    pub fn boolean(b: bool) -> Self {
+        Self {
+            raw: (QNAN_BASE & TAG_CLEAR_MASK) | (TAG_BOOLEAN << 48) | QNAN_BIT_51 | (if b { 1 } else { 0 }),
+        }
+    }
+
+    #[inline(always)]
+    pub fn function(id: u32) -> Self {
+        Self {
+            raw: (QNAN_BASE & TAG_CLEAR_MASK) | (TAG_FUNCTION << 48) | QNAN_BIT_51 | (id as u64),
+        }
+    }
+
+    #[inline(always)]
+    pub fn thunk_with_heap(func_id: u32, args: Vec<Value>, heap: &mut ValueHeap) -> Self {
+        let idx = heap.thunks.len();
+        heap.thunks.push(ThunkData { func_id, args });
+        Self {
+            raw: (QNAN_BASE & TAG_CLEAR_MASK) | (TAG_THUNK << 48) | QNAN_BIT_51 | (idx as u64),
+        }
+    }
+
+    #[inline(always)]
+    pub fn none() -> Self {
+        Self {
+            raw: (QNAN_BASE & TAG_CLEAR_MASK) | (TAG_NONE << 48) | QNAN_BIT_51,
+        }
+    }
+
+    #[inline(always)]
+    fn tag(&self) -> u64 {
+        // Check if it's a NaN (exponent bits 0x7FF)
+        if (self.raw & 0x7FF0_0000_0000_0000) == 0x7FF0_0000_0000_0000 {
+            // Extract tag from bits 48-51, but bit 51 is always set for quiet NaN
+            // So we only look at bits 48-50 for the tag (3 bits)
+            (self.raw >> 48) & 0x7
+        } else {
+            0 // Number
+        }
+    }
+
+    #[inline(always)]
+    pub fn as_number(&self) -> Option<f64> {
+        if self.tag() == 0 {
+            Some(f64::from_bits(self.raw))
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    pub fn as_string(&self, heap: &ValueHeap) -> Option<String> {
+        if self.tag() == TAG_STRING {
+            let idx = (self.raw & PAYLOAD_MASK) as usize;
+            heap.strings.get(idx).cloned()
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    pub fn as_boolean(&self) -> Option<bool> {
+        if self.tag() == TAG_BOOLEAN {
+            Some((self.raw & 1) != 0)
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    pub fn as_function(&self) -> Option<u32> {
+        if self.tag() == TAG_FUNCTION {
+            Some((self.raw & PAYLOAD_MASK) as u32)
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    pub fn as_thunk(&self, heap: &ValueHeap) -> Option<(u32, Vec<Value>)> {
+        if self.tag() == TAG_THUNK {
+            let idx = (self.raw & PAYLOAD_MASK) as usize;
+            heap.thunks.get(idx).map(|t| (t.func_id, t.args.clone()))
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    pub fn is_none(&self) -> bool {
+        self.tag() == TAG_NONE
+    }
+
+    pub fn value_to_string(self, heap: &ValueHeap) -> String {
+        if let Some(n) = self.as_number() {
+            n.to_string()
+        } else if let Some(s) = self.as_string(heap) {
+            s
+        } else if let Some(b) = self.as_boolean() {
+            b.to_string()
+        } else if let Some(id) = self.as_function() {
+            format!("<function:{}>", id)
+        } else if self.as_thunk(heap).is_some() {
+            "<prepared_call>".to_string()
+        } else if self.is_none() {
+            "None".to_string()
+        } else {
+            "Unknown".to_string()
+        }
+    }
+}
+
+impl std::fmt::Debug for Value {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(n) = self.as_number() {
+            write!(f, "Value::Number({})", n)
+        } else if let Some(b) = self.as_boolean() {
+            write!(f, "Value::Boolean({})", b)
+        } else if let Some(id) = self.as_function() {
+            write!(f, "Value::Function({})", id)
+        } else if self.is_none() {
+            write!(f, "Value::None")
+        } else {
+            write!(f, "Value::Tagged({:x})", self.raw)
+        }
+    }
 }
 
 fn pop_n(stack: &mut Vec<Value>, n: usize) -> Vec<Value> {
@@ -23,320 +243,466 @@ fn pop_n(stack: &mut Vec<Value>, n: usize) -> Vec<Value> {
 }
 
 struct CallFrame {
-    code: Vec<OpCode>,            // Bytecode to execute (either top-level ops or function code)
-    ip: usize,                    // Instruction pointer (current position in code)
-    locals: Vec<Value>,           // Local variable slots (indexed by var_id)
-    scope_id: u32,                // Scope identifier
+    code: &'static [OpCode],      // Bytecode to execute (either top-level ops or function code) - cached, not cloned
+    ip: usize,                     // Instruction pointer (current position in code)
+    locals: Box<[Value]>,          // Local variable slots (indexed by var_id) - Box to avoid Vec allocation
 }
 
 pub struct VM<'a> {
     engine: &'a Engine,
-    ops: Vec<OpCode>,
+    ops: &'static [OpCode],  // Top-level bytecode - cached, not cloned
     stack: Vec<Value>,
     call_stack: Vec<CallFrame>,
+    heap: ValueHeap,
 }
 
 impl<'a> VM<'a> {
     pub fn new(engine: &'a Engine, ops: Vec<OpCode>) -> Self {
+        // Leak the bytecode to get a 'static reference - this is acceptable since
+        // bytecode is created once and lives for the entire program lifetime
+        let ops_box = Box::new(ops);
+        let ops_slice: &'static [OpCode] = Box::leak(ops_box);
+        
         Self {
             engine,
-            ops,
+            ops: ops_slice,
             stack: Vec::new(),
             call_stack: Vec::new(),
+            heap: ValueHeap::new(),
         }
     }
 
 
+    #[inline(always)]
+    fn step(&mut self, frame_idx: usize) -> StepResult {
+        // Clone opcode to avoid borrow conflicts (opcode data is needed in handlers)
+        let ip = self.call_stack[frame_idx].ip;
+        let opcode = self.call_stack[frame_idx].code[ip].clone();
+        let disc = opcode.discriminant() as usize;
+        self.call_stack[frame_idx].ip += 1;
+        let handler = unsafe { *DISPATCH.get_unchecked(disc) };
+        handler(self, frame_idx, &opcode)
+    }
+
     pub fn run(&mut self) {
-        // Initialize top-level frame
+        // Initialize top-level frame - use static reference, no cloning
         self.call_stack.push(CallFrame {
-            code: self.ops.clone(),
+            code: self.ops,
             ip: 0,
-            locals: Vec::new(),
-            scope_id: 0,
+            locals: Box::new([]),  // Empty locals for top-level
         });
 
         // Main execution loop - process the current frame
         while !self.call_stack.is_empty() {
             let frame_idx = self.call_stack.len() - 1;
+            
+            // Check if frame is finished
             {
                 let frame = &self.call_stack[frame_idx];
                 if frame.ip >= frame.code.len() {
-                    // Frame finished executing, pop it
                     self.call_stack.pop();
                     continue;
                 }
             }
 
-            // Get the opcode we need to execute (clone it to avoid borrow issues)
-            let frame = &self.call_stack[frame_idx];
-            let opcode = frame.code[frame.ip].clone();
-            let mut should_increment = true;
-            
-            // Execute the opcode
-            let mut should_continue_loop = false;
-            match &opcode {
-                OpCode::LdNum(n) => self.stack.push(Value::Number(*n)),
-                OpCode::LdStr(s) => self.stack.push(Value::String(s.clone())),
-                OpCode::LdVar(id) => {
-                    let idx = *id as usize;
-                    let frame = &self.call_stack[frame_idx];
-                    let val = if idx < frame.locals.len() {
-                        frame.locals[idx].clone()
-                    } else {
-                        Value::None
-                    };
-                    self.stack.push(val);
-                }
-                OpCode::StVar(id) => {
-                    let val = self.stack.pop().expect("Stack underflow");
-                    let idx = *id as usize;
-                    let frame = &mut self.call_stack[frame_idx];
-                    // Ensure locals vec is large enough
-                    if idx >= frame.locals.len() {
-                        frame.locals.resize(idx + 1, Value::None);
-                    }
-                    frame.locals[idx] = val;
-                }
-                OpCode::LdConst(id) => {
-                    // load constant (data only, no functions)
-                    let const_val = self.engine.get_constant(*id);
-                    self.stack.push(const_val);
-                }
-                OpCode::LdFunc(id) => {
-                    // load function reference
-                    let func_val = self.engine.get_function(*id);
-                    self.stack.push(func_val);
-                }
-                OpCode::Add => self.binary_add(),
-                OpCode::Sub => self.binary_sub(),
-                OpCode::Mul => self.binary_mul(),
-                OpCode::Div => self.binary_div(),
-                OpCode::Pow => self.binary_pow(),
-                OpCode::Eq => self.comparison_eq(),
-                OpCode::Ne => self.comparison_ne(),
-                OpCode::Gt => self.comparison_gt(),
-                OpCode::Lt => self.comparison_lt(),
-                OpCode::Ge => self.comparison_ge(),
-                OpCode::Le => self.comparison_le(),
-                OpCode::And => self.logical_and(),
-                OpCode::Or => self.logical_or(),
-                OpCode::Neg => {
-                    let v = self.stack.pop().expect("Stack underflow");
-                    match v {
-                        Value::Number(n) => self.stack.push(Value::Number(-n)),
-                        _ => panic!("Negate non-number"),
-                    }
-                }
-                OpCode::Not => {
-                    let v = self.stack.pop().expect("Stack underflow");
-                    match v {
-                        Value::Number(n) => self.stack.push(Value::Number(if n == 0.0 { 1.0 } else { 0.0 })),
-                        Value::Boolean(b) => self.stack.push(Value::Boolean(!b)),
-                        _ => panic!("Not on non-number/non-boolean"),
-                    }
-                }
-                OpCode::CallStack(n_args) => {
-                    self.execute_call_stack(*n_args);
-                },
-                OpCode::Thunk(n_args) => {
-                    self.execute_prepare_call(*n_args);
-                },
-                OpCode::Invoke => {
-                    self.execute_invoke();
-                },
-                OpCode::Ret => {
-                    self.execute_return();
-                    // After return, we've popped the frame, restart loop to handle previous frame
-                    // Skip IP increment
-                    should_continue_loop = true;
-                },
-                OpCode::JmpIfFalse(offset) => {
-                    let v = self.stack.pop().expect("Stack underflow");
-                    let is_false = match v {
-                        Value::Boolean(b) => !b,
-                        Value::Number(n) => n == 0.0,
-                        _ => false,
-                    };
-                    if is_false {
-                        self.call_stack[frame_idx].ip = *offset;
-                        should_increment = false;
-                    }
-                }
-                OpCode::Jmp(offset) => {
-                    self.call_stack[frame_idx].ip = *offset;
-                    should_increment = false;
-                }
-                _ => unimplemented!("{:?}", opcode),
-            }
-            
-            // If Ret was executed, continue loop without incrementing IP
-            if should_continue_loop {
-                continue;
-            }
-            
-            if should_increment {
-                self.call_stack[frame_idx].ip += 1;
+            // Execute the opcode using dispatch table
+            match self.step(frame_idx) {
+                StepResult::Continue => continue,  // Ret was executed
+                StepResult::Normal => {},          // Normal execution, IP already incremented
             }
         }
+    }
+
+    // Opcode handlers - each handler extracts data from opcode and executes
+    #[inline(always)]
+    fn op_ld_num(_vm: &mut VM, _frame_idx: usize, opcode: &OpCode) -> StepResult {
+        if let OpCode::LdNum(n) = opcode {
+            _vm.stack.push(Value::number(*n));
+        }
+        StepResult::Normal
+    }
+
+    #[inline(always)]
+    fn op_ld_str(_vm: &mut VM, _frame_idx: usize, opcode: &OpCode) -> StepResult {
+        if let OpCode::LdStr(s) = opcode {
+            _vm.stack.push(Value::string_with_heap(s.clone(), &mut _vm.heap));
+        }
+        StepResult::Normal
+    }
+
+    #[inline(always)]
+    fn op_ld_var(_vm: &mut VM, frame_idx: usize, opcode: &OpCode) -> StepResult {
+        if let OpCode::LdVar(id) = opcode {
+            let idx = *id as usize;
+            let frame = &_vm.call_stack[frame_idx];
+            let val = if idx < frame.locals.len() {
+                frame.locals[idx]
+            } else {
+                Value::none()
+            };
+            _vm.stack.push(val);
+        }
+        StepResult::Normal
+    }
+
+    #[inline(always)]
+    fn op_ld_const(_vm: &mut VM, _frame_idx: usize, opcode: &OpCode) -> StepResult {
+        if let OpCode::LdConst(id) = opcode {
+            let const_val = _vm.engine.get_constant(*id, &mut _vm.heap);
+            _vm.stack.push(const_val);
+        }
+        StepResult::Normal
+    }
+
+    #[inline(always)]
+    fn op_ld_func(_vm: &mut VM, _frame_idx: usize, opcode: &OpCode) -> StepResult {
+        if let OpCode::LdFunc(id) = opcode {
+            let func_val = _vm.engine.get_function(*id);
+            _vm.stack.push(func_val);
+        }
+        StepResult::Normal
+    }
+
+    #[inline(always)]
+    fn op_add(_vm: &mut VM, _frame_idx: usize, _opcode: &OpCode) -> StepResult {
+        _vm.binary_add();
+        StepResult::Normal
+    }
+
+    #[inline(always)]
+    fn op_sub(_vm: &mut VM, _frame_idx: usize, _opcode: &OpCode) -> StepResult {
+        _vm.binary_sub();
+        StepResult::Normal
+    }
+
+    #[inline(always)]
+    fn op_mul(_vm: &mut VM, _frame_idx: usize, _opcode: &OpCode) -> StepResult {
+        _vm.binary_mul();
+        StepResult::Normal
+    }
+
+    #[inline(always)]
+    fn op_div(_vm: &mut VM, _frame_idx: usize, _opcode: &OpCode) -> StepResult {
+        _vm.binary_div();
+        StepResult::Normal
+    }
+
+    #[inline(always)]
+    fn op_pow(_vm: &mut VM, _frame_idx: usize, _opcode: &OpCode) -> StepResult {
+        _vm.binary_pow();
+        StepResult::Normal
+    }
+
+    #[inline(always)]
+    fn op_eq(_vm: &mut VM, _frame_idx: usize, _opcode: &OpCode) -> StepResult {
+        _vm.comparison_eq();
+        StepResult::Normal
+    }
+
+    #[inline(always)]
+    fn op_ne(_vm: &mut VM, _frame_idx: usize, _opcode: &OpCode) -> StepResult {
+        _vm.comparison_ne();
+        StepResult::Normal
+    }
+
+    #[inline(always)]
+    fn op_gt(_vm: &mut VM, _frame_idx: usize, _opcode: &OpCode) -> StepResult {
+        _vm.comparison_gt();
+        StepResult::Normal
+    }
+
+    #[inline(always)]
+    fn op_lt(_vm: &mut VM, _frame_idx: usize, _opcode: &OpCode) -> StepResult {
+        _vm.comparison_lt();
+        StepResult::Normal
+    }
+
+    #[inline(always)]
+    fn op_ge(_vm: &mut VM, _frame_idx: usize, _opcode: &OpCode) -> StepResult {
+        _vm.comparison_ge();
+        StepResult::Normal
+    }
+
+    #[inline(always)]
+    fn op_le(_vm: &mut VM, _frame_idx: usize, _opcode: &OpCode) -> StepResult {
+        _vm.comparison_le();
+        StepResult::Normal
+    }
+
+    #[inline(always)]
+    fn op_and(_vm: &mut VM, _frame_idx: usize, _opcode: &OpCode) -> StepResult {
+        _vm.logical_and();
+        StepResult::Normal
+    }
+
+    #[inline(always)]
+    fn op_or(_vm: &mut VM, _frame_idx: usize, _opcode: &OpCode) -> StepResult {
+        _vm.logical_or();
+        StepResult::Normal
+    }
+
+    #[inline(always)]
+    fn op_neg(_vm: &mut VM, _frame_idx: usize, _opcode: &OpCode) -> StepResult {
+        let v = _vm.stack.pop().expect("Stack underflow");
+        if let Some(n) = v.as_number() {
+            _vm.stack.push(Value::number(-n));
+        } else {
+            panic!("Negate non-number");
+        }
+        StepResult::Normal
+    }
+
+    #[inline(always)]
+    fn op_not(_vm: &mut VM, _frame_idx: usize, _opcode: &OpCode) -> StepResult {
+        let v = _vm.stack.pop().expect("Stack underflow");
+        if let Some(n) = v.as_number() {
+            _vm.stack.push(Value::number(if n == 0.0 { 1.0 } else { 0.0 }));
+        } else if let Some(b) = v.as_boolean() {
+            _vm.stack.push(Value::boolean(!b));
+        } else {
+            panic!("Not on non-number/non-boolean");
+        }
+        StepResult::Normal
+    }
+
+    #[inline(always)]
+    fn op_st_var(_vm: &mut VM, frame_idx: usize, opcode: &OpCode) -> StepResult {
+        if let OpCode::StVar(id) = opcode {
+            let val = _vm.stack.pop().expect("Stack underflow");
+            let idx = *id as usize;
+            let frame = &mut _vm.call_stack[frame_idx];
+            // Ensure locals is large enough - convert to Vec, resize, then back to Box
+            if idx >= frame.locals.len() {
+                let mut locals_vec: Vec<Value> = std::mem::take(&mut frame.locals).into();
+                locals_vec.resize(idx + 1, Value::none());
+                frame.locals = locals_vec.into_boxed_slice();
+            }
+            frame.locals[idx] = val;
+        }
+        StepResult::Normal
+    }
+
+    #[inline(always)]
+    fn op_print(_vm: &mut VM, _frame_idx: usize, _opcode: &OpCode) -> StepResult {
+        let v = _vm.stack.pop().expect("Stack underflow");
+        let s = v.value_to_string(&_vm.heap);
+        println!("{}", s);
+        StepResult::Normal
+    }
+
+    #[inline(always)]
+    fn op_call_stack(_vm: &mut VM, _frame_idx: usize, opcode: &OpCode) -> StepResult {
+        if let OpCode::CallStack(n_args) = opcode {
+            _vm.execute_call_stack(*n_args);
+        }
+        StepResult::Normal
+    }
+
+    #[inline(always)]
+    fn op_thunk(_vm: &mut VM, _frame_idx: usize, opcode: &OpCode) -> StepResult {
+        if let OpCode::Thunk(n_args) = opcode {
+            _vm.execute_prepare_call(*n_args);
+        }
+        StepResult::Normal
+    }
+
+    #[inline(always)]
+    fn op_invoke(_vm: &mut VM, _frame_idx: usize, _opcode: &OpCode) -> StepResult {
+        _vm.execute_invoke();
+        StepResult::Normal
+    }
+
+    #[inline(always)]
+    fn op_ret(_vm: &mut VM, _frame_idx: usize, _opcode: &OpCode) -> StepResult {
+        _vm.execute_return();
+        // After return, we've popped the frame, restart loop to handle previous frame
+        StepResult::Continue
+    }
+
+    #[inline(always)]
+    fn op_jmp_if_false(_vm: &mut VM, frame_idx: usize, opcode: &OpCode) -> StepResult {
+        if let OpCode::JmpIfFalse(offset) = opcode {
+            let v = _vm.stack.pop().expect("Stack underflow");
+            let is_false = if let Some(b) = v.as_boolean() {
+                !b
+            } else if let Some(n) = v.as_number() {
+                n == 0.0
+            } else {
+                false
+            };
+            if is_false {
+                _vm.call_stack[frame_idx].ip = *offset;
+            }
+        }
+        StepResult::Normal
+    }
+
+    #[inline(always)]
+    fn op_jmp(_vm: &mut VM, frame_idx: usize, opcode: &OpCode) -> StepResult {
+        if let OpCode::Jmp(offset) = opcode {
+            _vm.call_stack[frame_idx].ip = *offset;
+        }
+        StepResult::Normal
     }
 
     fn binary_add(&mut self) {
         let b = self.stack.pop().expect("Stack underflow");
         let a = self.stack.pop().expect("Stack underflow");
-        match (a, b) {
-            (Value::Number(a_num), Value::Number(b_num)) => {
-                self.stack.push(Value::Number(a_num + b_num));
-            }
+        if let (Some(a_num), Some(b_num)) = (a.as_number(), b.as_number()) {
+            self.stack.push(Value::number(a_num + b_num));
+        } else {
             // If either operand is a string or any other type, convert both to strings and concatenate
-            (a, b) => {
-                let mut result = Self::value_to_string(a);
-                result.push_str(&Self::value_to_string(b));
-                self.stack.push(Value::String(result));
-            }
+            let mut result = a.value_to_string(&self.heap);
+            result.push_str(&b.value_to_string(&self.heap));
+            self.stack.push(Value::string_with_heap(result, &mut self.heap));
         }
     }
 
     fn binary_sub(&mut self) {
         let b = self.stack.pop().expect("Stack underflow");
         let a = self.stack.pop().expect("Stack underflow");
-        match (a, b) {
-            (Value::Number(a), Value::Number(b)) => self.stack.push(Value::Number(a - b)),
-            _ => panic!("Subtract operation requires both operands to be numbers"),
+        if let (Some(a), Some(b)) = (a.as_number(), b.as_number()) {
+            self.stack.push(Value::number(a - b));
+        } else {
+            panic!("Subtract operation requires both operands to be numbers");
         }
     }
 
     fn binary_mul(&mut self) {
         let b = self.stack.pop().expect("Stack underflow");
         let a = self.stack.pop().expect("Stack underflow");
-        match (a, b) {
-            (Value::Number(a), Value::Number(b)) => self.stack.push(Value::Number(a * b)),
-            _ => panic!("Multiply operation requires both operands to be numbers"),
+        if let (Some(a), Some(b)) = (a.as_number(), b.as_number()) {
+            self.stack.push(Value::number(a * b));
+        } else {
+            panic!("Multiply operation requires both operands to be numbers");
         }
     }
 
     fn binary_div(&mut self) {
         let b = self.stack.pop().expect("Stack underflow");
         let a = self.stack.pop().expect("Stack underflow");
-        match (a, b) {
-            (Value::Number(a), Value::Number(b)) => self.stack.push(Value::Number(a / b)),
-            _ => panic!("Divide operation requires both operands to be numbers"),
+        if let (Some(a), Some(b)) = (a.as_number(), b.as_number()) {
+            self.stack.push(Value::number(a / b));
+        } else {
+            panic!("Divide operation requires both operands to be numbers");
         }
     }
 
     fn binary_pow(&mut self) {
         let b = self.stack.pop().expect("Stack underflow");
         let a = self.stack.pop().expect("Stack underflow");
-        match (a, b) {
-            (Value::Number(a), Value::Number(b)) => self.stack.push(Value::Number(a.powf(b))),
-            _ => panic!("Power operation requires both operands to be numbers"),
+        if let (Some(a), Some(b)) = (a.as_number(), b.as_number()) {
+            self.stack.push(Value::number(a.powf(b)));
+        } else {
+            panic!("Power operation requires both operands to be numbers");
         }
     }
 
     fn comparison_eq(&mut self) {
         let b = self.stack.pop().expect("Stack underflow");
         let a = self.stack.pop().expect("Stack underflow");
-        let result = match (a, b) {
-            (Value::Number(a), Value::Number(b)) => a == b,
-            (Value::String(a), Value::String(b)) => a == b,
-            (Value::Boolean(a), Value::Boolean(b)) => a == b,
-            _ => panic!("Comparison == on incompatible types"),
+        let result = if let (Some(a), Some(b)) = (a.as_number(), b.as_number()) {
+            a == b
+        } else if let (Some(a), Some(b)) = (a.as_string(&self.heap), b.as_string(&self.heap)) {
+            a == b
+        } else if let (Some(a), Some(b)) = (a.as_boolean(), b.as_boolean()) {
+            a == b
+        } else {
+            panic!("Comparison == on incompatible types");
         };
-        self.stack.push(Value::Boolean(result));
+        self.stack.push(Value::boolean(result));
     }
 
     fn comparison_ne(&mut self) {
         let b = self.stack.pop().expect("Stack underflow");
         let a = self.stack.pop().expect("Stack underflow");
-        let result = match (a, b) {
-            (Value::Number(a), Value::Number(b)) => a != b,
-            (Value::String(a), Value::String(b)) => a != b,
-            (Value::Boolean(a), Value::Boolean(b)) => a != b,
-            _ => panic!("Comparison != on incompatible types"),
+        let result = if let (Some(a), Some(b)) = (a.as_number(), b.as_number()) {
+            a != b
+        } else if let (Some(a), Some(b)) = (a.as_string(&self.heap), b.as_string(&self.heap)) {
+            a != b
+        } else if let (Some(a), Some(b)) = (a.as_boolean(), b.as_boolean()) {
+            a != b
+        } else {
+            panic!("Comparison != on incompatible types");
         };
-        self.stack.push(Value::Boolean(result));
+        self.stack.push(Value::boolean(result));
     }
 
     fn comparison_gt(&mut self) {
         let b = self.stack.pop().expect("Stack underflow");
         let a = self.stack.pop().expect("Stack underflow");
-        let result = match (a, b) {
-            (Value::Number(a), Value::Number(b)) => a > b,
-            (Value::String(a), Value::String(b)) => a > b,
-            (Value::Boolean(a), Value::Boolean(b)) => {
-                let a_num = if a { 1.0 } else { 0.0 };
-                let b_num = if b { 1.0 } else { 0.0 };
-                a_num > b_num
-            }
-            _ => panic!("Comparison > on incompatible types"),
+        let result = if let (Some(a), Some(b)) = (a.as_number(), b.as_number()) {
+            a > b
+        } else if let (Some(a), Some(b)) = (a.as_string(&self.heap), b.as_string(&self.heap)) {
+            a > b
+        } else if let (Some(a), Some(b)) = (a.as_boolean(), b.as_boolean()) {
+            let a_num = if a { 1.0 } else { 0.0 };
+            let b_num = if b { 1.0 } else { 0.0 };
+            a_num > b_num
+        } else {
+            panic!("Comparison > on incompatible types");
         };
-        self.stack.push(Value::Boolean(result));
+        self.stack.push(Value::boolean(result));
     }
 
     fn comparison_lt(&mut self) {
         let b = self.stack.pop().expect("Stack underflow");
         let a = self.stack.pop().expect("Stack underflow");
-        let result = match (a, b) {
-            (Value::Number(a), Value::Number(b)) => a < b,
-            (Value::String(a), Value::String(b)) => a < b,
-            (Value::Boolean(a), Value::Boolean(b)) => {
-                let a_num = if a { 1.0 } else { 0.0 };
-                let b_num = if b { 1.0 } else { 0.0 };
-                a_num < b_num
-            }
-            _ => panic!("Comparison < on incompatible types"),
+        let result = if let (Some(a), Some(b)) = (a.as_number(), b.as_number()) {
+            a < b
+        } else if let (Some(a), Some(b)) = (a.as_string(&self.heap), b.as_string(&self.heap)) {
+            a < b
+        } else if let (Some(a), Some(b)) = (a.as_boolean(), b.as_boolean()) {
+            let a_num = if a { 1.0 } else { 0.0 };
+            let b_num = if b { 1.0 } else { 0.0 };
+            a_num < b_num
+        } else {
+            panic!("Comparison < on incompatible types");
         };
-        self.stack.push(Value::Boolean(result));
+        self.stack.push(Value::boolean(result));
     }
 
     fn comparison_ge(&mut self) {
         let b = self.stack.pop().expect("Stack underflow");
         let a = self.stack.pop().expect("Stack underflow");
-        let result = match (a, b) {
-            (Value::Number(a), Value::Number(b)) => a >= b,
-            (Value::String(a), Value::String(b)) => a >= b,
-            (Value::Boolean(a), Value::Boolean(b)) => {
-                let a_num = if a { 1.0 } else { 0.0 };
-                let b_num = if b { 1.0 } else { 0.0 };
-                a_num >= b_num
-            }
-            _ => panic!("Comparison >= on incompatible types"),
+        let result = if let (Some(a), Some(b)) = (a.as_number(), b.as_number()) {
+            a >= b
+        } else if let (Some(a), Some(b)) = (a.as_string(&self.heap), b.as_string(&self.heap)) {
+            a >= b
+        } else if let (Some(a), Some(b)) = (a.as_boolean(), b.as_boolean()) {
+            let a_num = if a { 1.0 } else { 0.0 };
+            let b_num = if b { 1.0 } else { 0.0 };
+            a_num >= b_num
+        } else {
+            panic!("Comparison >= on incompatible types");
         };
-        self.stack.push(Value::Boolean(result));
+        self.stack.push(Value::boolean(result));
     }
 
     fn comparison_le(&mut self) {
         let b = self.stack.pop().expect("Stack underflow");
         let a = self.stack.pop().expect("Stack underflow");
-        let result = match (a, b) {
-            (Value::Number(a), Value::Number(b)) => a <= b,
-            (Value::String(a), Value::String(b)) => a <= b,
-            (Value::Boolean(a), Value::Boolean(b)) => {
-                let a_num = if a { 1.0 } else { 0.0 };
-                let b_num = if b { 1.0 } else { 0.0 };
-                a_num <= b_num
-            }
-            _ => panic!("Comparison <= on incompatible types"),
+        let result = if let (Some(a), Some(b)) = (a.as_number(), b.as_number()) {
+            a <= b
+        } else if let (Some(a), Some(b)) = (a.as_string(&self.heap), b.as_string(&self.heap)) {
+            a <= b
+        } else if let (Some(a), Some(b)) = (a.as_boolean(), b.as_boolean()) {
+            let a_num = if a { 1.0 } else { 0.0 };
+            let b_num = if b { 1.0 } else { 0.0 };
+            a_num <= b_num
+        } else {
+            panic!("Comparison <= on incompatible types");
         };
-        self.stack.push(Value::Boolean(result));
+        self.stack.push(Value::boolean(result));
     }
 
     fn to_bool(value: &Value) -> bool {
-        match value {
-            Value::Boolean(b) => *b,
-            Value::Number(n) => *n != 0.0,
-            _ => panic!("Cannot convert to boolean"),
-        }
-    }
-
-    fn value_to_string(value: Value) -> String {
-        match value {
-            Value::String(s) => s,
-            Value::Number(n) => n.to_string(),
-            Value::Boolean(b) => b.to_string(),
-            Value::Function(id) => format!("<function:{}>", id),
-            Value::Thunk { .. } => "<prepared_call>".to_string(),
-            Value::None => "None".to_string(),
+        if let Some(b) = value.as_boolean() {
+            b
+        } else if let Some(n) = value.as_number() {
+            n != 0.0
+        } else {
+            panic!("Cannot convert to boolean");
         }
     }
 
@@ -344,24 +710,21 @@ impl<'a> VM<'a> {
         let b = self.stack.pop().expect("Stack underflow");
         let a = self.stack.pop().expect("Stack underflow");
         let result = Self::to_bool(&a) && Self::to_bool(&b);
-        self.stack.push(Value::Boolean(result));
+        self.stack.push(Value::boolean(result));
     }
 
     fn logical_or(&mut self) {
         let b = self.stack.pop().expect("Stack underflow");
         let a = self.stack.pop().expect("Stack underflow");
         let result = Self::to_bool(&a) || Self::to_bool(&b);
-        self.stack.push(Value::Boolean(result));
+        self.stack.push(Value::boolean(result));
     }
 
     fn execute_call_stack(&mut self, n_args: u32) {
         let n_args = n_args as usize;
         // Pop function reference
         let func_val = self.stack.pop().expect("Stack underflow");
-        let func_id = match func_val {
-            Value::Function(id) => id,
-            _ => panic!("Expected function on stack"),
-        };
+        let func_id = func_val.as_function().expect("Expected function on stack");
 
         // Pop arguments
         let args: Vec<Value> = pop_n(&mut self.stack, n_args);
@@ -371,17 +734,10 @@ impl<'a> VM<'a> {
             // Native function: convert args to strings and call
             let args_str: Vec<String> = args
                 .into_iter()
-                .map(|v| match v {
-                    Value::String(s) => s,
-                    Value::Number(n) => n.to_string(),
-                    Value::Function(id) => format!("<function:{}>", id),
-                    Value::Boolean(v) => v.to_string(),
-                    Value::Thunk { .. } => "<prepared_call>".to_string(),
-                    Value::None => "None".to_string(),
-                })
+                .map(|v| v.value_to_string(&self.heap))
                 .collect();
             let result = native_func(&args_str);
-            self.stack.push(Value::String(result));
+            self.stack.push(Value::string_with_heap(result, &mut self.heap));
             // Native functions don't need frame management - they return immediately
         } else if let Some(bytecode_func) = self.engine.bytecode_functions.get(&func_id) {
             // Bytecode function: push new call frame
@@ -394,19 +750,18 @@ impl<'a> VM<'a> {
                 .unwrap_or(0);
             
             // Initialize locals vector with arguments bound to parameter slots
-            let mut locals = vec![Value::None; (max_var_id + 1) as usize];
+            let mut locals = vec![Value::none(); (max_var_id + 1) as usize];
             for (i, param_var_id) in bytecode_func.param_var_ids.iter().enumerate() {
                 if i < args.len() {
-                    locals[*param_var_id as usize] = args[i].clone();
+                    locals[*param_var_id as usize] = args[i];
                 }
             }
 
-            // Push new frame with function bytecode
+            // Push new frame with function bytecode - use static reference, no cloning
             self.call_stack.push(CallFrame {
-                code: bytecode_func.code.clone(),
+                code: bytecode_func.code,  // Already &'static [OpCode], no clone needed
                 ip: 0,  // Start at beginning of function
-                locals,
-                scope_id: func_id, // Use func_id as scope_id for now
+                locals: locals.into_boxed_slice(),  // Convert Vec to Box<[Value]>
             });
             // Execution will continue in the main loop with the new frame
         } else {
@@ -416,7 +771,7 @@ impl<'a> VM<'a> {
 
     fn execute_return(&mut self) {
         // Pop return value (or use None if stack is empty)
-        let return_value = self.stack.pop().unwrap_or(Value::None);
+        let return_value = self.stack.pop().unwrap_or(Value::none());
 
         // Pop the current frame (this removes it from call_stack)
         self.call_stack.pop();
@@ -431,19 +786,15 @@ impl<'a> VM<'a> {
         
         // Pop function reference
         let func_val = self.stack.pop().expect("Stack underflow");
-        let func_id = match func_val {
-            Value::Function(id) => id,
-            _ => panic!("Expected function on stack for Thunk"),
-        };
+        let func_id = func_val.as_function().unwrap_or_else(|| {
+            panic!("Expected function on stack for Thunk, got: {:?} (raw: 0x{:x})", func_val, func_val.raw);
+        });
 
         // Pop arguments (they're on the stack in order, so we need to reverse them)
         let args: Vec<Value> = pop_n(&mut self.stack, n_args);
 
         // Create a Thunk value
-        let prepared_call = Value::Thunk {
-            func_id,
-            args,
-        };
+        let prepared_call = Value::thunk_with_heap(func_id, args, &mut self.heap);
 
         // Push the prepared call onto the stack
         self.stack.push(prepared_call);
@@ -455,10 +806,8 @@ impl<'a> VM<'a> {
         // before the Thunk. We need to check if we need more args and pop them.
         let call = self.stack.pop().expect("Expected prepared call on stack");
 
-        let (func_id, mut args) = match call {
-            Value::Thunk { func_id, args } => (func_id, args),
-            _ => panic!("Invoke expects Thunk value, got {:?}", call),
-        };
+        let (func_id, mut args) = call.as_thunk(&self.heap)
+            .expect("Invoke expects Thunk value");
 
         // Get the required number of parameters for this function
         let required_params = if self.engine.functions.contains_key(&func_id) {
@@ -489,10 +838,7 @@ impl<'a> VM<'a> {
                     // Not enough arguments available, create a new Thunk (still partial)
                     // Combine existing args with any extra args we collected
                     args.extend(extra_args);
-                    self.stack.push(Value::Thunk {
-                        func_id,
-                        args,
-                    });
+                    self.stack.push(Value::thunk_with_heap(func_id, args, &mut self.heap));
                     return;
                 }
                 // Pop an additional argument from the stack
@@ -507,10 +853,7 @@ impl<'a> VM<'a> {
         // Ensure we have enough arguments before invoking
         if args.len() < required_params {
             // Still not enough args, create a new Thunk (shouldn't happen here, but be safe)
-            self.stack.push(Value::Thunk {
-                func_id,
-                args,
-            });
+            self.stack.push(Value::thunk_with_heap(func_id, args, &mut self.heap));
             return;
         }
 
@@ -533,17 +876,10 @@ impl<'a> VM<'a> {
             // Native function: convert args to strings and call
             let args_str: Vec<String> = args
                 .into_iter()
-                .map(|v| match v {
-                    Value::String(s) => s,
-                    Value::Number(n) => n.to_string(),
-                    Value::Function(id) => format!("<function:{}>", id),
-                    Value::Boolean(v) => v.to_string(),
-                    Value::Thunk { .. } => "<prepared_call>".to_string(),
-                    Value::None => "None".to_string(),
-                })
+                .map(|v| v.value_to_string(&self.heap))
                 .collect();
             let result = native_func(&args_str);
-            self.stack.push(Value::String(result));
+            self.stack.push(Value::string_with_heap(result, &mut self.heap));
         } else if let Some(bytecode_func) = self.engine.bytecode_functions.get(&func_id) {
             // Bytecode function: push new call frame
             
@@ -554,19 +890,18 @@ impl<'a> VM<'a> {
                 .unwrap_or(0);
             
             // Initialize locals vector with arguments bound to parameter slots
-            let mut locals = vec![Value::None; (max_var_id + 1) as usize];
+            let mut locals = vec![Value::none(); (max_var_id + 1) as usize];
             for (i, param_var_id) in bytecode_func.param_var_ids.iter().enumerate() {
                 if i < args.len() {
-                    locals[*param_var_id as usize] = args[i].clone();
+                    locals[*param_var_id as usize] = args[i];
                 }
             }
 
-            // Push new frame with function bytecode
+            // Push new frame with function bytecode - use static reference, no cloning
             self.call_stack.push(CallFrame {
-                code: bytecode_func.code.clone(),
+                code: bytecode_func.code,  // Already &'static [OpCode], no clone needed
                 ip: 0,  // Start at beginning of function
-                locals,
-                scope_id: func_id, // Use func_id as scope_id for now
+                locals: locals.into_boxed_slice(),  // Convert Vec to Box<[Value]>
             });
             // Execution will continue in the main loop with the new frame
         } else {

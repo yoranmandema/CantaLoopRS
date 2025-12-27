@@ -165,13 +165,38 @@ impl ByteCodeEmitter {
                 // Since functions are now separate, we need to load the function value
                 ops.push(OpCode::LdFunc(*function_id));
             
-                if *invoke {
-                    // Invoke immediately: prepare call and invoke in one step
-                    ops.push(OpCode::Thunk(args.len() as u32));
+                // Check if we can collapse the thunk at compile time
+                // Thunk is only needed when arg_count < param_count (partial application)
+                // If arg_count == param_count and invoke == true, use direct CallStack
+                let arg_count = args.len();
+                let param_count = program.functions.get(function_id)
+                    .and_then(|func| {
+                        // For user-defined functions, use param_var_ids length
+                        if !func.definition.param_var_ids.is_empty() {
+                            Some(func.definition.param_var_ids.len())
+                        } else if !func.signature.params.is_empty() {
+                            // For built-in functions, use signature params length
+                            // (built-ins have empty param_var_ids but may have signature params)
+                            Some(func.signature.params.len())
+                        } else {
+                            None // Can't determine param count
+                        }
+                    });
+                
+                let can_collapse = param_count
+                    .map(|param_count| arg_count == param_count && *invoke)
+                    .unwrap_or(false);
+                
+                if can_collapse {
+                    // Direct call: arg count matches param count, invoke immediately
+                    ops.push(OpCode::CallStack(arg_count as u32));
+                } else if *invoke {
+                    // Invoke immediately but needs thunk (partial application or unknown params)
+                    ops.push(OpCode::Thunk(arg_count as u32));
                     ops.push(OpCode::Invoke);
                 } else {
-                    // Just prepare the call (don't invoke)
-                    ops.push(OpCode::Thunk(args.len() as u32));
+                    // Just prepare the call (don't invoke) - thunk needed for partial application
+                    ops.push(OpCode::Thunk(arg_count as u32));
                 }
             }
             HirExpression::PostfixInvoke { operand, args } => {

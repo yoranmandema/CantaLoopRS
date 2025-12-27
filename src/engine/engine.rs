@@ -1,12 +1,13 @@
 use std::collections::HashMap;
+use std::time::Instant;
 
 use crate::{
     bytecode::{emitter::ByteCodeEmitter, opcode::OpCode}, parser::parse_program, semantic_analyser::{FunctionSignature, HirBuilder, ValueKind},
-    vm::{VM, Value},
+    vm::VM,
 };
 
 pub struct BytecodeFunction {
-    pub code: Vec<OpCode>,
+    pub code: &'static [OpCode],  // Cached bytecode - not cloned on each call
     pub param_var_ids: Vec<u32>,
 }
 
@@ -44,7 +45,7 @@ impl Engine {
         self.hir_builder.register_builtin_function(name, signature, id);
     }
 
-    pub fn get_constant(&self, id: u32) -> Value {
+    pub fn get_constant(&self, id: u32, heap: &mut crate::vm::ValueHeap) -> crate::vm::Value {
         let c = self
             .hir_builder
             .ast
@@ -57,19 +58,19 @@ impl Engine {
         match &c.kind {
             ValueKind::Number => {
                 match &c.value {
-                    crate::semantic_analyser::ConstantValue::Number(n) => Value::Number(*n),
+                    crate::semantic_analyser::ConstantValue::Number(n) => crate::vm::Value::number(*n),
                     _ => panic!("Constant number should have a value"),
                 }
             },
             ValueKind::String => {
                 match &c.value {
-                    crate::semantic_analyser::ConstantValue::String(s) => Value::String(s.clone()),
+                    crate::semantic_analyser::ConstantValue::String(s) => crate::vm::Value::string_with_heap(s.clone(), heap),
                     _ => panic!("Constant string should have a value"),
                 }
             },
             ValueKind::Boolean => {
                 match &c.value {
-                    crate::semantic_analyser::ConstantValue::Boolean(s) => Value::Boolean(*s),
+                    crate::semantic_analyser::ConstantValue::Boolean(s) => crate::vm::Value::boolean(*s),
                     _ => panic!("Constant boolean should have a value"),
                 }
             },
@@ -77,17 +78,23 @@ impl Engine {
         }
     }
     
-    pub fn get_function(&self, id: u32) -> Value {
+    pub fn get_function(&self, id: u32) -> crate::vm::Value {
         // Functions are now separate from constants
-        Value::Function(id)
+        crate::vm::Value::function(id)
     }
 
     pub fn run(&mut self, input: &str) {
+        let total_start = Instant::now();
+        
+        let parse_start = Instant::now();
         let res = parse_program(&input).expect("Failed to parse program");
+        let parse_duration = parse_start.elapsed();
+        println!("[TIMING] Parsing: {:.2}ms", parse_duration.as_secs_f64() * 1000.0);
 
         println!("AST: {:#?}", res);
 
 
+        let hir_start = Instant::now();
         let hir_ast = match self.hir_builder.build(res) {
             Ok(ast) => ast,
             Err(e) => {
@@ -119,10 +126,13 @@ impl Engine {
                 }
             }
         };
+        let hir_duration = hir_start.elapsed();
+        println!("[TIMING] HIR building: {:.2}ms", hir_duration.as_secs_f64() * 1000.0);
 
         println!("HIR AST: {:#?}", hir_ast);
 
         // Emit function bodies first
+        let emit_start = Instant::now();
         // We need to temporarily borrow emitter separately to avoid multiple mutable borrows
         let function_ids: Vec<u32> = hir_ast.functions.keys().cloned().collect();
         for func_id in function_ids {
@@ -130,16 +140,23 @@ impl Engine {
             let mut func_code = Vec::new();
             self.emitter.emit_block(&mut func_code, &func.definition.body, hir_ast);
             
+            // Leak the bytecode to get a 'static reference - this is acceptable since
+            // bytecode is created once and lives for the entire program lifetime
+            let code_box = Box::new(func_code);
+            let code_slice: &'static [OpCode] = Box::leak(code_box);
+            
             self.bytecode_functions.insert(
                 func_id,
                 BytecodeFunction {
-                    code: func_code,
+                    code: code_slice,
                     param_var_ids: func.definition.param_var_ids.clone(),
                 },
             );
         }
 
         let emitted = &self.emitter.emit_program(hir_ast);
+        let emit_duration = emit_start.elapsed();
+        println!("[TIMING] Bytecode emission: {:.2}ms", emit_duration.as_secs_f64() * 1000.0);
 
         for op in emitted {
             println!("{:?}", op);
@@ -147,10 +164,15 @@ impl Engine {
 
         println!("\nOutput:\n");
 
+        let vm_start = Instant::now();
         let mut vm = VM::new(self, emitted.to_vec());
 
         vm.run();
+        let vm_duration = vm_start.elapsed();
+        println!("[TIMING] VM execution: {:.2}ms", vm_duration.as_secs_f64() * 1000.0);
 
+        let total_duration = total_start.elapsed();
+        println!("\n[TIMING] Total execution time: {:.2}ms", total_duration.as_secs_f64() * 1000.0);
         println!("\nProgram ran successfully!");
     }
 }
