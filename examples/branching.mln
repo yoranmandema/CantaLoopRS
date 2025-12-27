@@ -1,0 +1,9 @@
+let a = 9
+
+if (a == 1) {
+    print("a is 1!")
+} elseif (a > 10) {
+    print("a is huge!")
+} else {
+    print("whomp whomp")
+}

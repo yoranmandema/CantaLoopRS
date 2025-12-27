@@ -1,0 +1,31 @@
+// Define a function normally
+fn greet(name) {
+    return "Hello, " + name
+}
+
+// Prepare a thunk, nothing executes yet
+let say_hello = greet("Alice")
+
+print("Prepared the thunk, nothing happened yet")!
+
+// Actually call the thunk
+let result = say_hello!
+print(result)!  // prints: Hello, Alice
+
+// You can reuse the thunk if you want
+let another_call = say_hello!
+print(another_call)!  // prints: Hello, Alice
+
+// You can extend this to currying naturally:
+fn add(a, b) {
+    return a + b
+}
+
+// Create a partially applied thunk
+let add5 = add(5)
+
+// Only provide the second argument later
+let number_result = add5(10)!  // returns 15
+
+print(number_result)!
+

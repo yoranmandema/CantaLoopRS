@@ -1,0 +1,11 @@
+fn printHelloWorld() {
+    print("Hello world!")
+}
+
+printHelloWorld()
+
+fn printWithArgs (a) {
+    print(a)
+}
+
+printWithArgs(1)

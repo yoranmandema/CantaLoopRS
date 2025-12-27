@@ -1,0 +1,3 @@
+programmable
+functional programming
+execution-oriented programming

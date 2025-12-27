@@ -2,18 +2,17 @@ program = { SOI ~ block ~ EOI }
 
 block = { (statement ~ (";" ~ WHITESPACE*)?)* }
 braced_block = { "{" ~ WHITESPACE* ~ block ~ WHITESPACE* ~ "}" }
-statement = { function_statement | if_statement | pattern_if_statement | return_statement | let_statement | assign_statement | assign_increment_statement | assign_decrement_statement | expression_statement }
+statement = { function_statement | if_statement | pattern_if_statement | assign_statement | assign_increment_statement | assign_decrement_statement | return_statement | expression_statement }
 
 // Keywords - used for negative lookahead to prevent keywords from being identifiers
-keyword = _{ "fn" ~ !ASCII_ALPHANUMERIC | "if" ~ !ASCII_ALPHANUMERIC | "else" ~ !ASCII_ALPHANUMERIC | "elseif" ~ !ASCII_ALPHANUMERIC | "match" ~ !ASCII_ALPHANUMERIC | "return" ~ !ASCII_ALPHANUMERIC | "let" ~ !ASCII_ALPHANUMERIC | "true" ~ !ASCII_ALPHANUMERIC | "false" ~ !ASCII_ALPHANUMERIC | "and" ~ !ASCII_ALPHANUMERIC | "or" ~ !ASCII_ALPHANUMERIC }
+keyword = _{ "fn" | "if" | "else" | "elseif" | "match" | "return" | "true" | "false" | "and" | "or" }
 
-expression_statement = { !("fn" ~ WHITESPACE) ~ !("return" ~ WHITESPACE) ~ !("let" ~ WHITESPACE) ~ expression }
-let_statement = ${ "let" ~ WHITESPACE+ ~ identifier ~ WHITESPACE* ~ "=" ~ WHITESPACE* ~ expression }
+expression_statement = { !("fn" ~ WHITESPACE) ~ !("return" ~ WHITESPACE) ~ expression }
 assign_statement = { identifier ~ WHITESPACE* ~ "=" ~ WHITESPACE* ~ expression }
 assign_increment_statement = { identifier ~ WHITESPACE* ~ "+=" ~ WHITESPACE* ~ expression }
 assign_decrement_statement = { identifier ~ WHITESPACE* ~ "-=" ~ WHITESPACE* ~ expression }
 
-return_statement = ${ 
+return_statement = {
     "return" ~ WHITESPACE+ ~ expression
 }
 
@@ -35,8 +34,7 @@ pattern_match_statement = { "match" ~ WHITESPACE+ ~ identifier ~ WHITESPACE* ~ "
 pattern_case = { comparison_operator ~ WHITESPACE+ ~ expression ~ WHITESPACE+ ~ braced_block }
 comparison_operator = { gt | lt | ge | le | eq | ne }
 
-expression = { prefix? ~ WHITESPACE* ~ atom ~ (WHITESPACE* ~ infix ~ WHITESPACE* ~ prefix? ~ WHITESPACE* ~ atom)* }
-atom = { primary ~ (WHITESPACE* ~ postfix)* }
+expression = { prefix? ~ WHITESPACE* ~ primary ~ (WHITESPACE* ~ infix ~ WHITESPACE* ~ prefix? ~ WHITESPACE* ~ primary)* }
 infix     = _{ add | sub | mul | div | pow | eq | ne | gt | lt | ge | le | and | or }
 add       = { "+" }
 sub       = { "-" }
@@ -52,9 +50,6 @@ le        = { "<=" }
 and       = { "and" }
 or        = { "or" }
 prefix    = _{ increment | decrement | neg | not }
-postfix   = { invoke }
-invoke    = { "!" ~ invoke_args? }
-invoke_args = { "(" ~ expression_list? ~ ")" }
 increment = { "++" }
 decrement = { "--" }
 neg       = { "-" }
@@ -66,7 +61,7 @@ expression_list = { expression ~ ("," ~ expression)* }
 
 value = { number | string | boolean }
 
-identifier = @{ !("fn" ~ (ASCII_ALPHANUMERIC | "_" | WHITESPACE)) ~ !("if" ~ (ASCII_ALPHANUMERIC | "_" | WHITESPACE)) ~ !("else" ~ (ASCII_ALPHANUMERIC | "_" | WHITESPACE)) ~ !("elseif" ~ (ASCII_ALPHANUMERIC | "_" | WHITESPACE)) ~ !("match" ~ (ASCII_ALPHANUMERIC | "_" | WHITESPACE)) ~ !("return" ~ (ASCII_ALPHANUMERIC | "_" | WHITESPACE)) ~ !("let" ~ (ASCII_ALPHANUMERIC | "_" | WHITESPACE)) ~ !("true" ~ (ASCII_ALPHANUMERIC | "_" | WHITESPACE)) ~ !("false" ~ (ASCII_ALPHANUMERIC | "_" | WHITESPACE)) ~ !("and" ~ (ASCII_ALPHANUMERIC | "_" | WHITESPACE)) ~ !("or" ~ (ASCII_ALPHANUMERIC | "_" | WHITESPACE)) ~ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
+identifier = @{ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
 
 number = { digit+ ~ ("." ~ digit*)? }
 string = @{ "\"" ~ (!"\"" ~ ANY)* ~ "\"" }

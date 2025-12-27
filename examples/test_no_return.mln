@@ -1,0 +1,10 @@
+fn test(n) {
+    if (n == 0) {
+        print("zero")
+    } else {
+        print("not zero")
+    }
+}
+
+test(5)
+

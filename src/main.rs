@@ -1,42 +1,31 @@
-use crate::parser::{Statement, parse_program};
+use crate::{engine::Engine, semantic_analyser::{FunctionSignature, ValueKind}};
 
+mod ast;
 mod parser;
+mod bytecode;
+mod engine;
+mod vm;
+mod semantic_analyser;
 
 #[macro_use]
 extern crate lazy_static;
 
 fn main() {
-    let input = std::fs::read_to_string("examples/helloworld.mln")
-        .expect("Failed to read examples/helloworld.mln");
+    let args: Vec<String> = std::env::args().collect();
+    let filename = args.get(1).map(|s| s.as_str()).unwrap_or("examples/thunk.mln");
+    let input = std::fs::read_to_string(filename)
+        .expect(&format!("Failed to read {}", filename));
 
-    let res = parse_program(&input).unwrap();
+    let mut engine = Engine::new();
 
-    println!("{:?}", res);
+    let print_sig = FunctionSignature {
+        params: vec![ValueKind::String],
+        return_type: Box::new(ValueKind::String),
+    };
+    engine.add_function("print", print_sig, |args| {
+        println!("{}", args[0]);
+        "".to_string()
+    });
 
-    for statement in res.statements {
-        match statement {
-            Statement::Assign {
-                identifier,
-                expression,
-            } => {
-                println!("Assigning {} to {:?}", identifier, expression);
-            }
-            Statement::AssignIncrement {
-                identifier,
-                expression,
-            } => {
-                println!("Incrementing {} by {:?}", identifier, expression);
-            }
-
-            Statement::AssignDecrement {
-                identifier,
-                expression,
-            } => {
-                println!("Decrementing {} by {:?}", identifier, expression);
-            }
-            Statement::Expression(expression) => {
-                println!("Expression: {:?}", expression);
-            }
-        }
-    }
+    engine.run(&input);
 }

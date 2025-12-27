@@ -1,0 +1,6 @@
+fn test() {
+    print("test")
+}
+
+test()
+
