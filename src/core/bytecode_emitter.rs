@@ -1,4 +1,4 @@
-use crate::{
+use crate::core::{
     ast::{BinaryOp, UnaryOp},
     bytecode::OpCode,
     semantic_analyser::{HirAst, HirBlock, HirExpression, HirStmt, ValueKind},
@@ -209,30 +209,35 @@ impl ByteCodeEmitter {
             HirStmt::Match { expression, cases } => {
                 // Emit the match expression (evaluate it once)
                 self.emit_expression(ops, expression, program);
-                // Store it in a temporary variable slot (we'll need to handle this properly)
-                // For now, we'll duplicate it for each case check
-                // TODO: Optimize by storing in a temp variable
+                // Store it in a temporary variable slot to avoid re-evaluating it
+                // We'll use a high slot number that's unlikely to conflict (e.g., 999999)
+                let temp_slot = 999999u32;
+                ops.push(OpCode::StVar(temp_slot));
                 
                 let mut jump_to_end_positions = Vec::new();
-                let mut jmp_if_false_positions = Vec::new();
+                let mut jmp_if_false_info = Vec::new(); // (jmp_pos, case_index)
+                let mut case_block_starts = Vec::new(); // Track where each case's block starts
                 
                 // Emit each case
-                for (pattern, block) in cases {
+                for (case_idx, (pattern, block)) in cases.iter().enumerate() {
                     if let Some(pattern_expr) = pattern {
-                        // Pattern case: evaluate pattern expression (which should compare with match expression)
-                        // Duplicate the match expression for comparison
-                        // For now, we'll assume the pattern expression handles the comparison
-                        // This is a simplification - proper implementation would need to handle
-                        // the semantic that pattern expressions implicitly use the match expression
-                        self.emit_expression(ops, expression, program);
-                        self.emit_expression(ops, pattern_expr, program);
+                        // Pattern case: load the match expression from temp variable and evaluate pattern
+                        // The pattern expression should compare with the match expression
+                        ops.push(OpCode::LdVar(temp_slot));
+                        // For binary pattern expressions (like == 0, > 10), the left-hand side
+                        // is the match expression, so we skip emitting it and only emit the
+                        // right-hand side and operator
+                        self.emit_pattern_expression(ops, pattern_expr, expression, program);
                         
                         // Emit conditional jump to skip this block if pattern doesn't match
-                        jmp_if_false_positions.push(ops.len());
-                        ops.push(OpCode::JmpIfFalse(0)); // Placeholder
+                        jmp_if_false_info.push((ops.len(), case_idx));
+                        ops.push(OpCode::JmpIfFalse(0)); // Placeholder - will be patched to next case or end
                     } else {
                         // Wildcard case: always matches, no condition needed
                     }
+                    
+                    // Track where this case's block starts
+                    case_block_starts.push(ops.len());
                     
                     // Emit the block
                     self.emit_block(ops, block, program);
@@ -242,15 +247,12 @@ impl ByteCodeEmitter {
                     ops.push(OpCode::Jmp(0)); // Placeholder
                 }
                 
-                // Patch JmpIfFalse instructions: each should jump to the next case or end
+                // Patch JmpIfFalse instructions: each should jump to the next case's block start or end
                 let end_pos = ops.len();
-                for (i, &jmp_pos) in jmp_if_false_positions.iter().enumerate() {
-                    // Find the next case's block start
-                    // This is approximate - we need better tracking
-                    let target = if i + 1 < cases.len() {
-                        // For simplicity, jump to end and let the next case handle it
-                        // A proper implementation would track case start positions
-                        end_pos
+                for (jmp_pos, case_idx) in jmp_if_false_info {
+                    // Jump to the next case's block start, or to the end if this is the last case
+                    let target = if case_idx + 1 < case_block_starts.len() {
+                        case_block_starts[case_idx + 1]
                     } else {
                         end_pos
                     };
@@ -458,7 +460,61 @@ impl ByteCodeEmitter {
                     ops.push(OpCode::Pop);
                 }
             }
+            HirStmt::Nop => {
+                // No-op statement (used for use statements which are compile-time only)
+                // Do nothing
+            }
         }        
+    }
+
+    /// Emit a pattern expression for match statements.
+    /// For binary pattern expressions (like == 0, > 10), the left-hand side is the match expression
+    /// which is already on the stack, so we skip emitting it and only emit the right-hand side and operator.
+    /// Handles nested patterns like "> 0 and < 10" recursively.
+    fn emit_pattern_expression(&mut self, ops: &mut Vec<OpCode>, pattern_expr: &HirExpression, match_expr: &HirExpression, program: &HirAst) {
+        match pattern_expr {
+            HirExpression::Binary { lhs, rhs, operator } => {
+                match operator {
+                    BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Gt | BinaryOp::Lt | BinaryOp::Ge | BinaryOp::Le => {
+                        // Comparison operator: lhs is match_expr (already on stack), just emit rhs and operator
+                        self.emit_expression(ops, rhs, program);
+                        match operator {
+                            BinaryOp::Eq => ops.push(OpCode::Eq),
+                            BinaryOp::Ne => ops.push(OpCode::Ne),
+                            BinaryOp::Gt => ops.push(OpCode::Gt),
+                            BinaryOp::Lt => ops.push(OpCode::Lt),
+                            BinaryOp::Ge => ops.push(OpCode::Ge),
+                            BinaryOp::Le => ops.push(OpCode::Le),
+                            _ => unreachable!(),
+                        }
+                    }
+                    BinaryOp::And | BinaryOp::Or => {
+                        // For "and"/"or" patterns like "> 0 and < 10":
+                        // lhs is (match_expr > 0), rhs is (match_expr < 10)
+                        // Emit lhs (which will handle match_expr > 0)
+                        self.emit_pattern_expression(ops, lhs, match_expr, program);
+                        // Reload match_expr for the rhs comparison
+                        ops.push(OpCode::LdVar(999999u32));
+                        // Emit rhs (which will handle match_expr < 10)
+                        self.emit_pattern_expression(ops, rhs, match_expr, program);
+                        // Emit the and/or operator
+                        match operator {
+                            BinaryOp::And => ops.push(OpCode::And),
+                            BinaryOp::Or => ops.push(OpCode::Or),
+                            _ => unreachable!(),
+                        }
+                    }
+                    _ => {
+                        // For other operators, emit normally (though they shouldn't appear in patterns)
+                        self.emit_expression(ops, pattern_expr, program);
+                    }
+                }
+            }
+            _ => {
+                // For non-binary patterns, emit normally
+                self.emit_expression(ops, pattern_expr, program);
+            }
+        }
     }
 
     fn emit_expression(&mut self, ops: &mut Vec<OpCode>, expr: &HirExpression, program: &HirAst) {
@@ -530,33 +586,50 @@ impl ByteCodeEmitter {
             
                 let arg_count = args.len() as u32;
                 
-                // OPTIMIZATION: If fully applied and invoked, use CallStack directly (faster)
-                // Otherwise, use thunk mechanism (for partial application or lazy evaluation)
+                // All function calls go through thunks for consistency.
+                // This enables currying, partial application, and composition uniformly.
                 if *invoke {
-                    // Check if this is a fully-applied function call
-                    let is_fully_applied = if let Some(func) = program.functions.get(function_id) {
-                        // Check if arg count matches parameter count using signature (works for both native and bytecode functions)
-                        func.signature.params.len() == args.len()
-                    } else {
-                        // Unknown function - can't optimize, use thunk mechanism
-                        false
-                    };
-                    
-                    if is_fully_applied {
-                        // Optimized path: direct call using call stack (no thunk overhead)
-                        // f(x)! with all args -> LdFunc(f); CallStack(n) (direct call)
-                        ops.push(OpCode::CallStack(arg_count));
-                    } else {
-                        // Partial application or unknown function: use thunk mechanism
-                        // f(x)! -> LdFunc(f); Thunk(1); Invoke (create thunk and execute)
-                        ops.push(OpCode::Thunk(arg_count));
-                        ops.push(OpCode::Invoke);
-                    }
+                    // Invoked call: create thunk and immediately execute
+                    // f(x)! -> LdFunc(f); Thunk(n); Invoke (create thunk and execute)
+                    ops.push(OpCode::Thunk(arg_count));
+                    ops.push(OpCode::Invoke);
                 } else {
                     // Not invoked: create thunk for lazy evaluation
-                    // f(x) -> LdFunc(f); Thunk(1) (prepare call - create thunk)
+                    // f(x) -> LdFunc(f); Thunk(n) (prepare call - create thunk)
                     ops.push(OpCode::Thunk(arg_count));
                 }
+            }
+            HirExpression::PartialCall { func_id, bound } => {
+                // Push bound arguments onto the stack in the order they appear
+                // (they'll be popped in reverse, so we need to push in reverse order)
+                let mut bound_values = Vec::new();
+                for arg_opt in bound.iter().rev() {
+                    if let Some(arg_expr) = arg_opt {
+                        self.emit_expression(ops, arg_expr, program);
+                        bound_values.push(true);
+                    } else {
+                        bound_values.push(false);
+                    }
+                }
+                bound_values.reverse(); // Now in correct order (position 0 = first arg, etc.)
+                
+                // Build bound_mask: bit i is 1 if argument position i is bound, 0 if it's a hole
+                let mut bound_mask: u64 = 0;
+                for (i, is_bound) in bound_values.iter().enumerate() {
+                    if *is_bound {
+                        bound_mask |= 1 << i;
+                    }
+                }
+                
+                // Count holes
+                let hole_count = bound.iter().filter(|arg| arg.is_none()).count() as u32;
+                
+                // Emit MakePartial opcode
+                ops.push(OpCode::MakePartial {
+                    func_id: *func_id,
+                    bound_mask,
+                    hole_count,
+                });
             }
             HirExpression::PostfixInvoke { operand, args } => {
                 // Handle nested PostfixInvoke: if operand is PostfixInvoke with args and we have no args,
@@ -680,40 +753,28 @@ impl ByteCodeEmitter {
                     // Emit the operand (which should be a PreparedCall/thunk value at runtime)
                     self.emit_expression(ops, operand, program);
                     
-                    if can_optimize {
-                        // Optimized path: if the thunk will be fully applied, we can use CallStack directly
-                        // But we need to extract the function ID from the thunk first
-                        // For now, use the thunk mechanism but it should work correctly
-                        ops.push(OpCode::Thunk(arg_count));
-                        ops.push(OpCode::Invoke);
+                    // Create thunk with additional arguments and invoke
+                    // All calls go through thunks for consistency
+                    ops.push(OpCode::Thunk(arg_count));
+                    ops.push(OpCode::Invoke);
+                } else {
+                    // No additional arguments - check if operand is a PartialCall
+                    // PartialCall with ! and no args doesn't make sense (can't invoke without filling holes)
+                    // So we just emit the PartialCall without invoking it
+                    if let HirExpression::PartialCall { .. } = operand.as_ref() {
+                        // Just emit the PartialCall - don't invoke it
+                        self.emit_expression(ops, operand, program);
+                        // Don't emit Invoke - partial calls with holes can't be invoked without arguments
+                    } else if let HirExpression::FunctionCall { invoke: true, .. } = operand.as_ref() {
+                        // FunctionCall with invoke: true already emits Thunk+Invoke, so don't emit Invoke again
+                        self.emit_expression(ops, operand, program);
+                        // Don't emit Invoke - FunctionCall emission already handled the invocation
                     } else {
-                        // Normal path: create thunk and invoke
-                        ops.push(OpCode::Thunk(arg_count));
+                        // For other operands (thunks, functions, etc.), invoke them
+                        self.emit_expression(ops, operand, program);
+                        // Invoke the prepared call (VM will pop the PreparedCall from the stack)
                         ops.push(OpCode::Invoke);
                     }
-                } else {
-                    // No additional arguments - the operand is already a thunk that we want to invoke
-                    // CRITICAL BUG: For mul2!(add10!(i))!, the HIR structure is wrong:
-                    // - args is None instead of Some([add10!(i)])
-                    // - The outer operand (mul2) is missing
-                    // This causes the wrong bytecode to be emitted.
-                    // The correct bytecode should be:
-                    // 1. Emit add10!(i) (evaluate it)
-                    // 2. Emit mul2 (load thunk)
-                    // 3. Thunk(1) (combine mul2's args with result)
-                    // 4. Invoke
-                    // But we can't do this because the HIR structure is wrong.
-                    // For now, we'll just emit what we have and hope it works.
-                    // Actually, wait - if the HIR structure is wrong, we can't fix it here.
-                    // The real fix needs to be in the HIR builder/parser.
-                    // But let's check if we can detect this case and work around it.
-                    // If operand is an Identifier (which would be mul2), and we're in the args.is_none() path,
-                    // then the HIR structure is wrong and we should NOT take this path.
-                    // But we don't have enough information to fix it here.
-                    // Let's just emit what we have for now.
-                    self.emit_expression(ops, operand, program);
-                    // Invoke the prepared call (VM will pop the PreparedCall from the stack)
-                    ops.push(OpCode::Invoke);
                 }
             }
             HirExpression::ComposeThunk { first, second } => {

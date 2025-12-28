@@ -22,7 +22,7 @@ fn add(a: num, b: num) -> num {
 }
 
 // Create a partially applied thunk
-let add5 = add(5);
+let add5 = add(5, _);
 
 // Only provide the second argument later
 let number_result: num = add5(10)!;  // returns 15

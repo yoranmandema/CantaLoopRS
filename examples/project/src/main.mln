@@ -1,0 +1,10 @@
+use std.print;
+use utils.{add, addMagicNumber, PI};
+
+let result = add(1, 2)!;
+
+let magicResult = addMagicNumber(10)!;
+
+print(result)!;
+print(PI)!;
+print(magicResult)!;

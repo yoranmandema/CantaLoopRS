@@ -1,0 +1,9 @@
+{
+    "name": "Example project",
+    "version": "1.0.0",
+    "description": "Example project",
+    "main": "main.mln",
+    "compiler_options": {
+        "optimize": true
+    }
+}

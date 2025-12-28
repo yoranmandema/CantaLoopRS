@@ -23,4 +23,8 @@ opt-level = 2
 
 [[bin]]
 name = "cantaloop-lsp"
-path = "src/lsp_main.rs"
+path = "src/lsp/lsp_main.rs"
+
+[[bin]]
+name = "melon"
+path = "src/melon/melon_main.rs"

@@ -21,11 +21,11 @@ fn classify_number(n: num) -> string {
     }
 }
 
-print("Classify 0: " + classify_number(0)!)!;
-print("Classify -5: " + classify_number(-5)!)!;
-print("Classify 50: " + classify_number(50)!)!;
-print("Classify 200: " + classify_number(200)!)!;
-print("Classify 7: " + classify_number(7)!)!;
+print("Classify 0: " + classify_number(0)!)!; // prints "Classify 0: zero"
+print("Classify -5: " + classify_number(-5)!)!; // prints "Classify -5: negative"
+print("Classify 50: " + classify_number(50)!)!; // prints "Classify 50: medium"
+print("Classify 200: " + classify_number(200)!)!; // prints "Classify 200: large"
+print("Classify 7: " + classify_number(7)!)!; // prints "Classify 7: small"
 
 // Matching with multiple conditions
 fn evaluate_score(score: num) -> string {
@@ -48,9 +48,9 @@ fn evaluate_score(score: num) -> string {
     }
 }
 
-print("Score 95: " + evaluate_score(95)!)!;
-print("Score 75: " + evaluate_score(75)!)!;
-print("Score 45: " + evaluate_score(45)!)!;
+print("Score 95: " + evaluate_score(95)!)!; // prints "Score 95: Excellent"
+print("Score 75: " + evaluate_score(75)!)!; // prints "Score 75: Good"
+print("Score 45: " + evaluate_score(45)!)!; // prints "Score 45: Average"
 
 // Using match in functions
 fn sign(n: num) -> num {
@@ -67,9 +67,9 @@ fn sign(n: num) -> num {
     }
 }
 
-print("Sign of 10: " + sign(10)!)!;
-print("Sign of -5: " + sign(-5)!)!;
-print("Sign of 0: " + sign(0)!)!;
+print("Sign of 10: " + sign(10)!)!; // prints "Sign of 10: 1"
+print("Sign of -5: " + sign(-5)!)!; // prints "Sign of -5: -1"
+print("Sign of 0: " + sign(0)!)!; // prints "Sign of 0: 0"
 
 // Combining with other expressions
 let x = 42;
@@ -77,6 +77,9 @@ let x = 42;
 match x {
     == 0 {
         print("x is zero")!;
+    }
+        == 42 {
+        print("x is forty-two")!;
     }
     > 0 and < 10 {
         print("x is a single digit positive number")!;

@@ -3,8 +3,8 @@ use pest::pratt_parser::Assoc;
 use pest::pratt_parser::PrattParser;
 use pest_derive::Parser;
 
-use crate::ast::build_program;
-use crate::ast::Program;
+use crate::core::ast::build_program;
+use crate::core::ast::Program;
 
 #[derive(Parser)]
 #[grammar = "src/grammar/grammar.pest"]

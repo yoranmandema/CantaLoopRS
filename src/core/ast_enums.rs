@@ -1,3 +1,7 @@
+/// Represents a placeholder hole in partial application.
+#[derive(Debug, Clone)]
+pub struct Hole;
+
 /// Represents an expression in the CantaLoop language.
 /// 
 /// Expressions are the building blocks of computation, including
@@ -9,6 +13,10 @@ pub enum Expression {
     FunctionCall {
         callee: Box<Expression>, // Can be Identifier, Compose, or any expression that evaluates to a callable
         arguments: Vec<Expression>,
+    },
+    PartialCall {
+        func: Box<Expression>, // Function to partially apply
+        args: Vec<CallArgument>, // Arguments with holes
     },
     Prefix {
         op: UnaryOp,
@@ -34,6 +42,10 @@ pub enum Expression {
         lhs: Box<Expression>,
         rhs: Box<Expression>,
         reverse: bool, // true for <|, false for |>
+    },
+    MemberAccess {
+        object: Box<Expression>, // e.g., "utils" in "utils.add"
+        member: String, // e.g., "add" in "utils.add"
     },
 }
 
@@ -73,7 +85,7 @@ pub enum BinaryOp {
 /// Represents a complete CantaLoop program.
 /// 
 /// A program consists of one or more blocks, which are executed sequentially.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Program {
     pub blocks: Vec<Block>
 }
@@ -92,16 +104,32 @@ pub struct Argument {
     pub kind: String
 }
 
+/// Represents an argument in a function call - either an expression or a hole placeholder.
+#[derive(Debug, Clone)]
+pub enum CallArgument {
+    Expr(Expression),
+    Hole,
+}
+
 /// Represents a statement in the CantaLoop language.
 /// 
 /// Statements are the top-level constructs that perform actions:
 /// variable declarations, assignments, control flow, function definitions.
 #[derive(Debug, Clone)]
 pub enum Statement {
+    Mod {
+        identifier: String,
+    },
     Let {
         identifier: String,
         type_annotation: Option<String>,
         expression: Expression,
+        pub_visibility: bool,
+    },
+    Const {
+        identifier: String,
+        expression: Expression,
+        pub_visibility: bool,
     },
     Assign {
         identifier: String,
@@ -127,7 +155,8 @@ pub enum Statement {
         identifier: String,
         arguments: Vec<Argument>,
         return_type: Option<String>,
-        body: Block
+        body: Block,
+        pub_visibility: bool,
     },
     Return {
         expression: Expression,
@@ -150,7 +179,22 @@ pub enum Statement {
         expression: Option<Expression>,
     },
     Continue,
+    Use {
+        path: Vec<String>, // Dot-separated path like ["math", "utils"]
+        selector: ImportSelector,
+    },
     Expression(Expression),
+}
+
+/// Represents what to import from a module path.
+#[derive(Debug, Clone)]
+pub enum ImportSelector {
+    /// Import a single name: `use math.utils.square;`
+    Single(String),
+    /// Import multiple names: `use math.utils.{cube, pow};`
+    Multiple(Vec<String>),
+    /// Import all: `use math.utils.*;`
+    Wildcard,
 }
 
 /// Literal values in source code: numbers, strings, and booleans.

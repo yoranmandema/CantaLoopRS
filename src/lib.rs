@@ -21,28 +21,20 @@
 //! ```
 
 #![allow(non_snake_case)]
-/// Abstract Syntax Tree representation and builder.
-pub mod ast;
-/// Pest-based parser for CantaLoop source code.
-pub mod parser;
-/// Bytecode compilation and instruction set.
-pub mod bytecode;
-/// Main engine orchestrating compilation and execution.
-pub mod engine;
-/// Stack-based virtual machine for bytecode execution.
-pub mod vm;
-/// Type checking and High-level Intermediate Representation (HIR) generation.
-pub mod semantic_analyser;
+
+/// Core CantaLoop language implementation.
+pub mod core;
 /// Language Server Protocol implementation for IDE support.
 pub mod lsp;
+/// Standard library modules.
+pub mod stdlib;
 
 #[macro_use]
 extern crate lazy_static;
 
-// Re-export commonly used types for easier testing
-pub use engine::Engine;
-pub use parser::parse_program;
-pub use vm::{VM, Value};
-pub use bytecode::{ByteCodeEmitter, OpCode};
-pub use semantic_analyser::{FunctionSignature, ValueKind, HirBuilder};
+// Re-export commonly used types for easier access
+pub use core::{
+    Engine, parse_program, VM, Value, ByteCodeEmitter, OpCode,
+    CompilerState, FunctionSignature, ValueKind, HirBuilder, Symbol, SymbolKind, SymbolTable
+};
 

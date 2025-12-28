@@ -26,7 +26,7 @@
             "patterns": [
                 {
                     "name": "keyword.control.cantaloop",
-                    "match": "\\b(fn|if|else|elseif|match|return|let|and|or)\\b"
+                    "match": "\\b(fn|if|else|elseif|match|return|let|and|or|use|loop|while|for|break|continue|in)\\b"
                 },
                 {
                     "name": "constant.language.boolean.cantaloop",

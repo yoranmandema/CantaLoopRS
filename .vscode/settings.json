@@ -15,7 +15,7 @@
     // Semantic token styling for thunks (using deprecated modifier)
     "editor.semanticTokenColorCustomizations": {
         "enabled": true,
-        "[*]": {
+        "[cantaloop]": {
             "rules": {
                 "function": {
                     "modifiers": ["deprecated"],

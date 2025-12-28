@@ -31,10 +31,10 @@ print(compose_forward(5)!)!; // Should also be 30
 
 // More complex reverse composition
 // square <| add10 <| mul2 means square(add10(mul2(x)))
-let complex_reverse = square <| add10 <| mul2;
+let complex_reverse = square_fn <| add10 <| mul2;
 print(complex_reverse(5)!)!; // mul2(5)=10, add10(10)=20, square(20)=400
 
 // Forward version for comparison
-let complex_forward = mul2 |> add10 |> square;
+let complex_forward = mul2 |> add10 |> square_fn;
 print(complex_forward(5)!)!; // Should also be 400
 

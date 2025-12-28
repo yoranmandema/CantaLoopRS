@@ -6,7 +6,6 @@
 /// - Code completion
 /// - Type information
 
-#[path = "lsp_server.rs"]
 pub mod server;
 
 pub use server::CantaLoopLSPServer;

@@ -4,8 +4,9 @@ use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer};
 
-use crate::parser::parse_program;
-use crate::semantic_analyser::{HirBuilder, ValueKind, FunctionSignature, HirExpression};
+use crate::core::engine::Engine;
+use crate::core::semantic_analyser::{CompilerState, ValueKind, HirExpression};
+use crate::stdlib;
 
 /// Language Server Protocol server for CantaLoop.
 /// 
@@ -14,19 +15,28 @@ use crate::semantic_analyser::{HirBuilder, ValueKind, FunctionSignature, HirExpr
 /// - Hover information (variable types, function signatures)
 /// - Code completion
 /// 
-/// Uses async I/O with tower-lsp for communication with editors.
+/// Uses the compiler's CompilerState as the single source of truth.
+/// The LSP never invents language semantics - it only consumes compiler state.
 pub struct CantaLoopLSPServer {
     client: Client,
     documents: Arc<tokio::sync::RwLock<HashMap<Url, String>>>,
-    hir_cache: Arc<tokio::sync::RwLock<HashMap<Url, HirBuilder>>>,
+    compiler_state_cache: Arc<tokio::sync::RwLock<HashMap<Url, CompilerState>>>,
+    engine: Arc<Engine>, // Shared engine with built-in functions registered
 }
 
 impl CantaLoopLSPServer {
     pub fn new(client: Client) -> Self {
+        // Create and initialize engine with standard library
+        let mut engine = Engine::new();
+        
+        // Load all standard library modules
+        stdlib::load_all_stdlib(&mut engine);
+
         Self {
             client,
             documents: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
-            hir_cache: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+            compiler_state_cache: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+            engine: Arc::new(engine),
         }
     }
 
@@ -42,7 +52,7 @@ impl CantaLoopLSPServer {
         }
     }
 
-    fn format_function_signature(func: &crate::semantic_analyser::Function) -> String {
+    fn format_function_signature(func: &crate::core::semantic_analyser::Function) -> String {
         let params: Vec<String> = func.signature.params.iter()
             .map(|p| Self::format_value_kind(p))
             .collect();
@@ -50,16 +60,6 @@ impl CantaLoopLSPServer {
         format!("fn {}({}) -> {}", func.name, params.join(", "), return_type)
     }
 
-    fn register_builtin_functions(hir_builder: &mut HirBuilder) {
-        hir_builder.register_builtin_function(
-            "print",
-            FunctionSignature {
-                params: vec![ValueKind::String],
-                return_type: Box::new(ValueKind::String),
-            },
-            10000,
-        );
-    }
 
     fn byte_position_to_line_col(text: &str, pos: usize) -> (usize, usize) {
         let text_before = &text[..pos];
@@ -185,11 +185,11 @@ impl CantaLoopLSPServer {
         None
     }
 
-    fn format_hir_error(e: &crate::semantic_analyser::HirError) -> String {
+    fn format_hir_error(e: &crate::core::semantic_analyser::HirError) -> String {
         match e {
-            crate::semantic_analyser::HirError::UnknownVariable(msg) => msg.clone(),
-            crate::semantic_analyser::HirError::VariableAlreadyDeclared(msg) => msg.clone(),
-            crate::semantic_analyser::HirError::TypeMismatch { variable, expected, actual } => {
+            crate::core::semantic_analyser::HirError::UnknownVariable(msg) => msg.clone(),
+            crate::core::semantic_analyser::HirError::VariableAlreadyDeclared(msg) => msg.clone(),
+            crate::core::semantic_analyser::HirError::TypeMismatch { variable, expected, actual } => {
                 format!(
                     "Type mismatch for variable '{}': expected {}, got {}",
                     variable,
@@ -197,7 +197,7 @@ impl CantaLoopLSPServer {
                     Self::format_value_kind(actual)
                 )
             }
-            crate::semantic_analyser::HirError::BinaryOpTypeError { operator, lhs_type, rhs_type, expected } => {
+            crate::core::semantic_analyser::HirError::BinaryOpTypeError { operator, lhs_type, rhs_type, expected } => {
                 format!(
                     "{} operation requires {}, but got {} and {}",
                     operator,
@@ -206,36 +206,36 @@ impl CantaLoopLSPServer {
                     Self::format_value_kind(rhs_type)
                 )
             }
-            crate::semantic_analyser::HirError::TypeError(msg) => msg.clone(),
-            crate::semantic_analyser::HirError::NotImplemented => "Not implemented".to_string(),
+            crate::core::semantic_analyser::HirError::TypeError(msg) => msg.clone(),
+            crate::core::semantic_analyser::HirError::NotImplemented => "Not implemented".to_string(),
         }
     }
 
-    fn find_error_location(text: &str, error: &crate::semantic_analyser::HirError) -> (usize, usize) {
+    fn find_error_location(text: &str, error: &crate::core::semantic_analyser::HirError) -> (usize, usize) {
         let lines: Vec<&str> = text.lines().collect();
         
         match error {
-            crate::semantic_analyser::HirError::BinaryOpTypeError { operator, .. } => {
+            crate::core::semantic_analyser::HirError::BinaryOpTypeError { operator, .. } => {
                 for (line_num, line) in lines.iter().enumerate() {
                     if let Some(pos) = line.find(operator) {
                         return (line_num, pos);
                     }
                 }
             }
-            crate::semantic_analyser::HirError::TypeMismatch { variable, .. } => {
+            crate::core::semantic_analyser::HirError::TypeMismatch { variable, .. } => {
                 for (line_num, line) in lines.iter().enumerate() {
                     if let Some(pos) = line.find(variable) {
                         return (line_num, pos);
                     }
                 }
             }
-            crate::semantic_analyser::HirError::UnknownVariable(msg) => {
+            crate::core::semantic_analyser::HirError::UnknownVariable(msg) => {
                 let var_name = Self::extract_variable_name_from_message(msg);
                 if let Some((line_num, col)) = Self::find_variable_in_code(&lines, &var_name) {
                     return (line_num, col);
                 }
             }
-            crate::semantic_analyser::HirError::VariableAlreadyDeclared(msg) => {
+            crate::core::semantic_analyser::HirError::VariableAlreadyDeclared(msg) => {
                 let var_name = Self::extract_variable_name_from_message(msg);
                 if let Some((line_num, col)) = Self::find_variable_in_code(&lines, &var_name) {
                     return (line_num, col);
@@ -350,6 +350,18 @@ impl CantaLoopLSPServer {
             }),
             range: Some(range),
         }
+    }
+
+    /// Check if a position in a line is inside a comment
+    fn is_in_comment(line: &str, byte_pos: usize) -> bool {
+        // Check for line comment (//)
+        if let Some(comment_pos) = line.find("//") {
+            if byte_pos > comment_pos {
+                return true;
+            }
+        }
+        // TODO: Handle block comments (/* ... */) - would need multi-line tracking
+        false
     }
 
     fn tokens_to_absolute(tokens: &[SemanticToken]) -> Vec<(u32, u32, u32, u32, u32)> {
@@ -477,110 +489,34 @@ impl CantaLoopLSPServer {
         tokens
     }
 
-    fn find_thunk_variables(lines: &[&str]) -> std::collections::HashSet<String> {
-        let mut thunk_variables = std::collections::HashSet::new();
-        
-        for line in lines {
-            if let Some(let_pos) = line.find("let ") {
-                let after_let = &line[let_pos + 4..].trim_start();
-                let var_name_end = after_let.find(':')
-                    .or_else(|| after_let.find('='))
-                    .unwrap_or(after_let.len());
-                let var_name = after_let[..var_name_end].trim();
-                
-                let equals_pos = if let Some(colon_pos) = after_let.find(':') {
-                    after_let[colon_pos..].find('=')
-                        .map(|pos| colon_pos + pos)
-                } else {
-                    after_let.find('=')
-                };
-                
-                if let Some(equals_pos) = equals_pos {
-                    let after_equals = &after_let[equals_pos + 1..].trim_start();
-                    
-                    if let Some(paren_pos) = after_equals.find('(') {
-                        let mut paren_count = 1;
-                        let mut check_pos = paren_pos + 1;
-                        while check_pos < after_equals.len() && paren_count > 0 {
-                            match after_equals.chars().nth(check_pos) {
-                                Some('(') => paren_count += 1,
-                                Some(')') => {
-                                    paren_count -= 1;
-                                    if paren_count == 0 {
-                                        let after_paren = &after_equals[check_pos + 1..].trim_start();
-                                        if !after_paren.starts_with('!') {
-                                            thunk_variables.insert(var_name.to_string());
-                                        }
-                                        break;
-                                    }
-                                }
-                                _ => {}
-                            }
-                            check_pos += 1;
-                        }
-                    }
-                }
-            }
-        }
-        thunk_variables
-    }
 
-    async fn rebuild_hir(&self, uri: &Url, text: &str) {
-        // Try to parse and build HIR
-        match parse_program(text) {
-            Ok(program) => {
-                let mut hir_builder = HirBuilder::new();
-                Self::register_builtin_functions(&mut hir_builder);
-                
-                match hir_builder.build(program) {
-                    Ok(_) => {
-                        let mut cache = self.hir_cache.write().await;
-                        cache.insert(uri.clone(), hir_builder);
-                        self.client
-                            .log_message(MessageType::INFO, format!("HIR built successfully for {}", uri))
-                            .await;
-                    }
-                    Err(e) => {
-                        // If HIR building fails, remove from cache
-                        let mut cache = self.hir_cache.write().await;
-                        cache.remove(uri);
-                        self.client
-                            .log_message(MessageType::WARNING, format!("HIR building failed: {:?}", e))
-                            .await;
-                    }
-                }
+    async fn rebuild_compiler_state(&self, uri: &Url, text: &str) {
+        // Use the compiler to build state - single source of truth
+        match self.engine.compile_for_lsp(text) {
+            Ok(state) => {
+                let mut cache = self.compiler_state_cache.write().await;
+                cache.insert(uri.clone(), state);
+                self.client
+                    .log_message(MessageType::INFO, format!("Compiler state built successfully for {}", uri))
+                    .await;
             }
             Err(e) => {
-                // If parsing fails, remove from cache
-                let mut cache = self.hir_cache.write().await;
+                // If compilation fails, remove from cache
+                let mut cache = self.compiler_state_cache.write().await;
                 cache.remove(uri);
                 self.client
-                    .log_message(MessageType::WARNING, format!("Parsing failed: {:?}", e))
+                    .log_message(MessageType::WARNING, format!("Compilation failed: {:?}", e))
                     .await;
             }
         }
     }
 
-    fn find_unused_variables(text: &str) -> Vec<(String, usize, usize)> {
+    fn find_unused_variables(state: &CompilerState) -> Vec<(String, usize, usize)> {
         // Returns: Vec of (variable_name, line, col) for each unused variable
         let mut unused = Vec::new();
         
-        // Try to parse and build HIR
-        let program = match parse_program(text) {
-            Ok(p) => p,
-            Err(_) => return unused, // Can't analyze if parsing fails
-        };
-        
-        let mut hir_builder = HirBuilder::new();
-        Self::register_builtin_functions(&mut hir_builder);
-        
-        let _ = match hir_builder.build(program) {
-            Ok(_) => {},
-            Err(_) => return unused, // Can't analyze if semantic analysis fails
-        };
-        
-        // Use hir_builder.ast to access the HIR
-        let hir = &hir_builder.ast;
+        // Use compiler state's HIR
+        let hir = &state.hir;
         
         // Collect all declared variables (from let statements)
         // Check both top-level blocks and function bodies
@@ -589,7 +525,7 @@ impl CantaLoopLSPServer {
         // Check top-level blocks
         for block in &hir.blocks {
             for stmt in &block.statements {
-                if let crate::semantic_analyser::HirStmt::Assign { slot, .. } = stmt {
+                if let crate::core::semantic_analyser::HirStmt::Assign { slot, .. } = stmt {
                     // Find the variable name for this slot
                     for scope in &hir.scopes.scopes {
                         if let Some(var) = scope.vars.iter().find(|v| v.id == *slot) {
@@ -604,7 +540,7 @@ impl CantaLoopLSPServer {
         // Check function bodies
         for (_, func) in &hir.functions {
             for stmt in &func.definition.body.statements {
-                if let crate::semantic_analyser::HirStmt::Assign { slot, .. } = stmt {
+                if let crate::core::semantic_analyser::HirStmt::Assign { slot, .. } = stmt {
                     // Find the variable name for this slot
                     for scope in &hir.scopes.scopes {
                         if let Some(var) = scope.vars.iter().find(|v| v.id == *slot) {
@@ -634,9 +570,10 @@ impl CantaLoopLSPServer {
         for (var_id, var_name) in &declared_vars {
             if !used_vars.contains(var_id) {
                 // Find the location of this variable in the source text
-                if let Some((line, col)) = Self::find_variable_location(text, var_name) {
-                    unused.push((var_name.clone(), line, col));
-                }
+                // Note: We don't have the source text here, so we'll return the variable name
+                // The caller can map it to a location if needed
+                // For now, we'll use a placeholder (0, 0)
+                unused.push((var_name.clone(), 0, 0));
             }
         }
         
@@ -644,8 +581,8 @@ impl CantaLoopLSPServer {
     }
     
     fn collect_used_vars_from_block(
-        block: &crate::semantic_analyser::HirBlock,
-        hir: &crate::semantic_analyser::HirAst,
+        block: &crate::core::semantic_analyser::HirBlock,
+        hir: &crate::core::semantic_analyser::HirAst,
         used_vars: &mut std::collections::HashSet<u32>,
     ) {
         for stmt in &block.statements {
@@ -654,28 +591,28 @@ impl CantaLoopLSPServer {
     }
     
     fn collect_used_vars_from_stmt(
-        stmt: &crate::semantic_analyser::HirStmt,
-        hir: &crate::semantic_analyser::HirAst,
+        stmt: &crate::core::semantic_analyser::HirStmt,
+        hir: &crate::core::semantic_analyser::HirAst,
         used_vars: &mut std::collections::HashSet<u32>,
     ) {
         match stmt {
-            crate::semantic_analyser::HirStmt::Assign { value, .. } => {
+            crate::core::semantic_analyser::HirStmt::Assign { value, .. } => {
                 Self::collect_used_vars_from_expr(value, hir, used_vars);
             }
-            crate::semantic_analyser::HirStmt::AssignIncrement { value, .. } => {
+            crate::core::semantic_analyser::HirStmt::AssignIncrement { value, .. } => {
                 Self::collect_used_vars_from_expr(value, hir, used_vars);
             }
-            crate::semantic_analyser::HirStmt::AssignDecrement { value, .. } => {
+            crate::core::semantic_analyser::HirStmt::AssignDecrement { value, .. } => {
                 Self::collect_used_vars_from_expr(value, hir, used_vars);
             }
-            crate::semantic_analyser::HirStmt::If { arms, else_block } => {
+            crate::core::semantic_analyser::HirStmt::If { arms, else_block } => {
                 for (condition, block) in arms {
                     Self::collect_used_vars_from_expr(condition, hir, used_vars);
                     Self::collect_used_vars_from_block(block, hir, used_vars);
                 }
                 Self::collect_used_vars_from_block(else_block, hir, used_vars);
             }
-            crate::semantic_analyser::HirStmt::Match { expression, cases } => {
+            crate::core::semantic_analyser::HirStmt::Match { expression, cases } => {
                 Self::collect_used_vars_from_expr(expression, hir, used_vars);
                 for (pattern, block) in cases {
                     if let Some(pattern_expr) = pattern {
@@ -684,29 +621,33 @@ impl CantaLoopLSPServer {
                     Self::collect_used_vars_from_block(block, hir, used_vars);
                 }
             }
-            crate::semantic_analyser::HirStmt::Return { value } => {
+            crate::core::semantic_analyser::HirStmt::Return { value } => {
                 Self::collect_used_vars_from_expr(value, hir, used_vars);
             }
-            crate::semantic_analyser::HirStmt::Loop { body, .. } => {
+            crate::core::semantic_analyser::HirStmt::Loop { body, .. } => {
                 Self::collect_used_vars_from_block(body, hir, used_vars);
             }
-            crate::semantic_analyser::HirStmt::Break { value } => {
+            crate::core::semantic_analyser::HirStmt::Break { value } => {
                 if let Some(expr) = value {
                     Self::collect_used_vars_from_expr(expr, hir, used_vars);
                 }
             }
-            crate::semantic_analyser::HirStmt::Continue => {
+            crate::core::semantic_analyser::HirStmt::Continue => {
                 // Continue doesn't use any variables
             }
-            crate::semantic_analyser::HirStmt::Expression(expr) => {
+            crate::core::semantic_analyser::HirStmt::Expression(expr) => {
                 Self::collect_used_vars_from_expr(expr, hir, used_vars);
+            }
+            crate::core::semantic_analyser::HirStmt::Nop => {
+                // No-op statement (used for use statements which are compile-time only)
+                // Do nothing
             }
         }
     }
     
     fn collect_used_vars_from_expr(
         expr: &HirExpression,
-        hir: &crate::semantic_analyser::HirAst,
+        hir: &crate::core::semantic_analyser::HirAst,
         used_vars: &mut std::collections::HashSet<u32>,
     ) {
         match expr {
@@ -1035,52 +976,62 @@ impl CantaLoopLSPServer {
 
         let mut diagnostics = Vec::new();
 
-        // Parse errors
-        match parse_program(&text) {
-            Ok(program) => {
-                // If parsing succeeds, try semantic analysis
-                let mut hir_builder = HirBuilder::new();
-                Self::register_builtin_functions(&mut hir_builder);
+        // Use compiler state - single source of truth
+        match self.engine.compile_for_lsp(&text) {
+            Ok(state) => {
+                // Add diagnostics from compiler state
+                for error in &state.diagnostics {
+                    let error_msg = Self::format_hir_error(error);
+                    let (found_line, found_col) = Self::find_error_location(&text, error);
+                    
+                    // Check if this is a nested invoke pattern error - these should be warnings, not errors
+                    let is_nested_invoke_error = error_msg.contains("Confusing nested invoke pattern") ||
+                                                 error_msg.contains("nested invoke pattern");
+                    
+                    let diagnostic = if is_nested_invoke_error {
+                        // Convert to warning for nested invoke patterns since code is still runnable
+                        Diagnostic {
+                            range: Self::create_range(found_line, found_col, 1),
+                            severity: Some(DiagnosticSeverity::WARNING),
+                            code: Some(NumberOrString::String("nested_invoke".to_string())),
+                            code_description: None,
+                            source: Some("CantaLoop".to_string()),
+                            message: error_msg,
+                            related_information: None,
+                            tags: Some(vec![DiagnosticTag::UNNECESSARY]),
+                            data: None,
+                        }
+                    } else {
+                        // Regular semantic errors remain as errors
+                        Self::create_diagnostic(
+                            Self::create_range(found_line, found_col, 1),
+                            error_msg,
+                        )
+                    };
+                    diagnostics.push(diagnostic);
+                }
                 
-                match hir_builder.build(program) {
-                    Ok(_) => {
-                        // HIR built successfully, no semantic errors
-                    }
-                    Err(e) => {
-                        // Semantic analysis errors
-                        let error_msg = Self::format_hir_error(&e);
-                        let (found_line, found_col) = Self::find_error_location(&text, &e);
-                        
-                        // Check if this is a nested invoke pattern error - these should be warnings, not errors
-                        let is_nested_invoke_error = error_msg.contains("Confusing nested invoke pattern") ||
-                                                     error_msg.contains("nested invoke pattern");
-                        
-                        let diagnostic = if is_nested_invoke_error {
-                            // Convert to warning for nested invoke patterns since code is still runnable
-                            Diagnostic {
-                                range: Self::create_range(found_line, found_col, 1),
-                                severity: Some(DiagnosticSeverity::WARNING),
-                                code: Some(NumberOrString::String("nested_invoke".to_string())),
-                                code_description: None,
-                                source: Some("CantaLoop".to_string()),
-                                message: error_msg,
-                                related_information: None,
-                                tags: Some(vec![DiagnosticTag::UNNECESSARY]),
-                                data: None,
-                            }
-                        } else {
-                            // Regular semantic errors remain as errors
-                            Self::create_diagnostic(
-                                Self::create_range(found_line, found_col, 1),
-                                error_msg,
-                            )
+                // Check for unused variables using compiler state
+                let unused_vars = Self::find_unused_variables(&state);
+                for (var_name, line_num, col) in unused_vars {
+                    if line_num > 0 || col > 0 { // Only add if we have location info
+                        let diagnostic = Diagnostic {
+                            range: Self::create_range(line_num, col, var_name.len()),
+                            severity: Some(DiagnosticSeverity::WARNING),
+                            code: Some(NumberOrString::String("unused_variable".to_string())),
+                            code_description: None,
+                            source: Some("CantaLoop".to_string()),
+                            message: format!("Variable '{}' is declared but never used", var_name),
+                            related_information: None,
+                            tags: Some(vec![DiagnosticTag::UNNECESSARY]),
+                            data: None,
                         };
                         diagnostics.push(diagnostic);
                     }
                 }
             }
             Err(e) => {
-                // Pest errors have locations in the error variants
+                // Parse errors
                 let (line, col) = match e.location {
                     pest::error::InputLocation::Pos(pos) => Self::byte_position_to_line_col(&text, pos),
                     pest::error::InputLocation::Span((start, _end)) => Self::byte_position_to_line_col(&text, start),
@@ -1114,22 +1065,6 @@ impl CantaLoopLSPServer {
             diagnostics.push(diagnostic);
         }
 
-        // Check for unused variables
-        let unused_vars = Self::find_unused_variables(&text);
-        for (var_name, line_num, col) in unused_vars {
-            let diagnostic = Diagnostic {
-                range: Self::create_range(line_num, col, var_name.len()),
-                severity: Some(DiagnosticSeverity::WARNING),
-                code: Some(NumberOrString::String("unused_variable".to_string())),
-                code_description: None,
-                source: Some("CantaLoop".to_string()),
-                message: format!("Variable '{}' is declared but never used", var_name),
-                related_information: None,
-                tags: Some(vec![DiagnosticTag::UNNECESSARY]),
-                data: None,
-            };
-            diagnostics.push(diagnostic);
-        }
 
         self.client
             .publish_diagnostics(uri, diagnostics, None)
@@ -1207,7 +1142,7 @@ impl LanguageServer for CantaLoopLSPServer {
         documents.insert(uri.clone(), text.clone());
         drop(documents);
 
-        self.rebuild_hir(&uri, &text).await;
+        self.rebuild_compiler_state(&uri, &text).await;
         self.update_diagnostics(uri).await;
     }
 
@@ -1219,7 +1154,7 @@ impl LanguageServer for CantaLoopLSPServer {
             let text_clone = text.text.clone();
             documents.insert(uri.clone(), text.text);
             drop(documents);
-            self.rebuild_hir(&uri, &text_clone).await;
+            self.rebuild_compiler_state(&uri, &text_clone).await;
         } else {
             drop(documents);
         }
@@ -1233,8 +1168,8 @@ impl LanguageServer for CantaLoopLSPServer {
         documents.remove(&uri);
         drop(documents);
         
-        let mut hir_cache = self.hir_cache.write().await;
-        hir_cache.remove(&uri);
+        let mut cache = self.compiler_state_cache.write().await;
+        cache.remove(&uri);
     }
 
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
@@ -1264,92 +1199,64 @@ impl LanguageServer for CantaLoopLSPServer {
             .log_message(MessageType::INFO, format!("Hover requested for identifier: '{}' at line {}", identifier, pos.line))
             .await;
 
-        // Try to get type information from HIR
-        // If HIR is not available, try to rebuild it
-        let hir_cache = self.hir_cache.read().await;
-        let has_hir = hir_cache.contains_key(&uri);
-        drop(hir_cache);
+        // Use compiler state - single source of truth
+        let cache = self.compiler_state_cache.read().await;
+        let has_state = cache.contains_key(&uri);
+        drop(cache);
         
-        if !has_hir {
-            // HIR not found, try to rebuild it
+        if !has_state {
+            // Compiler state not found, try to rebuild it
             self.client
-                .log_message(MessageType::INFO, format!("HIR not found for URI, attempting to rebuild: {}", uri))
+                .log_message(MessageType::INFO, format!("Compiler state not found for URI, attempting to rebuild: {}", uri))
                 .await;
             let documents = self.documents.read().await;
             if let Some(text) = documents.get(&uri) {
                 let text_clone = text.clone();
                 drop(documents);
-                self.rebuild_hir(&uri, &text_clone).await;
+                self.rebuild_compiler_state(&uri, &text_clone).await;
             }
         }
         
-        let hir_cache = self.hir_cache.read().await;
-        if let Some(hir_builder) = hir_cache.get(&uri) {
+        let cache = self.compiler_state_cache.read().await;
+        if let Some(state) = cache.get(&uri) {
             self.client
-                .log_message(MessageType::INFO, format!("HIR found for URI, searching for '{}'", identifier))
+                .log_message(MessageType::INFO, format!("Compiler state found for URI, searching for '{}'", identifier))
                 .await;
-            // Check if it's a variable (search from root scope for LSP queries)
-            if let Some(var_id) = hir_builder.resolve_var_from_root(&identifier) {
-                self.client
-                    .log_message(MessageType::INFO, format!("Variable '{}' found with ID: {}", identifier, var_id))
-                    .await;
-                if let Some(kind) = hir_builder.get_var_kind_from_id(var_id) {
-                    // Check if this is a thunk (assigned from a function call without invoke)
-                    if let Some(expr) = hir_builder.ast.get_var_assigned_expression(var_id) {
-                        if let HirExpression::FunctionCall { function_id, invoke, .. } = expr {
-                            if !invoke {
-                                // This is a thunk - show the function signature and return type
-                                if let Some(func) = hir_builder.ast.functions.get(&function_id) {
-                                    let signature_str = Self::format_function_signature(func);
-                                    let return_type_str = Self::format_value_kind(&func.signature.return_type);
-                                    let hover_content = format!(
-                                        "```cantaloop\n{}\n```\nType: `Thunk<{}>`\n\nFunction: `{}`",
-                                        identifier, return_type_str, signature_str
-                                    );
-                                    let range = Self::create_range(pos.line as usize, start, end - start);
-                                    return Ok(Some(Self::create_hover_content(hover_content, range)));
-                                }
+            
+            // Use symbol table to find symbol
+            let symbols = state.symbols.find_by_name(&identifier);
+            if let Some(symbol) = symbols.first() {
+                let type_str = Self::format_value_kind(&symbol.ty);
+                let hover_content = match symbol.kind {
+                    crate::core::semantic_analyser::SymbolKind::Function => {
+                        // For functions, try to get the full signature from HIR
+                        if let Some((func_id, _)) = state.hir.functions.iter()
+                            .find(|(_, f)| f.name == identifier) {
+                            if let Some(func) = state.hir.functions.get(func_id) {
+                                let signature = Self::format_function_signature(func);
+                                format!("```cantaloop\n{}\n```", signature)
+                            } else {
+                                format!("```cantaloop\n{}\n```\nType: `{}`", identifier, type_str)
                             }
+                        } else {
+                            format!("```cantaloop\n{}\n```\nType: `{}`", identifier, type_str)
                         }
                     }
-                    
-                    let type_str = Self::format_value_kind(&kind);
-                    self.client
-                        .log_message(MessageType::INFO, format!("Variable '{}' has type: {:?}", identifier, kind))
-                        .await;
-                    let hover_content = format!("```cantaloop\n{}\n```\nType: `{}`", identifier, type_str);
-                    let range = Self::create_range(pos.line as usize, start, end - start);
-                    return Ok(Some(Self::create_hover_content(hover_content, range)));
-                }
-            }
-
-            // Check if it's a function
-            if let Some(func_id) = hir_builder.resolve_function(&identifier) {
-                self.client
-                    .log_message(MessageType::INFO, format!("Function '{}' found with ID: {}", identifier, func_id))
-                    .await;
-                if let Some(func) = hir_builder.ast.functions.get(&func_id) {
-                    let signature = Self::format_function_signature(func);
-                    let hover_content = format!("```cantaloop\n{}\n```", signature);
-                    let range = Self::create_range(pos.line as usize, start, end - start);
-                    return Ok(Some(Self::create_hover_content(hover_content, range)));
-                }
+                    _ => {
+                        format!("```cantaloop\n{}\n```\nType: `{}`", identifier, type_str)
+                    }
+                };
+                let range = Self::create_range(pos.line as usize, start, end - start);
+                return Ok(Some(Self::create_hover_content(hover_content, range)));
             }
             
             self.client
-                .log_message(MessageType::INFO, format!("Identifier '{}' not found in HIR", identifier))
+                .log_message(MessageType::INFO, format!("Identifier '{}' not found in symbol table", identifier))
                 .await;
         } else {
             self.client
-                .log_message(MessageType::WARNING, format!("No HIR found for URI: {}", uri))
+                .log_message(MessageType::WARNING, format!("No compiler state found for URI: {}", uri))
                 .await;
-        }
-
-        // Fallback: Check if it's a built-in function
-        if identifier == "print" {
-            let hover_content = "```cantaloop\nfn print(str: String) -> String\n```\nPrints a string to the console.".to_string();
-            let range = Self::create_range(pos.line as usize, start, end - start);
-            return Ok(Some(Self::create_hover_content(hover_content, range)));
         }
 
         Ok(None)
@@ -1404,7 +1311,7 @@ impl LanguageServer for CantaLoopLSPServer {
         }
 
         // Add keywords (filter by prefix)
-        let keywords = vec!["fn", "if", "else", "return", "let", "true", "false", "loop", "while", "for", "in", "break", "continue"];
+        let keywords = vec!["fn", "if", "else", "return", "let", "true", "false", "loop", "while", "for", "in", "break", "continue", "use"];
         for keyword in keywords {
             if prefix.is_empty() || keyword.starts_with(prefix.trim()) {
                 items.push(CompletionItem {
@@ -1465,35 +1372,25 @@ impl LanguageServer for CantaLoopLSPServer {
             }
         }
 
-        // Add variables and functions from HIR
-        let hir_cache = self.hir_cache.read().await;
-        if let Some(hir_builder) = hir_cache.get(&uri) {
-            // Add user-defined functions
-            for (_, func) in &hir_builder.ast.functions {
-                if prefix.is_empty() || func.name.starts_with(prefix.trim()) {
-                    let signature = Self::format_function_signature(func);
+        // Add variables and functions from compiler state symbol table
+        let cache = self.compiler_state_cache.read().await;
+        if let Some(state) = cache.get(&uri) {
+            // Use symbol table - single source of truth
+            for symbol in state.symbols.get_all() {
+                if prefix.is_empty() || symbol.name.starts_with(prefix.trim()) {
+                    let type_str = Self::format_value_kind(&symbol.ty);
+                    let kind = match symbol.kind {
+                        crate::core::semantic_analyser::SymbolKind::Function => CompletionItemKind::FUNCTION,
+                        crate::core::semantic_analyser::SymbolKind::Variable | 
+                        crate::core::semantic_analyser::SymbolKind::Parameter => CompletionItemKind::VARIABLE,
+                        crate::core::semantic_analyser::SymbolKind::Module => CompletionItemKind::MODULE,
+                    };
                     items.push(CompletionItem {
-                        label: func.name.clone(),
-                        kind: Some(CompletionItemKind::FUNCTION),
-                        detail: Some(signature),
+                        label: symbol.name.clone(),
+                        kind: Some(kind),
+                        detail: Some(format!("Type: {}", type_str)),
                         ..Default::default()
                     });
-                }
-            }
-            
-            // Add variables from all scopes
-            for scope_id in 0..hir_builder.ast.scopes.scopes.len() {
-                let ctx = &hir_builder.ast.scopes.scopes[scope_id];
-                for var in &ctx.vars {
-                    if prefix.is_empty() || var.name.starts_with(prefix.trim()) {
-                        let type_str = Self::format_value_kind(&var.kind);
-                        items.push(CompletionItem {
-                            label: var.name.clone(),
-                            kind: Some(CompletionItemKind::VARIABLE),
-                            detail: Some(format!("Type: {}", type_str)),
-                            ..Default::default()
-                        });
-                    }
                 }
             }
         }
@@ -1525,6 +1422,18 @@ impl LanguageServer for CantaLoopLSPServer {
             }
         };
         drop(documents);
+        
+        // Ensure compiler state is built before generating semantic tokens
+        let cache = self.compiler_state_cache.read().await;
+        let has_state = cache.contains_key(&uri);
+        drop(cache);
+        
+        if !has_state {
+            self.client
+                .log_message(MessageType::INFO, "Compiler state not found, rebuilding for semantic tokens")
+                .await;
+            self.rebuild_compiler_state(&uri, &text).await;
+        }
 
         // Find thunks: function calls that are NOT followed by !
         // Also mark variables that hold thunks
@@ -1532,7 +1441,7 @@ impl LanguageServer for CantaLoopLSPServer {
         let lines: Vec<&str> = text.lines().collect();
         
         // Keywords that should not be marked as thunks
-        let keywords = ["fn", "if", "else", "elseif", "match", "return", "let", "and", "or", "true", "false", "loop", "while", "for", "break", "continue", "in"];
+        let keywords = ["fn", "if", "else", "elseif", "match", "return", "let", "and", "or", "true", "false", "loop", "while", "for", "break", "continue", "in", "use"];
         
         // Token type indices (from legend)
         let function_type = 0; // FUNCTION
@@ -1550,10 +1459,26 @@ impl LanguageServer for CantaLoopLSPServer {
         let mut last_line = 0;
         let mut last_start = 0;
         
-        // First pass: find variables assigned thunks
-        let thunk_variables = Self::find_thunk_variables(&lines);
+        // Get compiler state - use it as the source of truth for semantics
+        let cache = self.compiler_state_cache.read().await;
+        let state = match cache.get(&uri) {
+            Some(s) => s,
+            None => {
+                drop(cache);
+                return Ok(None);
+            }
+        };
+
+        // Build maps from compiler state for fast lookup
+        // Map symbol names to their types and kinds
+        let mut symbol_info: HashMap<String, (ValueKind, crate::core::semantic_analyser::SymbolKind)> = HashMap::new();
+        for symbol in state.symbols.get_all() {
+            symbol_info.insert(symbol.name.clone(), (symbol.ty.clone(), symbol.kind.clone()));
+        }
+
+        drop(cache);
         
-        // Second pass: mark thunk function calls and thunk variables
+        // Now scan text to find positions, but use compiler state for classification
         for (line_num, line) in lines.iter().enumerate() {
             let line_bytes = line.as_bytes();
             let mut byte_pos = 0;
@@ -1600,6 +1525,12 @@ impl LanguageServer for CantaLoopLSPServer {
                 }
                 
                 if ident_end > ident_start {
+                    // Skip if this identifier is inside a comment
+                    if Self::is_in_comment(line, ident_start) {
+                        byte_pos = ident_end + 1;
+                        continue;
+                    }
+                    
                     let identifier = &line[ident_start..ident_end];
                     
                     // Highlight keywords
@@ -1629,9 +1560,9 @@ impl LanguageServer for CantaLoopLSPServer {
                         continue;
                     }
                     
-                    // Check if this is a thunk variable (not a function call)
-                    if thunk_variables.contains(identifier) {
-                        // Mark this variable as a thunk
+                    // Use compiler state to classify this identifier
+                    // Text parsing only finds position - compiler state determines semantics
+                    if let Some((ty, kind)) = symbol_info.get(identifier) {
                         let delta_line = if tokens.is_empty() {
                             line_num as u32
                         } else {
@@ -1643,102 +1574,33 @@ impl LanguageServer for CantaLoopLSPServer {
                             (ident_start as i32 - last_start as i32) as u32
                         };
                         
+                        let token_type = match kind {
+                            crate::core::semantic_analyser::SymbolKind::Function => function_type,
+                            crate::core::semantic_analyser::SymbolKind::Variable | 
+                            crate::core::semantic_analyser::SymbolKind::Parameter => variable_type,
+                            _ => variable_type,
+                        };
+                        
+                        // Mark thunks with the thunk modifier
+                        let modifiers = if matches!(ty, ValueKind::Thunk(_)) {
+                            thunk_modifier
+                        } else {
+                            0
+                        };
+                        
                         tokens.push(SemanticToken {
                             delta_line,
                             delta_start,
                             length: identifier.len() as u32,
-                            token_type: variable_type,
-                            token_modifiers_bitset: thunk_modifier,
+                            token_type,
+                            token_modifiers_bitset: modifiers,
                         });
                         
                         last_line = line_num;
                         last_start = ident_start;
-                        byte_pos = ident_end + 1;
-                        continue;
                     }
                     
-                    // Check if this is part of a let statement assignment
-                    // If so, we'll mark the variable, not the function call
-                    let before_ident = &line[..ident_start].trim_end();
-                    let is_in_let_assignment = before_ident.ends_with("let ") || 
-                        (before_ident.ends_with('=') && before_ident.contains("let ")) ||
-                        (before_ident.ends_with(':') && before_ident.contains("let "));
-                    
-                    // Check if this is a function declaration (fn identifier)
-                    let is_function_declaration = before_ident.ends_with("fn") || 
-                        before_ident.ends_with("fn ");
-                    
-                    // Check if followed by (
-                    let after_ident = &line[ident_end..].trim_start();
-                    if after_ident.starts_with('(') {
-                        // Skip if this is a function declaration
-                        if is_function_declaration {
-                            byte_pos = ident_end + 1;
-                            continue;
-                        }
-                        // This might be a function call - find the matching )
-                        let paren_start_byte = ident_end + (line[ident_end..].find('(').unwrap());
-                        let mut paren_count = 1;
-                        let mut paren_pos_byte = paren_start_byte + 1;
-                        
-                        while paren_pos_byte < line_bytes.len() && paren_count > 0 {
-                            match line_bytes[paren_pos_byte] as char {
-                                '(' => paren_count += 1,
-                                ')' => {
-                                    paren_count -= 1;
-                                    if paren_count == 0 {
-                                        // Found closing paren - check if ! follows
-                                        let after_paren = &line[paren_pos_byte + 1..].trim_start();
-                                        if !after_paren.starts_with('!') {
-                                            // This is a thunk!
-                                            // Only mark the function call if NOT in a let assignment
-                                            // (In let assignments, we mark the variable instead)
-                                            if !is_in_let_assignment {
-                                                let identifier = &line[ident_start..ident_end];
-                                                let delta_line = if tokens.is_empty() {
-                                                    line_num as u32
-                                                } else {
-                                                    (line_num as i32 - last_line as i32) as u32
-                                                };
-                                                let delta_start = if tokens.is_empty() || delta_line > 0 {
-                                                    ident_start as u32
-                                                } else {
-                                                    (ident_start as i32 - last_start as i32) as u32
-                                                };
-                                                
-                                                tokens.push(SemanticToken {
-                                                    delta_line,
-                                                    delta_start,
-                                                    length: identifier.len() as u32,
-                                                    token_type: function_type,
-                                                    token_modifiers_bitset: thunk_modifier,
-                                                });
-                                                
-                                                self.client
-                                                    .log_message(MessageType::INFO, format!("Found thunk call: {} at line {}", identifier, line_num))
-                                                    .await;
-                                                
-                                                last_line = line_num;
-                                                last_start = ident_start;
-                                            }
-                                        }
-                                        byte_pos = paren_pos_byte + 1;
-                                        break;
-                                    }
-                                }
-                                _ => {}
-                            }
-                            paren_pos_byte += 1;
-                        }
-                        
-                        if paren_count > 0 {
-                            // Unclosed paren, skip this
-                            byte_pos = ident_end + 1;
-                        }
-                        // If paren_count == 0, byte_pos was already set in the loop
-                    } else {
-                        byte_pos = ident_end + 1;
-                    }
+                    byte_pos = ident_end + 1;
                 } else {
                     // Check for operators: .. and !
                     // Check for .. operator (range operator)
@@ -1825,6 +1687,11 @@ impl LanguageServer for CantaLoopLSPServer {
                 
                 // Check for return type annotation (-> type)
                 if byte_pos + 1 < line_bytes.len() && &line_bytes[byte_pos..byte_pos + 2] == b"->" {
+                    // Skip if this is inside a comment
+                    if Self::is_in_comment(line, byte_pos) {
+                        byte_pos += 1;
+                        continue;
+                    }
                     let arrow_start = byte_pos;
                     byte_pos += 2;
                     // Skip whitespace after ->
@@ -1886,6 +1753,11 @@ impl LanguageServer for CantaLoopLSPServer {
                     // Only proceed if we found an identifier before the colon
                     // and it's not a keyword
                     if ident_start < ident_end {
+                        // Skip if this is inside a comment
+                        if Self::is_in_comment(line, ident_start) {
+                            byte_pos += 1;
+                            continue;
+                        }
                         let before_ident = &line[..ident_start].trim_end();
                         // Skip if this is part of a string or comment
                         if !before_ident.ends_with('"') && !before_ident.ends_with("//") {

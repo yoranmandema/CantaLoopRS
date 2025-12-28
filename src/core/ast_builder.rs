@@ -1,14 +1,259 @@
 use pest::iterators::Pair;
 
-use crate::parser::{Rule, PRATT_PARSER, CantaLoopParser};
+use crate::core::parser::{Rule, PRATT_PARSER, CantaLoopParser};
 use pest::Parser;
-use crate::ast::{Expression, Statement, Program, Block, Literal, UnaryOp, BinaryOp, PostfixOp};
+use crate::core::ast::{Expression, Statement, Program, Block, Literal, UnaryOp, BinaryOp, PostfixOp, CallArgument, ImportSelector};
 
-// Helper function to build type annotation string from a Pair<Rule>
+// ============================================================================
+// Error Helpers
+// ============================================================================
+
+/// Creates a custom error with a message at the given span
+fn error_at_span(span: pest::Span, message: String) -> pest::error::Error<Rule> {
+    pest::error::Error::new_from_span(
+        pest::error::ErrorVariant::CustomError { message },
+        span
+    )
+}
+
+/// Creates an error for a missing keyword
+fn error_missing_keyword(span: pest::Span, keyword: &str) -> pest::error::Error<Rule> {
+    error_at_span(span, format!("Missing '{}' keyword", keyword))
+}
+
+// ============================================================================
+// Text Extraction Helpers
+// ============================================================================
+
+/// Finds a keyword in text and returns its position, or an error if not found
+fn find_keyword(text: &str, keyword: &str, span: pest::Span) -> Result<usize, pest::error::Error<Rule>> {
+    text.find(keyword).ok_or_else(|| error_missing_keyword(span, keyword))
+}
+
+/// Extracts an identifier after a keyword, ending at whitespace or a delimiter
+fn extract_identifier_after_keyword(
+    text: &str,
+    keyword: &str,
+    span: pest::Span,
+    delimiters: &[char],
+) -> Result<String, pest::error::Error<Rule>> {
+    let start = find_keyword(text, keyword, span)? + keyword.len();
+    let identifier_end = text[start..]
+        .find(|c: char| c.is_whitespace() || delimiters.contains(&c))
+        .ok_or_else(|| error_at_span(span, format!("Missing identifier after '{}'", keyword)))?;
+    Ok(text[start..start + identifier_end].trim().to_string())
+}
+
+/// Finds the matching closing brace for an opening brace at the given position
+fn find_matching_brace(text: &str, brace_start: usize) -> Option<usize> {
+    let mut brace_count = 0;
+    let mut found_start = false;
+    
+    for (i, ch) in text[brace_start..].char_indices() {
+        match ch {
+            '{' => {
+                brace_count += 1;
+                found_start = true;
+            }
+            '}' if found_start => {
+                brace_count -= 1;
+                if brace_count == 0 {
+                    return Some(brace_start + i + 1);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Finds the opening brace and returns its position, or an error if not found
+fn find_opening_brace(text: &str, span: pest::Span, context: &str) -> Result<usize, pest::error::Error<Rule>> {
+    text.find('{').ok_or_else(|| {
+        error_at_span(span, format!("{} missing opening brace", context))
+    })
+}
+
+/// Extracts text between braces, handling nested braces
+fn extract_braced_content<'a>(text: &'a str, brace_start: usize, span: pest::Span) -> Result<&'a str, pest::error::Error<Rule>> {
+    let brace_end = find_matching_brace(text, brace_start)
+        .ok_or_else(|| error_at_span(span, "Missing matching closing brace".to_string()))?;
+    Ok(&text[brace_start + 1..brace_end - 1])
+}
+
+// ============================================================================
+// Type Annotation Helpers
+// ============================================================================
+
+/// Builds a type annotation string from a Pair<Rule>
 fn build_type_annotation(pair: Pair<Rule>) -> Result<String, pest::error::Error<Rule>> {
-    // Just return the string representation of the type annotation
-    // The semantic analyser will parse it properly
     Ok(pair.as_str().trim().to_string())
+}
+
+/// Parses a type annotation from text
+fn parse_type_annotation_from_text(
+    type_text: &str,
+    _span: pest::Span,
+) -> Result<Option<String>, pest::error::Error<Rule>> {
+    if type_text.trim().is_empty() {
+        return Ok(None);
+    }
+    
+    if let Ok(mut type_pairs) = CantaLoopParser::parse(Rule::type_annotation, type_text) {
+        if let Some(type_pair) = type_pairs.next() {
+            Ok(Some(build_type_annotation(type_pair)?))
+        } else {
+            Ok(None)
+        }
+    } else {
+        // Fallback: use text as-is
+        Ok(Some(type_text.to_string()))
+    }
+}
+
+/// Extracts return type annotation from text after "->"
+fn extract_return_type(text: &str, span: pest::Span) -> Result<Option<String>, pest::error::Error<Rule>> {
+    if !text.trim_start().starts_with("->") {
+        return Ok(None);
+    }
+    
+    let arrow_pos = text.find("->").unwrap();
+    let after_arrow = text[arrow_pos + 2..].trim_start();
+    let brace_pos = after_arrow.find('{').unwrap_or(after_arrow.len());
+    let type_text = after_arrow[..brace_pos].trim();
+    
+    parse_type_annotation_from_text(type_text, span)
+}
+
+// ============================================================================
+// Block Parsing Helpers
+// ============================================================================
+
+/// Parses a block from braced_block text
+fn parse_block_from_braced_block_text(
+    block_text: &str,
+    span: pest::Span,
+    context: &str,
+) -> Result<Block, pest::error::Error<Rule>> {
+    let mut parse_result = CantaLoopParser::parse(Rule::braced_block, block_text)
+        .map_err(|e| error_at_span(span, format!("Failed to parse {}: {:?}", context, e)))?;
+    
+    let body_pair = parse_result.next().ok_or_else(|| {
+        error_at_span(span, format!("{} missing body", context))
+    })?;
+    
+    let block_pair = body_pair.into_inner()
+        .find(|p| p.as_rule() == Rule::block)
+        .ok_or_else(|| {
+            error_at_span(span, format!("{} missing block", context))
+        })?;
+    
+    build_block(block_pair)
+}
+
+/// Parses a block directly from block text
+fn parse_block_from_text(
+    block_text: &str,
+    span: pest::Span,
+) -> Result<Block, pest::error::Error<Rule>> {
+    let mut parse_result = CantaLoopParser::parse(Rule::block, block_text)
+        .map_err(|e| error_at_span(span, format!("Failed to parse block: {:?}", e)))?;
+    
+    if let Some(block_pair) = parse_result.next() {
+        build_block(block_pair)
+    } else {
+        Ok(Block { statements: Vec::new() })
+    }
+}
+
+// ============================================================================
+// Loop Init Var Parsing
+// ============================================================================
+
+/// Parses a single loop init variable from text (format: "identifier = expression")
+fn parse_loop_init_var(
+    init_var_text: &str,
+    init_var_span: pest::Span,
+) -> Result<(String, Expression), pest::error::Error<Rule>> {
+    let eq_pos = init_var_text.find('=')
+        .ok_or_else(|| error_at_span(init_var_span, "Loop init var missing '='".to_string()))?;
+    let identifier = init_var_text[..eq_pos].trim().to_string();
+    let expr_text = init_var_text[eq_pos + 1..].trim();
+    let expression = parse_expression_from_text(expr_text, init_var_span)?;
+    Ok((identifier, expression))
+}
+
+/// Parses loop init variables from text
+fn parse_loop_init_vars(
+    init_text: &str,
+    span: pest::Span,
+) -> Result<Vec<(String, Expression)>, pest::error::Error<Rule>> {
+    if init_text.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    
+    let mut init_parse_result = CantaLoopParser::parse(Rule::loop_init, init_text)
+        .map_err(|e| error_at_span(span, format!("Failed to parse loop init vars: {:?}", e)))?;
+    
+    let mut init_vars = Vec::new();
+    if let Some(init_pair) = init_parse_result.next() {
+        for init_var_pair in init_pair.into_inner() {
+            if init_var_pair.as_rule() == Rule::loop_init_var {
+                let (id, expr) = parse_loop_init_var(init_var_pair.as_str(), init_var_pair.as_span())?;
+                init_vars.push((id, expr));
+            }
+        }
+    }
+    Ok(init_vars)
+}
+
+// ============================================================================
+// Expression Extraction Helpers
+// ============================================================================
+
+/// Extracts expression text after a keyword
+fn extract_expression_after_keyword<'a>(
+    text: &'a str,
+    keyword: &str,
+    span: pest::Span,
+) -> Result<&'a str, pest::error::Error<Rule>> {
+    let keyword_pos = find_keyword(text, keyword, span)?;
+    let expr_start = keyword_pos + keyword.len();
+    Ok(text[expr_start..].trim())
+}
+
+/// Extracts expression text between a keyword and a delimiter
+#[allow(dead_code)]
+fn extract_expression_between<'a>(
+    text: &'a str,
+    after_keyword: usize,
+    before_delimiter: usize,
+    span: pest::Span,
+    context: &str,
+) -> Result<&'a str, pest::error::Error<Rule>> {
+    let expr_text = text[after_keyword..before_delimiter].trim();
+    if expr_text.is_empty() {
+        return Err(error_at_span(span, format!("{} missing expression", context)));
+    }
+    Ok(expr_text)
+}
+
+/// Finds a keyword as a word boundary (not part of another word)
+fn find_word_boundary(text: &str, keyword: &str) -> Option<usize> {
+    for i in 0..text.len() {
+        if text[i..].starts_with(keyword) {
+            // Check if it's a word boundary
+            let after_keyword = if i + keyword.len() < text.len() {
+                text.chars().nth(i + keyword.len())
+            } else {
+                None
+            };
+            if after_keyword.is_none() || !after_keyword.unwrap().is_alphanumeric() {
+                return Some(i);
+            }
+        }
+    }
+    None
 }
 
 pub fn build_program(pair: Pair<Rule>) -> Result<Program, pest::error::Error<Rule>> {
@@ -54,156 +299,86 @@ fn build_block (pair: Pair<Rule>) -> Result<Block, pest::error::Error<Rule>> {
 }
 
 fn build_function_declaration(pair: Pair<Rule>) -> Result<Statement, pest::error::Error<Rule>> {
-    use crate::ast::{Argument, Statement};
+    use crate::core::ast::Statement;
 
     let span = pair.as_span();
     let text = pair.as_str();
     
-    // For atomic rules, identifier is also atomic so we need to extract it from the string
-    // Format: "fn " + identifier + "(" ...
-    // Find the identifier after "fn "
-    let fn_keyword = "fn ";
-    let start = text.find(fn_keyword).ok_or_else(|| pest::error::Error::new_from_span(
-        pest::error::ErrorVariant::CustomError { message: "Function missing 'fn' keyword".to_string() },
-        span
-    ))? + fn_keyword.len();
+    // Check for pub visibility
+    let pub_visibility = text.trim_start().starts_with("pub");
+    let fn_keyword = if pub_visibility { "pub fn " } else { "fn " };
     
-    // Find where the identifier ends (whitespace or "(")
-    let identifier_end = text[start..].find(|c: char| c.is_whitespace() || c == '(')
-        .ok_or_else(|| pest::error::Error::new_from_span(
-            pest::error::ErrorVariant::CustomError { message: "Function missing identifier".to_string() },
-            span
-        ))?;
-    let identifier = text[start..start + identifier_end].trim().to_string();
+    // Extract identifier after "fn " or "pub fn "
+    let identifier = extract_identifier_after_keyword(text, fn_keyword, span, &['('])?;
     
-    // For atomic rules, into_inner() returns nothing, so we need to parse manually
-    // Find the block by looking for "{" in the text after ")"
-    let paren_end = text.find(')').ok_or_else(|| pest::error::Error::new_from_span(
-        pest::error::ErrorVariant::CustomError { message: "Function missing closing paren".to_string() },
-        span
-    ))? + 1;
-    // Find the opening brace after the closing paren (skip whitespace and optional return type)
+    // Find closing paren
+    let paren_end = text.find(')')
+        .ok_or_else(|| error_at_span(span, "Function missing closing paren".to_string()))? + 1;
+    
+    // Extract return type and find brace
     let after_paren = &text[paren_end..];
+    let return_type = extract_return_type(after_paren, span)?;
     
-    // Check for return type annotation (-> type)
-    let return_type = if after_paren.trim_start().starts_with("->") {
-        // Parse return type annotation
-        // Find the position after "->" and whitespace
-        let arrow_pos = after_paren.find("->").unwrap();
-        let after_arrow = &after_paren[arrow_pos + 2..].trim_start();
-        
-        // Find where the type annotation ends (before the opening brace)
-        let brace_pos = after_arrow.find('{').unwrap_or(after_arrow.len());
-        let type_text = after_arrow[..brace_pos].trim();
-        
-        if !type_text.is_empty() {
-            // Try to parse as type_annotation
-            if let Ok(mut type_pairs) = CantaLoopParser::parse(Rule::type_annotation, type_text) {
-                if let Some(type_pair) = type_pairs.next() {
-                    let type_name = build_type_annotation(type_pair)?;
-                    Some(type_name)
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-    
-    // Find the opening brace (skip return type annotation if present)
-    let brace_start_offset = after_paren.find('{').ok_or_else(|| pest::error::Error::new_from_span(
-        pest::error::ErrorVariant::CustomError { message: format!("Function missing opening brace. Text after paren: {:?}", after_paren.chars().take(20).collect::<String>()) },
-        span
-    ))?;
+    // Find opening brace
+    let brace_start_offset = find_opening_brace(after_paren, span, "Function")?;
     let brace_start = paren_end + brace_start_offset;
-    // Find the matching closing brace
-    let mut brace_count = 0;
-    let mut brace_end = None;
-    for (i, c) in text[brace_start..].char_indices() {
-        if c == '{' {
-            brace_count += 1;
-        } else if c == '}' {
-            brace_count -= 1;
-            if brace_count == 0 {
-                brace_end = Some(brace_start + i + 1);
-                break;
-            }
-        }
-    }
-    let brace_end = brace_end.ok_or_else(|| pest::error::Error::new_from_span(
-        pest::error::ErrorVariant::CustomError { message: "Function missing closing brace".to_string() },
-        span
-    ))?;
-    let block_text = &text[brace_start..brace_end];
     
-    // Parse arguments from the text between identifier and closing paren
-    let mut arguments = Vec::new();
-    let args_start = text.find('(').ok_or_else(|| pest::error::Error::new_from_span(
-        pest::error::ErrorVariant::CustomError { message: "Function missing opening paren".to_string() },
-        span
-    ))? + 1;
-    let args_text = &text[args_start..paren_end - 1].trim();
-    if !args_text.is_empty() {
-        // Parse function_args
-        let args_pairs = CantaLoopParser::parse(Rule::function_args, args_text)
-            .map_err(|e| pest::error::Error::new_from_span(
-                pest::error::ErrorVariant::CustomError { message: format!("Failed to parse function arguments: {}", e) },
-                span
-            ))?;
-        let mut args_pairs = args_pairs;
-        if let Some(args_pair) = args_pairs.next() {
-            for arg_pair in args_pair.into_inner() {
-                if arg_pair.as_rule() == Rule::argument {
-                    let arg_span = arg_pair.as_span();
-                    let mut arg_inner = arg_pair.into_inner();
-                    let id = arg_inner.next().ok_or_else(|| pest::error::Error::new_from_span(
-                        pest::error::ErrorVariant::CustomError { message: "Function argument missing identifier".to_string() },
-                        arg_span
-                    ))?.as_str().to_string();
-                    // Skip whitespace and colon - they are silent or not in inner pairs
-                    // The next should be the type_annotation
-                    let type_pair = arg_inner.next().ok_or_else(|| pest::error::Error::new_from_span(
-                        pest::error::ErrorVariant::CustomError { message: "Function argument missing type annotation".to_string() },
-                        arg_span
-                    ))?;
-                    let kind = build_type_annotation(type_pair)?;
-                    arguments.push(Argument { identifier: id, kind });
-                }
-            }
-        }
-    }
+    // Extract block content
+    let block_content = extract_braced_content(text, brace_start, span)?;
+    let body_block = parse_block_from_braced_block_text(
+        &format!("{{{}}}", block_content),
+        span,
+        "Function body",
+    )?;
     
-    // Parse braced_block
-    let parse_result = CantaLoopParser::parse(Rule::braced_block, block_text);
-    let mut block_pairs = parse_result
-        .map_err(|e| pest::error::Error::new_from_span(
-            pest::error::ErrorVariant::CustomError { message: format!("Failed to parse function body: {:?}", e) },
-            span
-        ))?;
-    let body_pair = block_pairs.next().ok_or_else(|| pest::error::Error::new_from_span(
-        pest::error::ErrorVariant::CustomError { message: "Function missing body".to_string() },
-        span
-    ))?;
+    // Parse function arguments
+    let args_start = text.find('(')
+        .ok_or_else(|| error_at_span(span, "Function missing opening paren".to_string()))? + 1;
+    let args_text = text[args_start..paren_end - 1].trim();
     
-    // braced_block contains a block inside
-    let block_pair = body_pair.into_inner().find(|p| p.as_rule() == Rule::block)
-        .ok_or_else(|| pest::error::Error::new_from_span(
-            pest::error::ErrorVariant::CustomError { message: "Function body missing block".to_string() },
-            span
-        ))?;
-    let body_block = build_block(block_pair)?;
+    let arguments = if args_text.is_empty() {
+        Vec::new()
+    } else {
+        parse_function_arguments(args_text, span)?
+    };
 
     Ok(Statement::FunctionDeclaration {
         identifier,
         arguments,
         return_type,
         body: body_block,
+        pub_visibility,
     })
+}
+
+/// Parses function arguments from text
+fn parse_function_arguments(
+    args_text: &str,
+    span: pest::Span,
+) -> Result<Vec<crate::core::ast::Argument>, pest::error::Error<Rule>> {
+    use crate::core::ast::Argument;
+    
+    let mut args_pairs = CantaLoopParser::parse(Rule::function_args, args_text)
+        .map_err(|e| error_at_span(span, format!("Failed to parse function arguments: {}", e)))?;
+    
+    let mut arguments = Vec::new();
+    if let Some(args_pair) = args_pairs.next() {
+        for arg_pair in args_pair.into_inner() {
+            if arg_pair.as_rule() == Rule::argument {
+                let arg_span = arg_pair.as_span();
+                let mut arg_inner = arg_pair.into_inner();
+                let id = arg_inner.next()
+                    .ok_or_else(|| error_at_span(arg_span, "Function argument missing identifier".to_string()))?
+                    .as_str()
+                    .to_string();
+                let type_pair = arg_inner.next()
+                    .ok_or_else(|| error_at_span(arg_span, "Function argument missing type annotation".to_string()))?;
+                let kind = build_type_annotation(type_pair)?;
+                arguments.push(Argument { identifier: id, kind });
+            }
+        }
+    }
+    Ok(arguments)
 }
 
 fn build_identifier_expr(pair: Pair<Rule>) -> Result<Expression, pest::error::Error<Rule>> {
@@ -264,34 +439,97 @@ fn build_value(pair: Pair<Rule>) -> Result<Expression, pest::error::Error<Rule>>
 fn build_call_expression(pair: Pair<Rule>) -> Result<Expression, pest::error::Error<Rule>> {
     let span = pair.as_span();
     let text = pair.as_str();
-    // Since call_expression is atomic, parse it from text
-    // Format: identifier "(" [expression_list] ")"
-    // Find the identifier (everything before "(")
-    let paren_start = text.find('(').ok_or_else(|| pest::error::Error::new_from_span(
-        pest::error::ErrorVariant::CustomError { message: "Call expression missing opening paren".to_string() },
-        span
-    ))?;
+    
+    // Find opening paren
+    let paren_start = text.find('(')
+        .ok_or_else(|| error_at_span(span, "Call expression missing opening paren".to_string()))?;
     let identifier = text[..paren_start].trim().to_string();
     
-    // Find the closing paren
-    let paren_end = text.rfind(')').ok_or_else(|| pest::error::Error::new_from_span(
-        pest::error::ErrorVariant::CustomError { message: "Call expression missing closing paren".to_string() },
-        span
-    ))?;
+    // Find closing paren
+    let paren_end = text.rfind(')')
+        .ok_or_else(|| error_at_span(span, "Call expression missing closing paren".to_string()))?;
     
-    // Extract the expression list text (between the parens)
+    // Extract and parse arguments
     let args_text = text[paren_start + 1..paren_end].trim();
-    let arguments = if args_text.is_empty() {
+    let call_args = if args_text.is_empty() {
         Vec::new()
     } else {
-        // Parse the expression list by splitting on commas and parsing each expression
-        parse_expression_list_from_text(args_text, span)?
+        parse_call_argument_list_from_text(args_text, span)?
     };
     
-    Ok(Expression::FunctionCall {
-        callee: Box::new(Expression::Identifier(identifier)),
-        arguments,
-    })
+    // Convert to appropriate call type
+    if call_args.iter().any(|arg| matches!(arg, CallArgument::Hole)) {
+        Ok(Expression::PartialCall {
+            func: Box::new(Expression::Identifier(identifier)),
+            args: call_args,
+        })
+    } else {
+        let arguments: Vec<Expression> = call_args.into_iter()
+            .map(|arg| match arg {
+                CallArgument::Expr(expr) => expr,
+                CallArgument::Hole => unreachable!("No holes should exist here"),
+            })
+            .collect();
+        Ok(Expression::FunctionCall {
+            callee: Box::new(Expression::Identifier(identifier)),
+            arguments,
+        })
+    }
+}
+
+// Helper function to parse a call argument list from text (supports expressions and holes)
+fn parse_call_argument_list_from_text(text: &str, span: pest::Span) -> Result<Vec<CallArgument>, pest::error::Error<Rule>> {
+    if text.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    
+    // Split by commas, being careful about commas inside nested structures (parens, brackets, braces, strings)
+    let mut arguments = Vec::new();
+    let mut current_start = 0;
+    let mut depth = 0; // Track depth of nested structures
+    let mut in_string = false;
+    let mut escape_next = false;
+    let chars: Vec<char> = text.chars().collect();
+    
+    for (i, &ch) in chars.iter().enumerate() {
+        if escape_next {
+            escape_next = false;
+            continue;
+        }
+        
+        match ch {
+            '\\' if in_string => escape_next = true,
+            '"' => in_string = !in_string,
+            '(' | '[' | '{' if !in_string => depth += 1,
+            ')' | ']' | '}' if !in_string => depth -= 1,
+            ',' if depth == 0 && !in_string => {
+                let arg_text = text[current_start..i].trim();
+                if !arg_text.is_empty() {
+                    arguments.push(parse_call_argument_from_text(arg_text, span)?);
+                }
+                current_start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    
+    // Parse the last argument
+    let arg_text = text[current_start..].trim();
+    if !arg_text.is_empty() {
+        arguments.push(parse_call_argument_from_text(arg_text, span)?);
+    }
+    
+    Ok(arguments)
+}
+
+// Helper function to parse a single call argument (expression or hole)
+fn parse_call_argument_from_text(text: &str, span: pest::Span) -> Result<CallArgument, pest::error::Error<Rule>> {
+    let trimmed = text.trim();
+    if trimmed == "_" {
+        Ok(CallArgument::Hole)
+    } else {
+        Ok(CallArgument::Expr(parse_expression_from_text(trimmed, span)?))
+    }
 }
 
 // Helper function to parse an expression list from text
@@ -342,6 +580,7 @@ fn parse_expression_list_from_text(text: &str, span: pest::Span) -> Result<Vec<E
 
 // Helper function to parse a loop expression from text
 // This is used when loop expressions need to be parsed from text directly
+#[allow(dead_code)]
 fn parse_loop_expression_from_text(text: &str, span: pest::Span) -> Result<Expression, pest::error::Error<Rule>> {
     // Parse the loop expression using the grammar rule
     let mut parse_result = CantaLoopParser::parse(Rule::loop_expression, text)
@@ -369,109 +608,24 @@ fn build_loop_expression(pair: Pair<Rule>) -> Result<Expression, pest::error::Er
     let span = pair.as_span();
     let full_text = span.as_str();
     
-    // The entire loop expression is matched manually, so we parse everything from the text
-    // Format: "loop" [init_vars] "{" block "}"
     if !full_text.starts_with("loop") {
-        return Err(pest::error::Error::new_from_span(
-            pest::error::ErrorVariant::CustomError { 
-                message: format!("Loop expression must start with 'loop', got: {}", full_text.chars().take(20).collect::<String>()) 
-            },
+        return Err(error_at_span(
             span,
+            format!("Loop expression must start with 'loop', got: {}", 
+                full_text.chars().take(20).collect::<String>())
         ));
     }
     
-    // Find the opening brace (separates init vars from block)
-    let brace_start = full_text.find('{').ok_or_else(|| pest::error::Error::new_from_span(
-        pest::error::ErrorVariant::CustomError { message: "Loop expression missing opening brace".to_string() },
-        span,
-    ))?;
+    // Find opening brace
+    let brace_start = find_opening_brace(full_text, span, "Loop expression")?;
     
     // Parse optional init vars (everything between "loop" and "{")
-    let init_text = full_text[4..brace_start].trim(); // Skip "loop" (4 chars)
-    let mut init_vars = Vec::new();
-    if !init_text.is_empty() {
-        // Parse init vars: "a = 0, b = 1, i = 0"
-        let init_parse_result = CantaLoopParser::parse(Rule::loop_init, init_text);
-        match init_parse_result {
-            Ok(mut init_pairs) => {
-                if let Some(init_pair) = init_pairs.next() {
-                    for init_var_pair in init_pair.into_inner() {
-                        if init_var_pair.as_rule() == Rule::loop_init_var {
-                            // Since expression is silent, we need to extract it manually from the text
-                            let init_var_text = init_var_pair.as_str();
-                            let init_var_span = init_var_pair.as_span();
-                            // Format: "identifier = expression"
-                            let eq_pos = init_var_text.find('=').ok_or_else(|| pest::error::Error::new_from_span(
-                                pest::error::ErrorVariant::CustomError { message: "Loop init var missing '='".to_string() },
-                                init_var_span
-                            ))?;
-                            let identifier = init_var_text[..eq_pos].trim().to_string();
-                            let expr_text = init_var_text[eq_pos + 1..].trim();
-                            // Use parse_expression_from_text since expressions are now handled by *_from_text functions
-                            init_vars.push((identifier, parse_expression_from_text(expr_text, init_var_span)?));
-                        }
-                    }
-                }
-            }
-            Err(e) => {
-                return Err(pest::error::Error::new_from_span(
-                    pest::error::ErrorVariant::CustomError { 
-                        message: format!("Failed to parse loop init vars: {:?}. Init text: '{}'", e, init_text)
-                    },
-                    span
-                ));
-            }
-        }
-    }
+    let init_text = full_text[4..brace_start].trim();
+    let init_vars = parse_loop_init_vars(init_text, span)?;
     
-    // Find matching closing brace by counting braces (handles nested braces)
-    let mut brace_count = 0;
-    let mut found_start = false;
-    let mut brace_end = None;
-    for (i, ch) in full_text[brace_start..].char_indices() {
-        if ch == '{' {
-            brace_count += 1;
-            found_start = true;
-        } else if ch == '}' {
-            brace_count -= 1;
-            if found_start && brace_count == 0 {
-                brace_end = Some(brace_start + i);
-                break;
-            }
-        }
-    }
-    
-    // Extract the block content between the braces
-    let block_content = if let Some(end) = brace_end {
-        full_text[brace_start + 1..end].trim()
-    } else {
-        return Err(pest::error::Error::new_from_span(
-            pest::error::ErrorVariant::CustomError { message: "Loop expression missing matching closing brace".to_string() },
-            span,
-        ));
-    };
-    
-    // Manually parse the block content as a block (statements, not expressions)
-    // This ensures statements are parsed correctly even when loop_expression is part of an expression context
-    let block_parse_result = CantaLoopParser::parse(Rule::block, block_content);
-    let body_block = match block_parse_result {
-        Ok(mut block_pairs) => {
-            if let Some(block_pair) = block_pairs.next() {
-                build_block(block_pair)?
-            } else {
-                // Empty block
-                Block { statements: Vec::new() }
-            }
-        }
-        Err(e) => {
-            return Err(pest::error::Error::new_from_span(
-                pest::error::ErrorVariant::CustomError { 
-                    message: format!("Failed to parse loop body as block: {:?}. Content: {:?}", e, block_content.chars().take(100).collect::<String>())
-                },
-                span,
-            ));
-        }
-    };
+    // Extract block content
+    let block_content = extract_braced_content(full_text, brace_start, span)?;
+    let body_block = parse_block_from_text(block_content, span)?;
     
     Ok(Expression::Loop {
         init_vars,
@@ -496,6 +650,21 @@ fn build_primary(primary_pair: Pair<Rule>) -> Result<Expression, pest::error::Er
                 Rule::identifier => build_identifier_expr(base_pair),
                 Rule::call_expression => build_call_expression(base_pair),
                 Rule::loop_expression => build_loop_expression(base_pair),
+                Rule::member_access => {
+                    let mut member_inner = base_pair.into_inner();
+                    let first = member_inner.next().unwrap();
+                    let mut identifiers = vec![first.as_str().to_string()];
+                    for id_pair in member_inner {
+                        identifiers.push(id_pair.as_str().to_string());
+                    }
+                    // Build member access: utils.add becomes MemberAccess(Identifier("utils"), "add")
+                    let object = Box::new(Expression::Identifier(identifiers[0].clone()));
+                    let member = identifiers[1..].join(".");
+                    Ok(Expression::MemberAccess {
+                        object,
+                        member,
+                    })
+                }
                 // Handle parenthesized expressions
                 // When we have "(" ~ expression ~ ")", Pest might structure it differently
                 // Try to find the expression in the inner sequence
@@ -577,23 +746,40 @@ fn build_atom(atom_pair: Pair<Rule>) -> Result<Expression, pest::error::Error<Ru
                         };
                     }
                     Rule::call => {
-                        // Function call syntax: (args) - creates a FunctionCall expression
+                        // Function call syntax: (args) - creates a FunctionCall or PartialCall expression
                         let call_text = postfix_op_pair.as_str();
                         // Remove the surrounding parentheses
                         let call_content = call_text.trim();
                         if call_content.len() >= 2 && call_content.starts_with('(') && call_content.ends_with(')') {
                             let inner_text = call_content[1..call_content.len()-1].trim();
-                            let args = if inner_text.is_empty() {
+                            let call_args = if inner_text.is_empty() {
                                 Vec::new()
                             } else {
-                                parse_expression_list_from_text(inner_text, postfix_op_pair.as_span())?
+                                parse_call_argument_list_from_text(inner_text, postfix_op_pair.as_span())?
                             };
                             
-                            // Create FunctionCall with the current expression as the callee
-                            expr = Expression::FunctionCall {
-                                callee: Box::new(expr),
-                                arguments: args,
-                            };
+                            // Check if there are any holes
+                            let has_holes = call_args.iter().any(|arg| matches!(arg, CallArgument::Hole));
+                            
+                            if has_holes {
+                                // Create PartialCall
+                                expr = Expression::PartialCall {
+                                    func: Box::new(expr),
+                                    args: call_args,
+                                };
+                            } else {
+                                // Convert to regular FunctionCall
+                                let arguments: Vec<Expression> = call_args.into_iter()
+                                    .map(|arg| match arg {
+                                        CallArgument::Expr(e) => e,
+                                        CallArgument::Hole => unreachable!("No holes should exist here"),
+                                    })
+                                    .collect();
+                                expr = Expression::FunctionCall {
+                                    callee: Box::new(expr),
+                                    arguments,
+                                };
+                            }
                         } else {
                             return Err(pest::error::Error::new_from_span(
                                 pest::error::ErrorVariant::CustomError {
@@ -904,82 +1090,80 @@ fn build_statement(pair: Pair<Rule>) -> Result<Statement, pest::error::Error<Rul
     let statement_inner = extract_statement_inner(pair);
 
     match statement_inner.as_rule() {
+        Rule::mod_statement => {
+            build_mod_statement(statement_inner)
+        }
         Rule::let_statement => {
             let span = statement_inner.as_span();
             let text = statement_inner.as_str();
             
-            // Parse "let identifier [: type] = expression"
-            // Find the identifier after "let "
-            let let_keyword = "let ";
-            let start = text.find(let_keyword).ok_or_else(|| pest::error::Error::new_from_span(
-                pest::error::ErrorVariant::CustomError { message: "Let statement missing 'let' keyword".to_string() },
-                span
-            ))? + let_keyword.len();
+            // Check for pub visibility
+            let pub_visibility = text.trim_start().starts_with("pub");
+            let let_keyword = if pub_visibility { "pub let " } else { "let " };
             
-            // Find where the identifier ends (whitespace before ":" or "=")
-            let identifier_end = text[start..].find(|c: char| c.is_whitespace() || c == ':' || c == '=')
-                .ok_or_else(|| pest::error::Error::new_from_span(
-                    pest::error::ErrorVariant::CustomError { message: "Let statement missing identifier".to_string() },
-                    span
-                ))?;
-            let identifier = text[start..start + identifier_end].trim().to_string();
+            // Extract identifier after "let " or "pub let "
+            let identifier = extract_identifier_after_keyword(text, let_keyword, span, &[':', '='])?;
             
-            // Check if there's a type annotation (look for ":" before "=")
-            let eq_pos = text.find('=').ok_or_else(|| pest::error::Error::new_from_span(
-                pest::error::ErrorVariant::CustomError { message: "Let statement missing '='".to_string() },
-                span
-            ))?;
+            // Find '=' position
+            let eq_pos = text.find('=')
+                .ok_or_else(|| error_at_span(span, "Let statement missing '='".to_string()))?;
             
-            // Try to parse the let statement using the grammar to get proper type annotation parsing
-            let type_annotation = if let Some(colon_pos) = text[start + identifier_end..eq_pos].find(':') {
-                // Type annotation is present - parse it using the grammar
-                let colon_abs_pos = start + identifier_end + colon_pos;
-                let type_text = &text[colon_abs_pos + 1..eq_pos].trim();
-                // Try to parse as type_annotation
-                if let Ok(mut type_pairs) = CantaLoopParser::parse(Rule::type_annotation, type_text) {
-                    if let Some(type_pair) = type_pairs.next() {
-                        Some(build_type_annotation(type_pair)?)
-                    } else {
-                        None
-                    }
+            // Extract type annotation if present
+            let type_annotation = if let Some(colon_pos) = text.find(':') {
+                if colon_pos < eq_pos {
+                    let type_text = text[colon_pos + 1..eq_pos].trim();
+                    parse_type_annotation_from_text(type_text, span)?
                 } else {
-                    // Fallback: just use the text (for backwards compatibility)
-                    Some(type_text.to_string())
+                    None
                 }
             } else {
-                // No type annotation
                 None
             };
             
-            // Parse the expression after "="
-            let expr_text = text[eq_pos + 1..].trim();
-            // Remove any trailing semicolon (shouldn't be there, but handle it just in case)
-            let expr_text = expr_text.strip_suffix(';').unwrap_or(expr_text).trim();
-            // Since expression is a silent rule, parse it directly using the helper function
+            // Parse expression after "="
+            let expr_text = text[eq_pos + 1..].trim().strip_suffix(';').unwrap_or(&text[eq_pos + 1..]).trim();
             let expression = parse_expression_from_text(expr_text, span)?;
             
             Ok(Statement::Let {
                 identifier,
                 type_annotation,
                 expression,
+                pub_visibility,
+            })
+        }
+        Rule::const_statement => {
+            let span = statement_inner.as_span();
+            let text = statement_inner.as_str();
+            
+            // Check for pub visibility
+            let pub_visibility = text.trim_start().starts_with("pub");
+            let const_keyword = if pub_visibility { "pub const " } else { "const " };
+            
+            // Extract identifier after "const " or "pub const "
+            let identifier = extract_identifier_after_keyword(text, const_keyword, span, &['='])?;
+            
+            // Find '=' position
+            let eq_pos = text.find('=')
+                .ok_or_else(|| error_at_span(span, "Const statement missing '='".to_string()))?;
+            
+            // Parse expression after "="
+            let expr_text = text[eq_pos + 1..].trim().strip_suffix(';').unwrap_or(&text[eq_pos + 1..]).trim();
+            let expression = parse_expression_from_text(expr_text, span)?;
+            
+            Ok(Statement::Const {
+                identifier,
+                expression,
+                pub_visibility,
             })
         }
         Rule::assign_statement => {
             let span = statement_inner.as_span();
             let text = statement_inner.as_str();
             
-            // Parse "identifier = expression"
-            // Find the identifier (everything before "=")
-            let eq_pos = text.find('=').ok_or_else(|| pest::error::Error::new_from_span(
-                pest::error::ErrorVariant::CustomError { message: "Assign statement missing '='".to_string() },
-                span
-            ))?;
+            let eq_pos = text.find('=')
+                .ok_or_else(|| error_at_span(span, "Assign statement missing '='".to_string()))?;
             let identifier = text[..eq_pos].trim().to_string();
-            
-            // Parse the expression after "="
-            let expr_text = text[eq_pos + 1..].trim();
-            // Since expression is a silent rule, parse it directly using the helper function
-            let expression = parse_expression_from_text(expr_text, span)?;
+            let expression = parse_expression_from_text(text[eq_pos + 1..].trim(), span)?;
 
             Ok(Statement::Assign {
                 identifier,
@@ -1220,14 +1404,7 @@ fn build_statement(pair: Pair<Rule>) -> Result<Statement, pest::error::Error<Rul
         Rule::return_statement => {
             let span = statement_inner.as_span();
             let text = statement_inner.as_str();
-            // Parse "return expression" - find the expression after "return" keyword
-            let return_keyword = "return";
-            let expr_start = text.find(return_keyword).ok_or_else(|| pest::error::Error::new_from_span(
-                pest::error::ErrorVariant::CustomError { message: "Return statement missing 'return' keyword".to_string() },
-                span
-            ))? + return_keyword.len();
-            let expr_text = text[expr_start..].trim();
-            // Since expression is a silent rule, parse it directly using the helper function
+            let expr_text = extract_expression_after_keyword(text, "return", span)?;
             Ok(Statement::Return {
                 expression: parse_expression_from_text(expr_text, span)?,
             })
@@ -1237,36 +1414,32 @@ fn build_statement(pair: Pair<Rule>) -> Result<Statement, pest::error::Error<Rul
             let mut inner = statement_inner.into_inner();
             
             // Parse optional loop_init
-            let mut init_vars = Vec::new();
-            let next = inner.peek();
-            if let Some(p) = next {
+            let init_vars = if let Some(p) = inner.peek() {
                 if p.as_rule() == Rule::loop_init {
                     let loop_init_pair = inner.next().unwrap();
+                    let mut vars = Vec::new();
                     for init_var_pair in loop_init_pair.into_inner() {
                         if init_var_pair.as_rule() == Rule::loop_init_var {
-                            // Since expression is silent, we need to extract it manually from the text
-                            let init_var_text = init_var_pair.as_str();
-                            let init_var_span = init_var_pair.as_span();
-                            // Format: "identifier = expression"
-                            let eq_pos = init_var_text.find('=').ok_or_else(|| pest::error::Error::new_from_span(
-                                pest::error::ErrorVariant::CustomError { message: "Loop init var missing '='".to_string() },
-                                init_var_span
-                            ))?;
-                            let identifier = init_var_text[..eq_pos].trim().to_string();
-                            let expr_text = init_var_text[eq_pos + 1..].trim();
-                            // Use parse_expression_from_text since expressions are now handled by *_from_text functions
-                            init_vars.push((identifier, parse_expression_from_text(expr_text, init_var_span)?));
+                            let (id, expr) = parse_loop_init_var(
+                                init_var_pair.as_str(),
+                                init_var_pair.as_span()
+                            )?;
+                            vars.push((id, expr));
                         }
                     }
+                    vars
+                } else {
+                    Vec::new()
                 }
-            }
+            } else {
+                Vec::new()
+            };
             
             let braced_block = inner.next().unwrap();
-            let block_pair = braced_block.into_inner().find(|p| p.as_rule() == Rule::block)
-                .ok_or_else(|| pest::error::Error::new_from_span(
-                    pest::error::ErrorVariant::CustomError { message: "Loop body missing block".to_string() },
-                    span,
-                ))?;
+            let block_pair = braced_block.into_inner()
+                .find(|p| p.as_rule() == Rule::block)
+                .ok_or_else(|| error_at_span(span, "Loop body missing block".to_string()))?;
+            
             Ok(Statement::Loop {
                 init_vars,
                 body: build_block(block_pair)?,
@@ -1275,53 +1448,22 @@ fn build_statement(pair: Pair<Rule>) -> Result<Statement, pest::error::Error<Rul
         Rule::while_statement => {
             let span = statement_inner.as_span();
             let text = statement_inner.as_str();
-            // Parse "while expression { ... }"
-            // Find the condition expression between "while" and "{"
-            let while_keyword = "while";
-            let while_pos = text.find(while_keyword).ok_or_else(|| pest::error::Error::new_from_span(
-                pest::error::ErrorVariant::CustomError { message: "While statement missing 'while' keyword".to_string() },
-                span
-            ))?;
             
-            // Find the opening brace (need to handle nested braces)
-            let mut brace_count = 0;
-            let mut found_brace = false;
-            let mut brace_pos = None;
-            for (i, ch) in text[while_pos + while_keyword.len()..].char_indices() {
-                if ch == '{' {
-                    brace_count += 1;
-                    if !found_brace {
-                        found_brace = true;
-                        brace_pos = Some(while_pos + while_keyword.len() + i);
-                    }
-                } else if ch == '}' && found_brace {
-                    brace_count -= 1;
-                    if brace_count == 0 {
-                        break;
-                    }
-                }
-            }
+            let while_pos = find_keyword(text, "while", span)?;
+            let after_while = &text[while_pos + 5..];
+            let brace_start_offset = find_opening_brace(after_while, span, "While statement")?;
+            let brace_start = while_pos + 5 + brace_start_offset;
             
-            let brace_start = brace_pos.ok_or_else(|| pest::error::Error::new_from_span(
-                pest::error::ErrorVariant::CustomError { message: "While statement missing opening brace".to_string() },
-                span
-            ))?;
-            
-            let condition_text = text[while_pos + while_keyword.len()..brace_start].trim();
+            let condition_text = text[while_pos + 5..brace_start].trim();
             let condition = parse_expression_from_text(condition_text, span)?;
             
-            // Parse the body block - get it from the parse tree
+            // Parse body block from parse tree
             let mut inner = statement_inner.into_inner();
             let braced_block = inner.find(|p| p.as_rule() == Rule::braced_block)
-                .ok_or_else(|| pest::error::Error::new_from_span(
-                    pest::error::ErrorVariant::CustomError { message: "While body missing block".to_string() },
-                    span,
-                ))?;
-            let block_pair = braced_block.into_inner().find(|p| p.as_rule() == Rule::block)
-                .ok_or_else(|| pest::error::Error::new_from_span(
-                    pest::error::ErrorVariant::CustomError { message: "While body missing inner block".to_string() },
-                    span,
-                ))?;
+                .ok_or_else(|| error_at_span(span, "While body missing block".to_string()))?;
+            let block_pair = braced_block.into_inner()
+                .find(|p| p.as_rule() == Rule::block)
+                .ok_or_else(|| error_at_span(span, "While body missing inner block".to_string()))?;
             
             Ok(Statement::While {
                 condition,
@@ -1331,122 +1473,32 @@ fn build_statement(pair: Pair<Rule>) -> Result<Statement, pest::error::Error<Rul
         Rule::for_statement => {
             let span = statement_inner.as_span();
             let text = statement_inner.as_str();
-            // Parse "for identifier in expression .. expression { ... }"
-            // Format: "for x in start .. end { ... }"
-            // The grammar now uses for_range_content and for_block_manual, so parse manually from text
-            let for_keyword = "for";
-            let for_pos = text.find(for_keyword).ok_or_else(|| pest::error::Error::new_from_span(
-                pest::error::ErrorVariant::CustomError { message: "For statement missing 'for' keyword".to_string() },
-                span
-            ))?;
             
-            // Find the "in" after the variable name
-            let after_for = &text[for_pos + for_keyword.len()..];
-            // Look for "in" as a word boundary (not part of another word like "print")
-            let in_pattern = "in";
-            let mut in_pos = None;
-            for i in 0..after_for.len() {
-                if after_for[i..].starts_with(in_pattern) {
-                    // Check if it's a word boundary (not followed by alphanumeric)
-                    let after_in = if i + in_pattern.len() < after_for.len() {
-                        after_for.chars().nth(i + in_pattern.len())
-                    } else {
-                        None
-                    };
-                    if after_in.is_none() || !after_in.unwrap().is_alphanumeric() {
-                        in_pos = Some(i);
-                        break;
-                    }
-                }
-            }
-            let in_pos_byte = in_pos.ok_or_else(|| pest::error::Error::new_from_span(
-                pest::error::ErrorVariant::CustomError { message: "For statement missing 'in'".to_string() },
-                span
-            ))?;
-            let var_name = after_for[..in_pos_byte].trim().to_string();
+            let for_pos = find_keyword(text, "for", span)?;
+            let after_for = &text[for_pos + 3..];
             
-            // Find the ".." range operator
-            let after_in = &after_for[in_pos_byte + in_pattern.len()..];
-            let dotdot_pos = after_in.find("..").ok_or_else(|| pest::error::Error::new_from_span(
-                pest::error::ErrorVariant::CustomError { message: "For statement missing '..'".to_string() },
-                span
-            ))?;
+            // Find "in" as word boundary
+            let in_pos = find_word_boundary(after_for, "in")
+                .ok_or_else(|| error_at_span(span, "For statement missing 'in'".to_string()))?;
+            let var_name = after_for[..in_pos].trim().to_string();
+            
+            // Find ".." range operator
+            let after_in = &after_for[in_pos + 2..];
+            let dotdot_pos = after_in.find("..")
+                .ok_or_else(|| error_at_span(span, "For statement missing '..'".to_string()))?;
             let start_text = after_in[..dotdot_pos].trim();
             
-            // Find the opening brace
+            // Find opening brace
             let after_dotdot = &after_in[dotdot_pos + 2..];
-            let mut brace_count = 0;
-            let mut found_brace = false;
-            let mut brace_pos = None;
-            for (i, ch) in after_dotdot.char_indices() {
-                if ch == '{' {
-                    brace_count += 1;
-                    if !found_brace {
-                        found_brace = true;
-                        brace_pos = Some(i);
-                    }
-                } else if ch == '}' && found_brace {
-                    brace_count -= 1;
-                    if brace_count == 0 {
-                        break;
-                    }
-                }
-            }
-            
-            let brace_start = brace_pos.ok_or_else(|| pest::error::Error::new_from_span(
-                pest::error::ErrorVariant::CustomError { message: "For statement missing opening brace".to_string() },
-                span
-            ))?;
-            
-            let end_text = after_dotdot[..brace_start].trim();
+            let brace_start_offset = find_opening_brace(after_dotdot, span, "For statement")?;
+            let end_text = after_dotdot[..brace_start_offset].trim();
             
             let start = parse_expression_from_text(start_text, span)?;
             let end = parse_expression_from_text(end_text, span)?;
             
-            // Extract the body block content (between braces)
-            let brace_end_pos = brace_start;
-            // Find the matching closing brace
-            let mut brace_end = None;
-            let mut count = 1;
-            for (i, ch) in after_dotdot[brace_end_pos + 1..].char_indices() {
-                if ch == '{' {
-                    count += 1;
-                } else if ch == '}' {
-                    count -= 1;
-                    if count == 0 {
-                        brace_end = Some(brace_end_pos + 1 + i);
-                        break;
-                    }
-                }
-            }
-            let body_content = if let Some(end_pos) = brace_end {
-                &after_dotdot[brace_end_pos + 1..end_pos]
-            } else {
-                return Err(pest::error::Error::new_from_span(
-                    pest::error::ErrorVariant::CustomError { message: "For statement missing closing brace".to_string() },
-                    span
-                ));
-            };
-            
-            // Parse the body content as a block
-            let block_parse_result = CantaLoopParser::parse(Rule::block, body_content);
-            let body_block = match block_parse_result {
-                Ok(mut block_pairs) => {
-                    if let Some(block_pair) = block_pairs.next() {
-                        build_block(block_pair)?
-                    } else {
-                        Block { statements: Vec::new() }
-                    }
-                }
-                Err(e) => {
-                    return Err(pest::error::Error::new_from_span(
-                        pest::error::ErrorVariant::CustomError { 
-                            message: format!("Failed to parse for loop body as block: {:?}", e)
-                        },
-                        span,
-                    ));
-                }
-            };
+            // Extract body block
+            let body_content = extract_braced_content(after_dotdot, brace_start_offset, span)?;
+            let body_block = parse_block_from_text(body_content, span)?;
             
             Ok(Statement::For {
                 var_name,
@@ -1458,24 +1510,14 @@ fn build_statement(pair: Pair<Rule>) -> Result<Statement, pest::error::Error<Rul
         Rule::break_statement => {
             let span = statement_inner.as_span();
             let text = statement_inner.as_str();
-            // Parse "break [expression]" - expression is optional
-            let break_keyword = "break";
-            if let Some(keyword_pos) = text.find(break_keyword) {
-                let expr_start = keyword_pos + break_keyword.len();
-                let expr_text = text[expr_start..].trim();
-                Ok(Statement::Break {
-                    expression: if expr_text.is_empty() {
-                        None
-                    } else {
-                        // Since expression is a silent rule, parse it directly using the helper function
-                        Some(parse_expression_from_text(expr_text, span)?)
-                    },
-                })
-            } else {
-                Ok(Statement::Break {
-                    expression: None,
-                })
-            }
+            let expr_text = extract_expression_after_keyword(text, "break", span)?;
+            Ok(Statement::Break {
+                expression: if expr_text.is_empty() {
+                    None
+                } else {
+                    Some(parse_expression_from_text(expr_text, span)?)
+                },
+            })
         }
         Rule::continue_statement => {
             Ok(Statement::Continue)
@@ -1487,6 +1529,129 @@ fn build_statement(pair: Pair<Rule>) -> Result<Statement, pest::error::Error<Rul
             // Instead, parse the full text directly using the helper function
             Ok(Statement::Expression(parse_expression_from_text(full_text, span)?))
         }
+        Rule::use_statement => {
+            build_use_statement(statement_inner)
+        }
         _ => unreachable!("unexpected rule in build_statement: {:?}, text: {:?}", statement_inner.as_rule(), statement_inner.as_str()),
     }
+}
+
+fn build_mod_statement(pair: Pair<Rule>) -> Result<Statement, pest::error::Error<Rule>> {
+    let span = pair.as_span();
+    let mut identifier = None;
+    
+    // mod_statement = ${ "mod" ~ WHITESPACE+ ~ identifier }
+    // The identifier is in the inner pairs
+    for inner in pair.into_inner() {
+        if inner.as_rule() == Rule::identifier {
+            identifier = Some(inner.as_str().to_string());
+            break;
+        }
+    }
+    
+    let identifier = identifier.ok_or_else(|| {
+        error_at_span(span, "Mod statement missing identifier".to_string())
+    })?;
+    
+    Ok(Statement::Mod {
+        identifier,
+    })
+}
+
+fn build_use_statement(pair: Pair<Rule>) -> Result<Statement, pest::error::Error<Rule>> {
+    use crate::core::ast::ImportSelector;
+    
+    let span = pair.as_span();
+    let mut path = Vec::new();
+    let mut selector = None;
+    
+    for inner in pair.into_inner() {
+        match inner.as_rule() {
+            Rule::import_path => {
+                // Parse dot-separated identifiers
+                for part in inner.into_inner() {
+                    if part.as_rule() == Rule::identifier {
+                        path.push(part.as_str().to_string());
+                    }
+                }
+            }
+            Rule::import_selector => {
+                selector = Some(build_import_selector(inner)?);
+            }
+            _ => {}
+        }
+    }
+    
+    if path.is_empty() {
+        return Err(error_at_span(span, "Use statement missing import path".to_string()));
+    }
+    
+    // If no explicit selector, treat the last component of the path as the selector
+    let (final_path, final_selector) = if selector.is_none() && path.len() > 1 {
+        let selector_name = path.last().unwrap().clone();
+        let mut final_path = path.clone();
+        final_path.pop();
+        (final_path, ImportSelector::Single(selector_name))
+    } else {
+        let path_clone = path.clone();
+        let final_selector = selector.unwrap_or_else(|| {
+            // If path has only one component and no selector, use that as both path and selector
+            // This handles cases like "use math;" which would import "math" from root
+            ImportSelector::Single(path_clone.last().unwrap().clone())
+        });
+        (path, final_selector)
+    };
+    
+    Ok(Statement::Use {
+        path: final_path,
+        selector: final_selector,
+    })
+}
+
+fn build_import_selector(pair: Pair<Rule>) -> Result<ImportSelector, pest::error::Error<Rule>> {
+    use crate::core::ast::ImportSelector;
+    
+    let text = pair.as_str().trim();
+    
+    // Check for wildcard: .* or *
+    if text == ".*" || text == "*" {
+        return Ok(ImportSelector::Wildcard);
+    }
+    
+    // Check for single identifier with dot: .identifier
+    if text.starts_with('.') && !text.starts_with(".{") {
+        let identifier = text[1..].trim();
+        return Ok(ImportSelector::Single(identifier.to_string()));
+    }
+    
+    // Check for brace list: .{id1, id2, ...} or {id1, id2, ...}
+    let brace_content = if text.starts_with(".{") && text.ends_with('}') {
+        // Remove both the dot and braces
+        &text[2..text.len() - 1]
+    } else if text.starts_with('{') && text.ends_with('}') {
+        // Remove just the braces
+        &text[1..text.len() - 1]
+    } else {
+        // Not a brace list
+        return Ok(ImportSelector::Single(text.to_string()));
+    };
+    
+    let content = brace_content.trim();
+    if content.is_empty() {
+        return Err(error_at_span(pair.as_span(), "Import list cannot be empty".to_string()));
+    }
+    
+    let mut identifiers = Vec::new();
+    for part in content.split(',') {
+        let trimmed = part.trim();
+        if !trimmed.is_empty() {
+            identifiers.push(trimmed.to_string());
+        }
+    }
+    
+    if identifiers.is_empty() {
+        return Err(error_at_span(pair.as_span(), "Import list cannot be empty".to_string()));
+    }
+    
+    Ok(ImportSelector::Multiple(identifiers))
 }

@@ -1,0 +1,26 @@
+fn add(a: num, b: num) -> num {
+    return a + b;
+}
+
+fn mix(a: num, b: num, c: num) -> num {
+    return a + b + c;
+}
+
+// Test basic partial application
+let add5 = add(_, 5);
+let result1 = add5(10)!;
+print(result1)!; // Should print 15
+
+// Test partial application with first argument
+let add10 = add(10, _);
+let result2 = add10(5)!;
+print(result2)!; // Should print 15
+
+// Test partial application with multiple holes
+let mix5 = mix(_, _, 5);
+let result3 = mix5(1, 2)!;
+print(result3)!; // Should print 8
+
+// Test partial application in pipeline (commented out for now)
+// let result4 = 20 |> add(_, 5)!;
+// print(result4)!; // Should print 25

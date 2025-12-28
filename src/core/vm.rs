@@ -1,4 +1,9 @@
-use crate::{bytecode::{OpCode, OPCODE_COUNT}, engine::Engine};
+use crate::core::bytecode::{OPCODE_COUNT, OpCode};
+use crate::core::engine::{Arity, Engine};
+
+/// Special function ID for composition.
+/// When a thunk has this func_id, it represents a composition of two functions.
+const COMPOSE_ID: u32 = 0xFFFF_FFFF;
 
 // Function pointer type for opcode handlers
 // Note: Handlers take frame_idx to access frame through VM, avoiding borrow conflicts
@@ -12,43 +17,45 @@ enum StepResult {
 }
 
 // Dispatch table for monomorphic, branch-predictable opcode execution
+// CRITICAL: Array indices MUST match opcode discriminant values from bytecode_opcode.rs
 static DISPATCH: [OpHandler; OPCODE_COUNT] = [
-    VM::op_ld_num,        // 0
-    VM::op_ld_str,        // 1
-    VM::op_ld_var,        // 2
-    VM::op_ld_const,      // 3
-    VM::op_ld_func,       // 4
-    VM::op_add,           // 5
-    VM::op_sub,           // 6
-    VM::op_mul,           // 7
-    VM::op_div,           // 8
-    VM::op_pow,           // 9
-    VM::op_eq,            // 10
-    VM::op_ne,            // 11
-    VM::op_gt,            // 12
-    VM::op_lt,            // 13
-    VM::op_ge,            // 14
-    VM::op_le,            // 15
-    VM::op_and,           // 16
-    VM::op_or,            // 17
-    VM::op_neg,           // 18
-    VM::op_not,           // 19
-    VM::op_st_var,        // 20
-    VM::op_pop,           // 21
-    VM::op_print,         // 22
-    VM::op_call_stack,    // 23
-    VM::op_thunk,         // 24
-    VM::op_invoke,        // 25
-    VM::op_ret,           // 26
-    VM::op_jmp_if_false,  // 27
-    VM::op_jmp,           // 28
-    VM::op_add_num,       // 29
-    VM::op_mul_num,       // 30
-    VM::op_sub_num,       // 31
-    VM::op_ret_invoke,    // 32
-    VM::op_jmp_if_true,   // 33
-    VM::op_compose_thunk, // 34
-    VM::op_mod,           // 35
+    VM::op_ld_num,        // 0: LdNum
+    VM::op_ld_str,        // 1: LdStr
+    VM::op_ld_var,        // 2: LdVar
+    VM::op_ld_const,      // 3: LdConst
+    VM::op_ld_func,       // 4: LdFunc
+    VM::op_add,           // 5: Add
+    VM::op_sub,           // 6: Sub
+    VM::op_mul,           // 7: Mul
+    VM::op_div,           // 8: Div
+    VM::op_pow,           // 9: Pow
+    VM::op_eq,            // 10: Eq
+    VM::op_ne,            // 11: Ne
+    VM::op_gt,            // 12: Gt
+    VM::op_lt,            // 13: Lt
+    VM::op_ge,            // 14: Ge
+    VM::op_le,            // 15: Le
+    VM::op_and,           // 16: And
+    VM::op_or,            // 17: Or
+    VM::op_neg,           // 18: Neg
+    VM::op_not,           // 19: Not
+    VM::op_st_var,        // 20: StVar
+    VM::op_pop,           // 21: Pop
+    VM::op_print,         // 22: Print
+    VM::op_call_stack,    // 23: CallStack
+    VM::op_thunk,         // 24: Thunk
+    VM::op_invoke,        // 25: Invoke
+    VM::op_ret,           // 26: Ret
+    VM::op_jmp_if_false,  // 27: JmpIfFalse
+    VM::op_jmp,           // 28: Jmp
+    VM::op_add_num,       // 29: AddNum
+    VM::op_mul_num,       // 30: MulNum
+    VM::op_sub_num,       // 31: SubNum
+    VM::op_ret_invoke,    // 32: RetInvoke
+    VM::op_jmp_if_true,   // 33: JmpIfTrue
+    VM::op_compose_thunk, // 34: ComposeThunk
+    VM::op_mod,           // 35: Mod
+    VM::op_make_partial,  // 36: MakePartial
 ];
 
 // Tagged union Value using NaN boxing
@@ -87,7 +94,7 @@ pub struct ValueHeap {
 pub(crate) enum ThunkData {
     Regular {
         func_id: u32,
-        args: Vec<Value>,
+        bound: Vec<Option<Value>>, // None = hole, Some(value) = bound argument
     },
     Composed {
         first: Value,  // First thunk (f)
@@ -136,9 +143,9 @@ impl Value {
     }
 
     #[inline(always)]
-    pub fn thunk_with_heap(func_id: u32, args: Vec<Value>, heap: &mut ValueHeap) -> Self {
+    pub fn thunk_with_heap(func_id: u32, bound: Vec<Option<Value>>, heap: &mut ValueHeap) -> Self {
         let idx = heap.thunks.len();
-        heap.thunks.push(ThunkData::Regular { func_id, args });
+        heap.thunks.push(ThunkData::Regular { func_id, bound });
         Self {
             raw: (QNAN_BASE & TAG_CLEAR_MASK) | (TAG_THUNK << 48) | QNAN_BIT_51 | (idx as u64),
         }
@@ -152,6 +159,7 @@ impl Value {
             raw: (QNAN_BASE & TAG_CLEAR_MASK) | (TAG_THUNK << 48) | QNAN_BIT_51 | (idx as u64),
         }
     }
+
 
     #[inline(always)]
     pub fn none() -> Self {
@@ -215,12 +223,12 @@ impl Value {
     }
 
     #[inline(always)]
-    pub fn as_thunk(&self, heap: &ValueHeap) -> Option<(u32, Vec<Value>)> {
+    pub fn as_thunk(&self, heap: &ValueHeap) -> Option<(u32, Vec<Option<Value>>)> {
         if self.is_thunk() {
             let idx = (self.raw & PAYLOAD_MASK) as usize;
             heap.thunks.get(idx).and_then(|t| {
                 match t {
-                    ThunkData::Regular { func_id, args } => Some((*func_id, args.clone())),
+                    ThunkData::Regular { func_id, bound } => Some((*func_id, bound.clone())),
                     ThunkData::Composed { .. } => None, // Composed thunks don't have a single func_id
                 }
             })
@@ -292,6 +300,7 @@ struct CallFrame {
     code: &'static [OpCode],      // Bytecode to execute (either top-level ops or function code) - cached, not cloned
     ip: usize,                     // Instruction pointer (current position in code)
     locals: Box<[Value]>,          // Local variable slots (indexed by var_id) - Box to avoid Vec allocation
+    stack_depth: usize,           // Stack depth when this frame was entered (for cleanup on return)
 }
 
 pub struct VM<'a> {
@@ -336,6 +345,7 @@ impl<'a> VM<'a> {
             code: self.ops,
             ip: 0,
             locals: Box::new([]),  // Empty locals for top-level
+            stack_depth: 0,  // Top-level starts with empty stack
         });
 
         // Main execution loop - process the current frame
@@ -376,6 +386,14 @@ impl<'a> VM<'a> {
                 // Auto-invoke thunks at function boundaries
                 if return_value.is_thunk() {
                     return_value = self.invoke_thunk_value_recursive(return_value);
+                }
+                
+                // Get the stack depth that was saved when this frame was entered
+                let expected_stack_depth = self.call_stack[frame_idx].stack_depth;
+                
+                // Clean up any intermediate values that the function left on the stack
+                while self.stack.len() > expected_stack_depth {
+                    self.stack.pop();
                 }
                 
                 // Pop the current frame
@@ -433,10 +451,34 @@ impl<'a> VM<'a> {
         if let OpCode::LdVar(id) = opcode {
             let idx = *id as usize;
             let frame = &_vm.call_stack[frame_idx];
-            let val = if idx < frame.locals.len() {
+            let val = if idx < frame.locals.len() && !frame.locals[idx].is_none() {
+                // Variable exists in current frame and has a value
                 frame.locals[idx]
             } else {
-                Value::none()
+                // Variable not found or is None in current frame - check top-level frame (frame 0)
+                // This allows functions to access module-level variables
+                // Note: We check top-level even if current frame has the variable as None,
+                // because function locals may be pre-allocated with None for parameters
+                if frame_idx > 0 && !_vm.call_stack.is_empty() {
+                    let top_level_frame = &_vm.call_stack[0];
+                    if idx < top_level_frame.locals.len() {
+                        top_level_frame.locals[idx]
+                    } else {
+                        // Not in top-level either - return None from current frame if it exists, else None
+                        if idx < frame.locals.len() {
+                            frame.locals[idx]
+                        } else {
+                            Value::none()
+                        }
+                    }
+                } else {
+                    // We're in the top-level frame
+                    if idx < frame.locals.len() {
+                        frame.locals[idx]
+                    } else {
+                        Value::none()
+                    }
+                }
             };
             _vm.stack.push(val);
         }
@@ -672,6 +714,64 @@ impl<'a> VM<'a> {
         StepResult::Normal
     }
 
+    #[inline(always)]
+    fn op_make_partial(_vm: &mut VM, _frame_idx: usize, opcode: &OpCode) -> StepResult {
+        if let OpCode::MakePartial { func_id, bound_mask, hole_count } = opcode {
+            // Get function signature to know total parameter count
+            let total_params = if let Some(func) = _vm.engine.bytecode_functions.get(func_id) {
+                func.param_var_ids.len()
+            } else if let Some(native_func) = _vm.engine.functions.get(func_id) {
+                Self::min_arity(&native_func.arity)
+            } else {
+                // Unknown function - use bound_mask to infer: find the highest set bit
+                let mut max_pos = 0;
+                for i in 0..64 {
+                    if (bound_mask & (1 << i)) != 0 {
+                        max_pos = i;
+                    }
+                }
+                (max_pos + 1) as usize
+            };
+            
+            // Count how many bound arguments we need to pop
+            let mut args_to_pop = 0;
+            for i in 0..total_params {
+                if (bound_mask & (1 << i)) != 0 {
+                    args_to_pop += 1;
+                }
+            }
+            
+            // Pop bound arguments from stack (they were pushed in reverse order)
+            let mut popped_values = Vec::new();
+            for _ in 0..args_to_pop {
+                popped_values.push(_vm.stack.pop().expect("Stack underflow"));
+            }
+            popped_values.reverse(); // Now in correct order (position 0 = first arg)
+            
+            // Build bound_args vector: None for holes, Some(value) for bound args
+            // Position i corresponds to function parameter i
+            let mut bound_args_vec = Vec::new();
+            let mut popped_idx = 0;
+            for i in 0..total_params {
+                if (bound_mask & (1 << i)) != 0 {
+                    if popped_idx < popped_values.len() {
+                        bound_args_vec.push(Some(popped_values[popped_idx]));
+                        popped_idx += 1;
+                    } else {
+                        bound_args_vec.push(None); // Shouldn't happen, but be safe
+                    }
+                } else {
+                    bound_args_vec.push(None); // Hole
+                }
+            }
+            
+            // Create thunk with holes
+            let thunk = Value::thunk_with_heap(*func_id, bound_args_vec, &mut _vm.heap);
+            _vm.stack.push(thunk);
+        }
+        StepResult::Normal
+    }
+
     fn op_compose_thunk(_vm: &mut VM, _frame_idx: usize, _opcode: &OpCode) -> StepResult {
         // Stack: [second, first] (as emitted by bytecode emitter: second pushed first, first pushed second)
         // Stack top is first, stack bottom is second
@@ -782,8 +882,10 @@ impl<'a> VM<'a> {
             self.stack.push(Value::number(a_num + b_num));
         } else {
             // If either operand is a string or any other type, convert both to strings and concatenate
-            let mut result = lhs.value_to_string(&self.heap);
-            result.push_str(&rhs.value_to_string(&self.heap));
+            let lhs_str = lhs.value_to_string(&self.heap);
+            let rhs_str = rhs.value_to_string(&self.heap);
+            let mut result = lhs_str;
+            result.push_str(&rhs_str);
             self.stack.push(Value::string_with_heap(result, &mut self.heap));
         }
     }
@@ -1000,7 +1102,159 @@ impl<'a> VM<'a> {
         self.stack.push(Value::boolean(result));
     }
 
+    // ============================================================================
+    // Helper functions for reducing code duplication
+    // ============================================================================
+
+    /// Initialize local variables from function parameters.
+    /// Returns a Box<[Value]> suitable for CallFrame locals.
+    fn init_locals_from_args(bytecode_func: &crate::core::engine::BytecodeFunction, args: &[Value]) -> Box<[Value]> {
+        let max_var_id = bytecode_func.param_var_ids.iter()
+            .max()
+            .copied()
+            .unwrap_or(0);
+        
+        let mut locals = vec![Value::none(); (max_var_id + 1) as usize];
+        for (i, param_var_id) in bytecode_func.param_var_ids.iter().enumerate() {
+            if i < args.len() {
+                // Pass arguments as-is (including thunks) - they'll be forced when used
+                locals[*param_var_id as usize] = args[i];
+            }
+        }
+        locals.into_boxed_slice()
+    }
+
+    /// Extract the minimum arity value from an Arity enum.
+    /// For Fixed(n), returns n. For Variadic { min }, returns min.
+    fn min_arity(arity: &Arity) -> usize {
+        match arity {
+            Arity::Fixed(n) => *n,
+            Arity::Variadic { min } => *min,
+        }
+    }
+
+    /// Call a native function with the given arguments and return the result as a Value.
+    fn call_native_function(&mut self, func_id: u32, args: Vec<Value>) -> Value {
+        let native_func = self.engine.functions.get(&func_id)
+            .expect("Native function should exist");
+        (native_func.func)(args, &mut self.heap)
+    }
+
+    /// Create a new call frame for a bytecode function.
+    /// Returns the frame count before pushing (for execute_until_empty target).
+    fn create_bytecode_frame(&mut self, bytecode_func: &crate::core::engine::BytecodeFunction, args: Vec<Value>) -> usize {
+        if bytecode_func.code.is_empty() {
+            panic!("Function has empty bytecode body");
+        }
+        
+        let locals = Self::init_locals_from_args(bytecode_func, &args);
+        let stack_depth = self.stack.len();
+        let initial_frame_count = self.call_stack.len();
+        
+        self.call_stack.push(CallFrame {
+            code: bytecode_func.code,
+            ip: 0,
+            locals,
+            stack_depth,
+        });
+        
+        initial_frame_count
+    }
+
+    /// Fill a hole in a thunk with a value.
+    /// Returns the updated bound args with the hole filled.
+    fn fill_thunk_hole(
+        bound_args: &[Option<Value>],
+        value: Value,
+    ) -> Vec<Option<Value>> {
+        let mut filled = bound_args.to_vec();
+        let mut filled_hole = false;
+        
+        for slot in filled.iter_mut() {
+            if slot.is_none() && !filled_hole {
+                *slot = Some(value);
+                filled_hole = true;
+                break;
+            }
+        }
+        
+        if !filled_hole {
+            panic!("Cannot apply value to thunk - no holes available");
+        }
+        
+        filled
+    }
+
+    /// Apply an argument to a thunk or function, creating a new thunk.
+    /// Handles regular thunks and functions.
+    fn apply_arg_to_thunk(&mut self, thunk_or_func: Value, arg: Value) -> Value {
+        if let Some(ThunkData::Regular { func_id, bound }) = thunk_or_func.as_thunk_ref(&self.heap) {
+            // Regular thunk: fill the first hole or add to the end
+            let mut filled = bound.clone();
+            let mut filled_hole = false;
+            
+            // Try to fill the first hole
+            for slot in filled.iter_mut() {
+                if slot.is_none() {
+                    *slot = Some(arg);
+                    filled_hole = true;
+                    break;
+                }
+            }
+            
+            // If no holes, we need to know the function's arity to determine if we should add to the end
+            // For now, if all slots are filled, we'll add to the end (for variadic functions)
+            if !filled_hole {
+                filled.push(Some(arg));
+            }
+            
+            Value::thunk_with_heap(*func_id, filled, &mut self.heap)
+        } else if let Some((func_id, existing_args)) = thunk_or_func.as_thunk(&self.heap) {
+            // Regular thunk: fill the first hole or add to the end
+            let mut filled = existing_args.clone();
+            let mut filled_hole = false;
+            
+            // Try to fill the first hole
+            for slot in filled.iter_mut() {
+                if slot.is_none() {
+                    *slot = Some(arg);
+                    filled_hole = true;
+                    break;
+                }
+            }
+            
+            // If no holes, add to the end
+            if !filled_hole {
+                filled.push(Some(arg));
+            }
+            
+            Value::thunk_with_heap(func_id, filled, &mut self.heap)
+        } else if let Some(func_id) = thunk_or_func.as_function() {
+            // Function: create thunk with arg (and holes for remaining args)
+            // Get function arity to create proper holes
+            let arity = if let Some(native_func) = self.engine.functions.get(&func_id) {
+                Self::min_arity(&native_func.arity)
+            } else if let Some(bytecode_func) = self.engine.bytecode_functions.get(&func_id) {
+                bytecode_func.param_var_ids.len()
+            } else {
+                1 // Unknown - assume unary
+            };
+            
+            let mut bound = vec![Some(arg)];
+            // Add holes for remaining arguments
+            while bound.len() < arity {
+                bound.push(None);
+            }
+            
+            Value::thunk_with_heap(func_id, bound, &mut self.heap)
+        } else {
+            panic!("Cannot apply argument to non-thunk/non-function value");
+        }
+    }
+
     fn execute_call_stack(&mut self, n_args: u32) {
+        // Convert CallStack to thunk-based invocation for consistency.
+        // This maintains backward compatibility with old bytecode while using the unified thunk system.
         let n_args = n_args as usize;
         // Pop function reference
         let func_val = self.stack.pop().expect("Stack underflow");
@@ -1009,62 +1263,38 @@ impl<'a> VM<'a> {
         // Pop arguments
         let args: Vec<Value> = pop_n(&mut self.stack, n_args);
 
-        // Check if it's a native function or bytecode function
-        if let Some(native_func) = self.engine.functions.get(&func_id) {
-            // Native function: convert args to strings and call
-            let args_str: Vec<String> = args
-                .into_iter()
-                .map(|v| v.value_to_string(&self.heap))
-                .collect();
-            let result = native_func(&args_str);
-            self.stack.push(Value::string_with_heap(result, &mut self.heap));
-            // Native functions don't need frame management - they return immediately
-        } else if let Some(bytecode_func) = self.engine.bytecode_functions.get(&func_id) {
-            // Bytecode function: push new call frame
-            // Current frame's ip is already incremented, so it will continue after this call
-            
-            // CRITICAL: Ensure we have bytecode to execute
-            if bytecode_func.code.is_empty() {
-                panic!("Function {} has empty bytecode body", func_id);
-            }
-            
-            // Determine the maximum var_id we'll need for locals
-            let max_var_id = bytecode_func.param_var_ids.iter()
-                .max()
-                .copied()
-                .unwrap_or(0);
-            
-            // Initialize locals vector with arguments bound to parameter slots
-            // NOTE: We do NOT force thunk arguments here - thunks should be passed as-is.
-            // They will be forced when actually used (in binary operations, comparisons, invocations, etc.)
-            let mut locals = vec![Value::none(); (max_var_id + 1) as usize];
-            for (i, param_var_id) in bytecode_func.param_var_ids.iter().enumerate() {
-                if i < args.len() {
-                    // Pass arguments as-is (including thunks) - they'll be forced when used
-                    locals[*param_var_id as usize] = args[i];
-                }
-            }
-
-            // Push new frame with function bytecode - use static reference, no cloning
-            // THIS IS THE CRITICAL PART: We MUST create a call frame for user functions
-            self.call_stack.push(CallFrame {
-                code: bytecode_func.code,  // Already &'static [OpCode], no clone needed
-                ip: 0,  // Start at beginning of function
-                locals: locals.into_boxed_slice(),  // Convert Vec to Box<[Value]>
-            });
-            // Execution will continue in the main loop with the new frame
-        } else {
-            panic!("Function {} not found (neither native nor bytecode)", func_id);
-        }
+        // Create a thunk with all arguments bound (no holes)
+        let bound: Vec<Option<Value>> = args.into_iter().map(Some).collect();
+        let thunk = Value::thunk_with_heap(func_id, bound, &mut self.heap);
+        
+        // Invoke the thunk (which will immediately execute since all holes are filled)
+        let result = self.invoke_thunk_value_recursive(thunk);
+        self.stack.push(result);
     }
 
     fn execute_return(&mut self) {
+        // CRITICAL: The return value should be on top of the stack.
         // Pop return value (or use None if stack is empty)
         let mut return_value = self.stack.pop().unwrap_or(Value::none());
+        let return_str = return_value.value_to_string(&self.heap);
 
         // Auto-invoke thunks at function boundaries (thunks are lazy internally but strict at boundaries)
         if return_value.is_thunk() {
             return_value = self.invoke_thunk_value_recursive(return_value);
+        }
+
+        // Get the stack depth that was saved when this frame was entered
+        let expected_stack_depth = if let Some(frame) = self.call_stack.last() {
+            frame.stack_depth
+        } else {
+            0
+        };
+
+        // Clean up any intermediate values that the function left on the stack
+        // The stack should be at expected_stack_depth + 1 (the return value we just popped)
+        // but there might be extra values, so we clean up to expected_stack_depth
+        while self.stack.len() > expected_stack_depth {
+            self.stack.pop();
         }
 
         // Pop the current frame (this removes it from call_stack)
@@ -1092,11 +1322,50 @@ impl<'a> VM<'a> {
             // CRITICAL: Don't use execute_prepare_call here because it may call invoke_thunk_sync
             // which truncates the stack, removing first_result. Instead, manually combine
             // the arguments and create the thunk directly.
-            if let Some((thunk_func_id, thunk_args)) = second_val.as_thunk(&self.heap) {
-                // Regular thunk - combine existing args with first_result
-                let mut final_args = Vec::with_capacity(thunk_args.len() + 1);
-                final_args.extend_from_slice(&thunk_args);
-                final_args.push(first_result);
+            // Check if second_val is a regular thunk with holes
+            if let Some(ThunkData::Regular { func_id, bound }) = second_val.as_thunk_ref(&self.heap) {
+                // Regular thunk - apply first_result to fill the first hole
+                let mut new_bound = bound.clone();
+                let mut filled_hole = false;
+                for slot in new_bound.iter_mut() {
+                    if slot.is_none() && !filled_hole {
+                        *slot = Some(first_result);
+                        filled_hole = true;
+                        break;
+                    }
+                }
+                if !filled_hole {
+                    panic!("Cannot apply value to thunk - no holes available");
+                }
+                // Check if all holes are filled
+                let remaining_holes = new_bound.iter().filter(|opt| opt.is_none()).count();
+                if remaining_holes == 0 {
+                    // All holes filled - extract values and invoke directly
+                    let final_args: Vec<Value> = new_bound.into_iter()
+                        .map(|opt| opt.expect("All holes should be filled"))
+                        .collect();
+                    return self.call_function(*func_id, final_args);
+                } else {
+                    // Still has holes - create a new thunk
+                    let thunk = Value::thunk_with_heap(*func_id, new_bound, &mut self.heap);
+                    return self.invoke_thunk_value_recursive(thunk);
+                }
+            } else if let Some((thunk_func_id, thunk_args)) = second_val.as_thunk(&self.heap) {
+                // Regular thunk - fill first hole or add to end
+                let mut final_args = thunk_args;
+                let mut filled_hole = false;
+                // Try to fill the first hole
+                for slot in final_args.iter_mut() {
+                    if slot.is_none() {
+                        *slot = Some(first_result);
+                        filled_hole = true;
+                        break;
+                    }
+                }
+                // If no holes, add to end
+                if !filled_hole {
+                    final_args.push(Some(first_result));
+                }
                 let prepared = Value::thunk_with_heap(thunk_func_id, final_args, &mut self.heap);
                 // Recursively invoke the prepared thunk
                 let result = self.invoke_thunk_value_recursive(prepared);
@@ -1107,12 +1376,34 @@ impl<'a> VM<'a> {
                 let nested_second_val = *nested_second;
                 // Recursively apply first_result to nested_first
                 let prepared_nested = if let Some((nested_func_id, nested_args)) = nested_first_val.as_thunk(&self.heap) {
-                    let mut nested_final_args = Vec::with_capacity(nested_args.len() + 1);
-                    nested_final_args.extend_from_slice(&nested_args);
-                    nested_final_args.push(first_result);
+                    let mut nested_final_args = nested_args;
+                    let mut filled_hole = false;
+                    // Try to fill the first hole
+                    for slot in nested_final_args.iter_mut() {
+                        if slot.is_none() {
+                            *slot = Some(first_result);
+                            filled_hole = true;
+                            break;
+                        }
+                    }
+                    // If no holes, add to end
+                    if !filled_hole {
+                        nested_final_args.push(Some(first_result));
+                    }
                     Value::thunk_with_heap(nested_func_id, nested_final_args, &mut self.heap)
                 } else if let Some(nested_func_id) = nested_first_val.as_function() {
-                    Value::thunk_with_heap(nested_func_id, vec![first_result], &mut self.heap)
+                    let arity = if let Some(native_func) = self.engine.functions.get(&nested_func_id) {
+                        Self::min_arity(&native_func.arity)
+                    } else if let Some(bytecode_func) = self.engine.bytecode_functions.get(&nested_func_id) {
+                        bytecode_func.param_var_ids.len()
+                    } else {
+                        1
+                    };
+                    let mut bound = vec![Some(first_result)];
+                    while bound.len() < arity {
+                        bound.push(None);
+                    }
+                    Value::thunk_with_heap(nested_func_id, bound, &mut self.heap)
                 } else {
                     // Nested first is itself a composed thunk - use invoke_thunk_value_recursive to handle it
                     // This avoids the stack truncation issue in execute_prepare_call
@@ -1127,12 +1418,32 @@ impl<'a> VM<'a> {
                         let deep_second_val = *deep_second;
                         // Apply first_result to deep_first
                         if let Some((deep_func_id, deep_args)) = deep_first_val.as_thunk(&self.heap) {
-                            let mut deep_final_args = Vec::with_capacity(deep_args.len() + 1);
-                            deep_final_args.extend_from_slice(&deep_args);
-                            deep_final_args.push(first_result);
+                            let mut deep_final_args = deep_args;
+                            let mut filled_hole = false;
+                            for slot in deep_final_args.iter_mut() {
+                                if slot.is_none() {
+                                    *slot = Some(first_result);
+                                    filled_hole = true;
+                                    break;
+                                }
+                            }
+                            if !filled_hole {
+                                deep_final_args.push(Some(first_result));
+                            }
                             Value::thunk_with_heap(deep_func_id, deep_final_args, &mut self.heap)
-                        } else if let Some(deep_func_id) = deep_first_val.as_function() {
-                            Value::thunk_with_heap(deep_func_id, vec![first_result], &mut self.heap)
+                            } else if let Some(deep_func_id) = deep_first_val.as_function() {
+                            let arity = if let Some(native_func) = self.engine.functions.get(&deep_func_id) {
+                                Self::min_arity(&native_func.arity)
+                            } else if let Some(bytecode_func) = self.engine.bytecode_functions.get(&deep_func_id) {
+                                bytecode_func.param_var_ids.len()
+                            } else {
+                                1
+                            };
+                            let mut bound = vec![Some(first_result)];
+                            while bound.len() < arity {
+                                bound.push(None);
+                            }
+                            Value::thunk_with_heap(deep_func_id, bound, &mut self.heap)
                         } else {
                             // Deep first is also a composed thunk - recurse
                             let deep_prepared = self.invoke_thunk_value_recursive(deep_first_val);
@@ -1140,22 +1451,38 @@ impl<'a> VM<'a> {
                             // This is getting too complex - let's use a simpler approach
                             // Create a thunk that will apply first_result when invoked
                             // Actually, the simplest is to just recurse on the whole thing
-                            let temp_composed = Value::composed_thunk_with_heap(
-                                Value::thunk_with_heap(0, vec![first_result], &mut self.heap), // dummy
-                                nested_first_val,
-                                &mut self.heap
-                            );
+                            // Skip the temp_composed approach - it's incorrect
                             // No wait, that's wrong. Let me think...
                             // We need: apply first_result to nested_first_val where nested_first_val is a composed thunk
                             // The correct way: apply first_result to the first part of nested_first_val
                             // Since we already have deep_first_val and deep_second_val, we can do:
                             let deep_first_prepared = if let Some((df_id, df_args)) = deep_first_val.as_thunk(&self.heap) {
-                                let mut df_final = Vec::with_capacity(df_args.len() + 1);
-                                df_final.extend_from_slice(&df_args);
-                                df_final.push(first_result);
+                                let mut df_final = df_args;
+                                let mut filled_hole = false;
+                                for slot in df_final.iter_mut() {
+                                    if slot.is_none() {
+                                        *slot = Some(first_result);
+                                        filled_hole = true;
+                                        break;
+                                    }
+                                }
+                                if !filled_hole {
+                                    df_final.push(Some(first_result));
+                                }
                                 Value::thunk_with_heap(df_id, df_final, &mut self.heap)
                             } else if let Some(df_id) = deep_first_val.as_function() {
-                                Value::thunk_with_heap(df_id, vec![first_result], &mut self.heap)
+                                let arity = if let Some(native_func) = self.engine.functions.get(&df_id) {
+                                    Self::min_arity(&native_func.arity)
+                                } else if let Some(bytecode_func) = self.engine.bytecode_functions.get(&df_id) {
+                                    bytecode_func.param_var_ids.len()
+                                } else {
+                                    1
+                                };
+                                let mut bound = vec![Some(first_result)];
+                                while bound.len() < arity {
+                                    bound.push(None);
+                                }
+                                Value::thunk_with_heap(df_id, bound, &mut self.heap)
                             } else {
                                 // deep_first is also composed - this is getting too nested
                                 // For now, just panic and we can handle it later if needed
@@ -1170,26 +1497,139 @@ impl<'a> VM<'a> {
                 let recomposed = Value::composed_thunk_with_heap(prepared_nested, nested_second_val, &mut self.heap);
                 return self.invoke_thunk_value_recursive(recomposed);
             } else if let Some(func_id) = second_val.as_function() {
-                // It's a function - create thunk with first_result as arg
-                let prepared = Value::thunk_with_heap(func_id, vec![first_result], &mut self.heap);
+                // It's a function - create thunk with first_result as arg (and holes for remaining args)
+                let arity = if let Some(native_func) = self.engine.functions.get(&func_id) {
+                    Self::min_arity(&native_func.arity)
+                } else if let Some(bytecode_func) = self.engine.bytecode_functions.get(&func_id) {
+                    bytecode_func.param_var_ids.len()
+                } else {
+                    1
+                };
+                let mut bound = vec![Some(first_result)];
+                while bound.len() < arity {
+                    bound.push(None);
+                }
+                let prepared = Value::thunk_with_heap(func_id, bound, &mut self.heap);
                 return self.invoke_thunk_value_recursive(prepared);
             } else {
                 panic!("Second part of composed thunk must be a function or thunk");
             }
+        } else if let Some(ThunkData::Regular { func_id, bound }) = thunk.as_thunk_ref(&self.heap) {
+            // Regular thunk: check if all holes are filled
+            let hole_count = bound.iter().filter(|opt| opt.is_none()).count();
+            if hole_count == 0 {
+                // No holes - extract values and invoke
+                let final_args: Vec<Value> = bound.iter()
+                    .filter_map(|opt| *opt)
+                    .collect();
+                let result = self.call_function(*func_id, final_args);
+                return result;
+            } else {
+                panic!("Thunk with {} holes cannot be invoked without arguments", hole_count);
+            }
         } else if let Some((func_id, args)) = thunk.as_thunk(&self.heap) {
-            // Regular thunk: invoke directly
-            // CRITICAL: The args here are the captured args from the thunk.
-            // When invoke_thunk_value_recursive is called with a thunk that was created
-            // via execute_prepare_call, those args should already include both captured
-            // and runtime args combined. So we can use them directly.
-            // However, if invoke_thunk_value_recursive is called with a thunk that only
-            // has captured args (like in composition), we need to ensure those args
-            // are preserved. The args parameter should contain the full argument list.
-            // Note: Args will be forced when binding to locals in invoke_thunk_sync
-            let result = self.invoke_thunk_sync(func_id, args);
-            result
+            // Regular thunk: check if all holes are filled
+            let hole_count = args.iter().filter(|opt| opt.is_none()).count();
+            if hole_count == 0 {
+                // All holes filled - extract values and invoke
+                let final_args: Vec<Value> = args.into_iter()
+                    .filter_map(|opt| opt)
+                    .collect();
+                let result = self.call_function(func_id, final_args);
+                return result;
+            } else {
+                panic!("Thunk with {} holes cannot be invoked without arguments", hole_count);
+            }
         } else {
             panic!("Invalid thunk value");
+        }
+    }
+
+    /// Invoke a thunk with additional arguments, filling holes left-to-right.
+    /// Returns a new thunk if not all holes are filled, otherwise invokes the function.
+    fn invoke_thunk(&mut self, thunk_val: Value, args: Vec<Value>) -> Value {
+        if !thunk_val.is_thunk() {
+            panic!("invoke_thunk called on non-thunk value");
+        }
+        
+        if let Some(ThunkData::Regular { func_id, bound }) = thunk_val.as_thunk_ref(&self.heap) {
+            let mut filled = bound.clone();
+            let mut arg_iter = args.into_iter();
+            
+            // Fill holes left-to-right
+            for slot in filled.iter_mut() {
+                if slot.is_none() {
+                    if let Some(arg) = arg_iter.next() {
+                        *slot = Some(arg);
+                    }
+                }
+            }
+            
+            // Check if all holes are filled
+            if filled.iter().any(|s| s.is_none()) {
+                // Still has holes - return new thunk
+                Value::thunk_with_heap(*func_id, filled, &mut self.heap)
+            } else {
+                // All holes filled - extract values and invoke
+                let final_args: Vec<Value> = filled.into_iter()
+                    .map(|opt| opt.expect("All holes should be filled"))
+                    .collect();
+                self.call_function(*func_id, final_args)
+            }
+        } else if let Some(ThunkData::Composed { first, second }) = thunk_val.as_thunk_ref(&self.heap) {
+            // For composition: g(f(x))
+            // First invoke first with args, then invoke second with result
+            let first_val = *first;
+            let second_val = *second;
+            
+            let first_result = self.invoke_thunk(first_val, args);
+            
+            // Now invoke second with first_result
+            self.invoke_thunk(second_val, vec![first_result])
+        } else {
+            panic!("Invalid thunk structure");
+        }
+    }
+    
+    /// Call a function (native or bytecode) with the given arguments.
+    fn call_function(&mut self, func_id: u32, args: Vec<Value>) -> Value {
+        if func_id == COMPOSE_ID {
+            panic!("COMPOSE_ID should not be used directly in call_function");
+        }
+        
+        if self.engine.functions.contains_key(&func_id) {
+            // Native function: invoke and get result directly
+            self.call_native_function(func_id, args)
+        } else if let Some(bytecode_func) = self.engine.bytecode_functions.get(&func_id) {
+            // Bytecode function: create a frame and execute until it returns
+            // Safety check: ensure we have enough arguments
+            let required_params = bytecode_func.param_var_ids.len();
+            if args.len() < required_params {
+                let args_debug: Vec<String> = args.iter().map(|v| v.value_to_string(&self.heap)).collect();
+                panic!("Attempted to invoke function {} with {} args but it requires {}. Args: {:?}", 
+                    func_id, args.len(), required_params, args_debug);
+            }
+            
+            // Push new frame with function bytecode
+            let initial_frame_count = self.create_bytecode_frame(bytecode_func, args);
+
+            // Execute until the function we just pushed returns
+            // Use the shared execution method to avoid nested loops
+            self.execute_until_empty(Some(initial_frame_count));
+
+            // The function returned, result should be on the stack
+            // CRITICAL: Pop the return value and restore stack to pre-thunk depth
+            let stack_base = self.stack.len() - 1; // Account for return value
+            let result = if self.stack.len() > stack_base {
+                self.stack.pop().expect("Function should have returned a value")
+            } else {
+                Value::none() // TODO: check if this is correct
+            };
+            // HARD RESET: Truncate stack to pre-thunk depth (removes all intermediate stack junk)
+            self.stack.truncate(stack_base);
+            result
+        } else {
+            panic!("Function {} not found (neither native nor bytecode)", func_id);
         }
     }
 
@@ -1207,20 +1647,11 @@ impl<'a> VM<'a> {
         //          So invoke_thunk_sync should receive args=[10, 5], not just [5]
         
         // Check if it's a native function or bytecode function
-        if let Some(native_func) = self.engine.functions.get(&func_id) {
+        if self.engine.functions.contains_key(&func_id) {
             // Native function: invoke and get result directly
-            let args_str: Vec<String> = args
-                .into_iter()
-                .map(|v| v.value_to_string(&self.heap))
-                .collect();
-            let result = native_func(&args_str);
-            Value::string_with_heap(result, &mut self.heap)
+            self.call_native_function(func_id, args)
         } else if let Some(bytecode_func) = self.engine.bytecode_functions.get(&func_id) {
             // Bytecode function: create a frame and execute until it returns
-            if bytecode_func.code.is_empty() {
-                panic!("Function {} has empty bytecode body", func_id);
-            }
-            
             // Safety check: ensure we have enough arguments
             let required_params = bytecode_func.param_var_ids.len();
             if args.len() < required_params {
@@ -1229,36 +1660,8 @@ impl<'a> VM<'a> {
                     func_id, args.len(), required_params, args_debug);
             }
             
-            // Determine the maximum var_id we'll need for locals
-            let max_var_id = bytecode_func.param_var_ids.iter()
-                .max()
-                .copied()
-                .unwrap_or(0);
-            
-            // Initialize locals vector with arguments bound to parameter slots
-            // CRITICAL: Force any thunk arguments before binding to locals
-            let mut locals = vec![Value::none(); (max_var_id + 1) as usize];
-            // CRITICAL: Ensure we bind all required parameters, even if args.len() > required_params
-            // NOTE: We do NOT force thunk arguments here - thunks should be passed as-is.
-            // They will be forced when actually used (in binary operations, comparisons, invocations, etc.)
-            for (i, param_var_id) in bytecode_func.param_var_ids.iter().enumerate() {
-                // We've already checked that args.len() >= required_params, so this is safe
-                // But defensively check that we have enough args
-                if i >= args.len() {
-                    let args_debug: Vec<String> = args.iter().map(|v| v.value_to_string(&self.heap)).collect();
-                    panic!("BUG: args.len()={} but trying to access args[{}]. Args: {:?}", args.len(), i, args_debug);
-                }
-                // Pass arguments as-is (including thunks) - they'll be forced when used
-                locals[*param_var_id as usize] = args[i];
-            }
-
             // Push new frame with function bytecode
-            let initial_frame_count = self.call_stack.len();
-            self.call_stack.push(CallFrame {
-                code: bytecode_func.code,
-                ip: 0,
-                locals: locals.into_boxed_slice(),
-            });
+            let initial_frame_count = self.create_bytecode_frame(bytecode_func, args);
 
             // Execute until the function we just pushed returns
             // Use the shared execution method to avoid nested loops
@@ -1290,6 +1693,28 @@ impl<'a> VM<'a> {
         // CRITICAL: Check for thunks FIRST, because a thunk should never be treated as a function
         // If we check functions first, we might incorrectly treat a thunk as a function
         if func_val.is_thunk() {
+            // Check if it's a regular thunk with holes
+            if let Some(ThunkData::Regular { func_id, bound }) = func_val.as_thunk_ref(&self.heap) {
+                // Pop new arguments from the stack (these fill the holes)
+                let new_args: Vec<Value> = pop_n(&mut self.stack, n_args);
+                
+                // Fill holes with new arguments (left-to-right order)
+                let mut filled = bound.clone();
+                let mut arg_iter = new_args.into_iter();
+                
+                for slot in filled.iter_mut() {
+                    if slot.is_none() {
+                        if let Some(arg) = arg_iter.next() {
+                            *slot = Some(arg);
+                        }
+                    }
+                }
+                
+                // Create a thunk with filled arguments (may still have holes if not enough args provided)
+                let thunk = Value::thunk_with_heap(*func_id, filled, &mut self.heap);
+                self.stack.push(thunk);
+                return;
+            }
             // Check if it's a composed thunk
             if let Some(ThunkData::Composed { first, second }) = func_val.as_thunk_ref(&self.heap) {
                 // For composed thunks with arguments: (f |> g)(x)
@@ -1316,34 +1741,104 @@ impl<'a> VM<'a> {
                     // Apply new_args to nested_first_val (the first part of the nested composition)
                     let prepared_nested_first = if new_args.len() == 1 {
                         // Single argument - apply it to nested_first_val
-                        if let Some((nf_id, nf_args)) = nested_first_val.as_thunk(&self.heap) {
-                            let mut nf_final = Vec::with_capacity(nf_args.len() + 1);
-                            nf_final.extend_from_slice(&nf_args);
-                            nf_final.push(new_args[0]);
+                        // Check for regular thunk with holes
+                        if let Some(ThunkData::Regular { func_id, bound }) = nested_first_val.as_thunk_ref(&self.heap) {
+                            // Regular thunk: fill the first hole with the argument
+                            let mut filled = bound.clone();
+                            let mut filled_hole = false;
+                            for slot in filled.iter_mut() {
+                                if slot.is_none() && !filled_hole {
+                                    *slot = Some(new_args[0]);
+                                    filled_hole = true;
+                                    break;
+                                }
+                            }
+                            if !filled_hole {
+                                panic!("No holes available in thunk");
+                            }
+                            // Create a thunk with filled argument
+                            Value::thunk_with_heap(*func_id, filled, &mut self.heap)
+                        } else if let Some((nf_id, nf_args)) = nested_first_val.as_thunk(&self.heap) {
+                            // Regular thunk: fill first hole or add to end
+                            let mut nf_final = nf_args;
+                            let mut filled_hole = false;
+                            for slot in nf_final.iter_mut() {
+                                if slot.is_none() {
+                                    *slot = Some(new_args[0]);
+                                    filled_hole = true;
+                                    break;
+                                }
+                            }
+                            if !filled_hole {
+                                nf_final.push(Some(new_args[0]));
+                            }
                             Value::thunk_with_heap(nf_id, nf_final, &mut self.heap)
                         } else if let Some(nf_id) = nested_first_val.as_function() {
-                            Value::thunk_with_heap(nf_id, vec![new_args[0]], &mut self.heap)
-                        } else {
-                            // nested_first_val is itself a composed thunk - recursively apply the arg
-                            // Push the arg and the composed thunk, then use execute_prepare_call logic
-                            // But we can't use execute_prepare_call, so we manually handle it
-                            if let Some(ThunkData::Composed { first: deep_first, second: deep_second }) = nested_first_val.as_thunk_ref(&self.heap) {
-                                let deep_first_val = *deep_first;
-                                let deep_second_val = *deep_second;
-                                let deep_prepared = if let Some((df_id, df_args)) = deep_first_val.as_thunk(&self.heap) {
-                                    let mut df_final = Vec::with_capacity(df_args.len() + 1);
-                                    df_final.extend_from_slice(&df_args);
-                                    df_final.push(new_args[0]);
-                                    Value::thunk_with_heap(df_id, df_final, &mut self.heap)
-                                } else if let Some(df_id) = deep_first_val.as_function() {
-                                    Value::thunk_with_heap(df_id, vec![new_args[0]], &mut self.heap)
-                                } else {
-                                    panic!("Triple-nested composed thunks not yet supported in execute_prepare_call");
-                                };
-                                Value::composed_thunk_with_heap(deep_prepared, deep_second_val, &mut self.heap)
+                            // Function: create thunk with new arg (and holes for remaining args)
+                            let arity = if let Some(native_func) = self.engine.functions.get(&nf_id) {
+                                Self::min_arity(&native_func.arity)
+                            } else if let Some(bytecode_func) = self.engine.bytecode_functions.get(&nf_id) {
+                                bytecode_func.param_var_ids.len()
                             } else {
-                                panic!("Expected nested_first_val to be a composed thunk");
+                                1
+                            };
+                            let mut bound = vec![Some(new_args[0])];
+                            while bound.len() < arity {
+                                bound.push(None);
                             }
+                            Value::thunk_with_heap(nf_id, bound, &mut self.heap)
+                        } else if let Some(ThunkData::Composed { first: deep_first, second: deep_second }) = nested_first_val.as_thunk_ref(&self.heap) {
+                            // nested_first_val is itself a composed thunk - recursively apply the arg
+                            let deep_first_val = *deep_first;
+                            let deep_second_val = *deep_second;
+                            let deep_prepared = if let Some(ThunkData::Regular { func_id, bound }) = deep_first_val.as_thunk_ref(&self.heap) {
+                                // Deep first is a regular thunk with holes
+                                let mut filled = bound.clone();
+                                let mut filled_hole = false;
+                                for slot in filled.iter_mut() {
+                                    if slot.is_none() && !filled_hole {
+                                        *slot = Some(new_args[0]);
+                                        filled_hole = true;
+                                        break;
+                                    }
+                                }
+                                if !filled_hole {
+                                    panic!("No holes available in deep thunk");
+                                }
+                                Value::thunk_with_heap(*func_id, filled, &mut self.heap)
+                            } else if let Some((df_id, df_args)) = deep_first_val.as_thunk(&self.heap) {
+                                let mut df_final = df_args;
+                                let mut filled_hole = false;
+                                for slot in df_final.iter_mut() {
+                                    if slot.is_none() {
+                                        *slot = Some(new_args[0]);
+                                        filled_hole = true;
+                                        break;
+                                    }
+                                }
+                                if !filled_hole {
+                                    df_final.push(Some(new_args[0]));
+                                }
+                                Value::thunk_with_heap(df_id, df_final, &mut self.heap)
+                            } else if let Some(df_id) = deep_first_val.as_function() {
+                                let arity = if let Some(native_func) = self.engine.functions.get(&df_id) {
+                                    Self::min_arity(&native_func.arity)
+                                } else if let Some(bytecode_func) = self.engine.bytecode_functions.get(&df_id) {
+                                    bytecode_func.param_var_ids.len()
+                                } else {
+                                    1
+                                };
+                                let mut bound = vec![Some(new_args[0])];
+                                while bound.len() < arity {
+                                    bound.push(None);
+                                }
+                                Value::thunk_with_heap(df_id, bound, &mut self.heap)
+                            } else {
+                                panic!("Triple-nested composed thunks not yet supported in execute_prepare_call");
+                            };
+                            Value::composed_thunk_with_heap(deep_prepared, deep_second_val, &mut self.heap)
+                        } else {
+                            panic!("nested_first_val must be a thunk, function, or composed thunk, got: {:?}", nested_first_val);
                         }
                     } else {
                         panic!("Multiple args to nested composed thunk not yet supported");
@@ -1357,7 +1852,96 @@ impl<'a> VM<'a> {
                 }
                 
                 // Apply the new args to the first function
-                // We need to extract the function ID and args from first_val
+                // Handle case where first_val is a value (number, string, etc.) rather than a thunk/function
+                // In this case, we treat first_val as an argument to apply to second_val
+                if !first_val.is_thunk() && first_val.as_function().is_none() {
+                    // first_val is a concrete value (number, string, etc.)
+                    // Apply it to second_val as an argument
+                    // Check if second_val is a regular thunk with holes
+                    if let Some(ThunkData::Regular { func_id, bound }) = second_val.as_thunk_ref(&self.heap) {
+                        // Apply first_val to fill the first hole in the thunk
+                        let mut filled = bound.clone();
+                        let mut filled_hole = false;
+                        for slot in filled.iter_mut() {
+                            if slot.is_none() && !filled_hole {
+                                *slot = Some(first_val);
+                                filled_hole = true;
+                                break;
+                            }
+                        }
+                        if !filled_hole {
+                            panic!("Cannot apply value to thunk - no holes available");
+                        }
+                        // Fill remaining holes with new_args
+                        let mut arg_iter = new_args.into_iter();
+                        for slot in filled.iter_mut() {
+                            if slot.is_none() {
+                                if let Some(arg) = arg_iter.next() {
+                                    *slot = Some(arg);
+                                }
+                            }
+                        }
+                        // Create a thunk (may still have holes if not enough args)
+                        let thunk = Value::thunk_with_heap(*func_id, filled, &mut self.heap);
+                        self.stack.push(thunk);
+                        return;
+                    } else if let Some((second_func_id, second_args)) = second_val.as_thunk(&self.heap) {
+                        // second_val is a regular thunk - fill first hole or add to end
+                        let mut combined_args = second_args;
+                        let mut filled_hole = false;
+                        // Try to fill the first hole with first_val
+                        for slot in combined_args.iter_mut() {
+                            if slot.is_none() {
+                                *slot = Some(first_val);
+                                filled_hole = true;
+                                break;
+                            }
+                        }
+                        // Fill remaining holes with new_args
+                        for slot in combined_args.iter_mut() {
+                            if slot.is_none() {
+                                // We'll fill these in the next loop
+                            }
+                        }
+                        // If no holes were filled, add first_val to end
+                        if !filled_hole {
+                            combined_args.push(Some(first_val));
+                        }
+                        // Fill remaining holes with new_args
+                        let mut arg_iter = new_args.into_iter();
+                        for slot in combined_args.iter_mut() {
+                            if slot.is_none() {
+                                if let Some(arg) = arg_iter.next() {
+                                    *slot = Some(arg);
+                                }
+                            }
+                        }
+                        let thunk = Value::thunk_with_heap(second_func_id, combined_args, &mut self.heap);
+                        self.stack.push(thunk);
+                        return;
+                    } else if let Some(second_func_id) = second_val.as_function() {
+                        // second_val is a function - create a thunk with first_val and new_args
+                        let arity = if let Some(native_func) = self.engine.functions.get(&second_func_id) {
+                            Self::min_arity(&native_func.arity)
+                        } else if let Some(bytecode_func) = self.engine.bytecode_functions.get(&second_func_id) {
+                            bytecode_func.param_var_ids.len()
+                        } else {
+                            1 + new_args.len()
+                        };
+                        let mut bound = vec![Some(first_val)];
+                        bound.extend(new_args.into_iter().map(Some));
+                        while bound.len() < arity {
+                            bound.push(None);
+                        }
+                        let thunk = Value::thunk_with_heap(second_func_id, bound, &mut self.heap);
+                        self.stack.push(thunk);
+                        return;
+                    } else {
+                        panic!("Second part of composed thunk must be a function or thunk when first is a value");
+                    }
+                }
+                
+                // first_val is a thunk or function - apply new args to it
                 let (first_func_id, first_existing_args) = if let Some((func_id, args)) = first_val.as_thunk(&self.heap) {
                     (func_id, args)
                 } else if let Some(func_id) = first_val.as_function() {
@@ -1367,10 +1951,21 @@ impl<'a> VM<'a> {
                 };
                 
                 // Combine first's existing args with new args
-                // Note: Args should already be concrete values when stored in thunks
-                let mut first_final_args = Vec::with_capacity(first_existing_args.len() + new_args.len());
-                first_final_args.extend_from_slice(&first_existing_args);
-                first_final_args.extend_from_slice(&new_args);
+                // Fill holes in first_existing_args with new_args
+                let mut first_final_args = first_existing_args;
+                let mut arg_iter = new_args.into_iter();
+                // Fill holes first
+                for slot in first_final_args.iter_mut() {
+                    if slot.is_none() {
+                        if let Some(arg) = arg_iter.next() {
+                            *slot = Some(arg);
+                        }
+                    }
+                }
+                // Add any remaining new_args to the end
+                for arg in arg_iter {
+                    first_final_args.push(Some(arg));
+                }
                 
                 
                 // Create a thunk for the first function with all args applied
@@ -1389,19 +1984,27 @@ impl<'a> VM<'a> {
                 // Note: as_thunk already clones the args, so we don't need to clone again
                 // CRITICAL: If this thunk has existing args, we MUST preserve them when combining with new args
                 // The existing args represent a partial application that we're continuing
-                let existing_args = thunk_args;
+                let mut existing_args = thunk_args;
                 
                 // Pop new arguments from the stack
                 let new_args: Vec<Value> = pop_n(&mut self.stack, n_args);
                 
+                // Fill holes in existing_args with new_args, then add any remaining to the end
+                let mut arg_iter = new_args.into_iter();
+                // Fill holes first
+                for slot in existing_args.iter_mut() {
+                    if slot.is_none() {
+                        if let Some(arg) = arg_iter.next() {
+                            *slot = Some(arg);
+                        }
+                    }
+                }
+                // Add any remaining new_args to the end
+                for arg in arg_iter {
+                    existing_args.push(Some(arg));
+                }
                 
-                // Combine existing args with new args (existing first, then new)
-                // This preserves the argument order: [existing_args..., new_args...]
-                // CRITICAL: We must preserve existing args when combining with new args
-                // Note: Args should already be concrete values when stored in thunks
-                let mut final_args = Vec::with_capacity(existing_args.len() + new_args.len());
-                final_args.extend_from_slice(&existing_args);
-                final_args.extend_from_slice(&new_args);
+                let final_args = existing_args;
                 
 
                 // Create a Thunk value with the function and all args
@@ -1418,8 +2021,25 @@ impl<'a> VM<'a> {
             // Pop new arguments from the stack
             let new_args: Vec<Value> = pop_n(&mut self.stack, n_args);
             
-            // Create a Thunk value with the function and args
-            let prepared_call = Value::thunk_with_heap(func_id, new_args, &mut self.heap);
+            // Get the function's arity to create thunk with proper holes
+            let arity = if let Some(native_func) = self.engine.functions.get(&func_id) {
+                Self::min_arity(&native_func.arity)
+            } else if let Some(bytecode_func) = self.engine.bytecode_functions.get(&func_id) {
+                bytecode_func.param_var_ids.len()
+            } else {
+                // Unknown function - assume all args are provided (no holes)
+                new_args.len()
+            };
+            
+            // Create a thunk with bound arguments and holes for missing ones
+            let mut bound: Vec<Option<Value>> = new_args.into_iter().map(Some).collect();
+            // Add holes for remaining arguments
+            while bound.len() < arity {
+                bound.push(None);
+            }
+            
+            // Create a Thunk value with the function, bound args, and holes
+            let prepared_call = Value::thunk_with_heap(func_id, bound, &mut self.heap);
 
             // Push the prepared call onto the stack
             self.stack.push(prepared_call);
@@ -1442,8 +2062,8 @@ impl<'a> VM<'a> {
 
         // Get the required number of parameters for this function
         let required_params = if self.engine.functions.contains_key(&func_id) {
-            // For native functions, we don't know the param count statically
-            args.len()
+            // For native functions, use the arity
+            Self::min_arity(&self.engine.functions.get(&func_id).unwrap().arity)
         } else if let Some(bytecode_func) = self.engine.bytecode_functions.get(&func_id) {
             bytecode_func.param_var_ids.len()
         } else {
@@ -1453,12 +2073,25 @@ impl<'a> VM<'a> {
         // Check if we need more arguments and pop them from the stack
         let mut extra_args = Vec::new();
         let is_native = self.engine.functions.contains_key(&func_id);
+        let filled_count = args.iter().filter(|opt| opt.is_some()).count();
         if !is_native {
             // Only bytecode functions support currying (extra arguments)
-            while args.len() + extra_args.len() < required_params {
+            while filled_count + extra_args.len() < required_params {
                 if self.stack.is_empty() {
                     // Not enough arguments available, create a new Thunk (still partial)
-                    args.extend(extra_args);
+                    // Fill holes with extra_args
+                    let mut arg_iter = extra_args.into_iter();
+                    for slot in args.iter_mut() {
+                        if slot.is_none() {
+                            if let Some(arg) = arg_iter.next() {
+                                *slot = Some(arg);
+                            }
+                        }
+                    }
+                    // Add any remaining extra_args to the end
+                    for arg in arg_iter {
+                        args.push(Some(arg));
+                    }
                     self.stack.push(Value::thunk_with_heap(func_id, args, &mut self.heap));
                     return;
                 }
@@ -1468,24 +2101,37 @@ impl<'a> VM<'a> {
         }
         // Reverse extra_args to get correct order (stack is LIFO)
         extra_args.reverse();
-        // Append extra args to existing args
-        args.extend(extra_args);
+        // Fill holes with extra_args
+        let mut arg_iter = extra_args.into_iter();
+        for slot in args.iter_mut() {
+            if slot.is_none() {
+                if let Some(arg) = arg_iter.next() {
+                    *slot = Some(arg);
+                }
+            }
+        }
+        // Add any remaining extra_args to the end
+        for arg in arg_iter {
+            args.push(Some(arg));
+        }
 
         // Ensure we have enough arguments before invoking
-        if args.len() < required_params {
+        let final_filled_count = args.iter().filter(|opt| opt.is_some()).count();
+        if final_filled_count < required_params {
             // Still not enough args, create a new Thunk (still partial application)
             self.stack.push(Value::thunk_with_heap(func_id, args, &mut self.heap));
             return;
         }
 
+        // Extract values from Option<Value> for function call
+        let final_args: Vec<Value> = args.into_iter()
+            .filter_map(|opt| opt)
+            .collect();
+
         if is_native {
             // Native functions: call directly and push result
-            let args_str: Vec<String> = args
-                .into_iter()
-                .map(|v| v.value_to_string(&self.heap))
-                .collect();
-            let result = self.engine.functions.get(&func_id).unwrap()(&args_str);
-            self.stack.push(Value::string_with_heap(result, &mut self.heap));
+            let result = self.call_native_function(func_id, final_args);
+            self.stack.push(result);
             // For native functions, we still need to return, so pop the frame
             self.call_stack.pop();
         } else {
@@ -1497,28 +2143,14 @@ impl<'a> VM<'a> {
                 panic!("Function {} has empty bytecode body", func_id);
             }
             
-            // Determine the maximum var_id we'll need for locals
-            let max_var_id = bytecode_func.param_var_ids.iter()
-                .max()
-                .copied()
-                .unwrap_or(0);
-            
-            // Initialize locals vector with arguments bound to parameter slots
-            // NOTE: We do NOT force thunk arguments here - thunks should be passed as-is.
-            // They will be forced when actually used (in binary operations, comparisons, invocations, etc.)
-            let mut locals = vec![Value::none(); (max_var_id + 1) as usize];
-            for (i, param_var_id) in bytecode_func.param_var_ids.iter().enumerate() {
-                if i < args.len() {
-                    // Pass arguments as-is (including thunks) - they'll be forced when used
-                    locals[*param_var_id as usize] = args[i];
-                }
-            }
+            // Initialize locals from arguments
+            let locals = Self::init_locals_from_args(bytecode_func, &final_args);
 
             // Reuse the current frame: replace code, reset IP, replace locals
             let frame = &mut self.call_stack[frame_idx];
             frame.code = bytecode_func.code;
             frame.ip = 0;  // Jump to beginning of callee
-            frame.locals = locals.into_boxed_slice();
+            frame.locals = locals;
             // Execution continues in the VM loop with the reused frame
         }
     }
@@ -1547,11 +2179,40 @@ impl<'a> VM<'a> {
             let first_result = self.invoke_thunk_value_recursive(first_val);
             // Now invoke the second thunk with first_result as argument
             // Use the same manual argument combination approach as invoke_thunk_value_recursive
-            if let Some((thunk_func_id, thunk_args)) = second_val.as_thunk(&self.heap) {
-                // Regular thunk - combine existing args with first_result
-                let mut final_args = Vec::with_capacity(thunk_args.len() + 1);
-                final_args.extend_from_slice(&thunk_args);
-                final_args.push(first_result);
+            // Check for regular thunk with holes
+            if let Some(ThunkData::Regular { func_id, bound }) = second_val.as_thunk_ref(&self.heap) {
+                // Regular thunk: fill the first hole with first_result
+                let mut filled = bound.clone();
+                let mut filled_hole = false;
+                for slot in filled.iter_mut() {
+                    if slot.is_none() && !filled_hole {
+                        *slot = Some(first_result);
+                        filled_hole = true;
+                        break;
+                    }
+                }
+                if !filled_hole {
+                    panic!("No holes available in thunk");
+                }
+                // Create a thunk and invoke it
+                let thunk = Value::thunk_with_heap(*func_id, filled, &mut self.heap);
+                let result = self.invoke_thunk_value_recursive(thunk);
+                self.stack.push(result);
+                return;
+            } else if let Some((thunk_func_id, thunk_args)) = second_val.as_thunk(&self.heap) {
+                // Regular thunk - fill first hole or add to end
+                let mut final_args = thunk_args;
+                let mut filled_hole = false;
+                for slot in final_args.iter_mut() {
+                    if slot.is_none() {
+                        *slot = Some(first_result);
+                        filled_hole = true;
+                        break;
+                    }
+                }
+                if !filled_hole {
+                    final_args.push(Some(first_result));
+                }
                 let prepared = Value::thunk_with_heap(thunk_func_id, final_args, &mut self.heap);
                 // Recursively invoke the prepared thunk
                 let result = self.invoke_thunk_value_recursive(prepared);
@@ -1562,46 +2223,69 @@ impl<'a> VM<'a> {
                 let nested_first_val = *nested_first;
                 let nested_second_val = *nested_second;
                 // Recursively apply first_result to nested_first
-                let prepared_nested = if let Some((nested_func_id, nested_args)) = nested_first_val.as_thunk(&self.heap) {
-                    let mut nested_final_args = Vec::with_capacity(nested_args.len() + 1);
-                    nested_final_args.extend_from_slice(&nested_args);
-                    nested_final_args.push(first_result);
+                let prepared_nested = if let Some(ThunkData::Regular { func_id, bound }) = nested_first_val.as_thunk_ref(&self.heap) {
+                    // Nested first is a regular thunk: fill the first hole with first_result
+                    let mut filled = bound.clone();
+                    let mut filled_hole = false;
+                    for slot in filled.iter_mut() {
+                        if slot.is_none() && !filled_hole {
+                            *slot = Some(first_result);
+                            filled_hole = true;
+                            break;
+                        }
+                    }
+                    if !filled_hole {
+                        panic!("No holes available in nested thunk");
+                    }
+                    Value::thunk_with_heap(*func_id, filled, &mut self.heap)
+                } else if let Some((nested_func_id, nested_args)) = nested_first_val.as_thunk(&self.heap) {
+                    let mut nested_final_args = nested_args;
+                    let mut filled_hole = false;
+                    for slot in nested_final_args.iter_mut() {
+                        if slot.is_none() {
+                            *slot = Some(first_result);
+                            filled_hole = true;
+                            break;
+                        }
+                    }
+                    if !filled_hole {
+                        nested_final_args.push(Some(first_result));
+                    }
                     Value::thunk_with_heap(nested_func_id, nested_final_args, &mut self.heap)
                 } else if let Some(nested_func_id) = nested_first_val.as_function() {
-                    Value::thunk_with_heap(nested_func_id, vec![first_result], &mut self.heap)
-                } else {
-                    // Nested first is itself a composed thunk - use the same approach as above
-                    if let Some(ThunkData::Composed { first: deep_first, second: deep_second }) = nested_first_val.as_thunk_ref(&self.heap) {
-                        let deep_first_val = *deep_first;
-                        let deep_second_val = *deep_second;
-                        // Apply first_result to deep_first
-                        let deep_first_prepared = if let Some((df_id, df_args)) = deep_first_val.as_thunk(&self.heap) {
-                            let mut df_final = Vec::with_capacity(df_args.len() + 1);
-                            df_final.extend_from_slice(&df_args);
-                            df_final.push(first_result);
-                            Value::thunk_with_heap(df_id, df_final, &mut self.heap)
-                        } else if let Some(df_id) = deep_first_val.as_function() {
-                            Value::thunk_with_heap(df_id, vec![first_result], &mut self.heap)
-                        } else {
-                            panic!("Triple-nested composed thunks not yet supported");
-                        };
-                        let recomposed_deep = Value::composed_thunk_with_heap(deep_first_prepared, deep_second_val, &mut self.heap);
-                        let recomposed = Value::composed_thunk_with_heap(recomposed_deep, nested_second_val, &mut self.heap);
-                        let result = self.invoke_thunk_value_recursive(recomposed);
-                        self.stack.push(result);
-                        return;
+                    let arity = if let Some(native_func) = self.engine.functions.get(&nested_func_id) {
+                        Self::min_arity(&native_func.arity)
+                    } else if let Some(bytecode_func) = self.engine.bytecode_functions.get(&nested_func_id) {
+                        bytecode_func.param_var_ids.len()
                     } else {
-                        panic!("Expected nested_first_val to be a composed thunk");
+                        1
+                    };
+                    let mut bound = vec![Some(first_result)];
+                    while bound.len() < arity {
+                        bound.push(None);
                     }
+                    Value::thunk_with_heap(nested_func_id, bound, &mut self.heap)
+                } else {
+                    panic!("nested_first_val must be a thunk or function");
                 };
-                // Recompose with nested_second and invoke
                 let recomposed = Value::composed_thunk_with_heap(prepared_nested, nested_second_val, &mut self.heap);
                 let result = self.invoke_thunk_value_recursive(recomposed);
                 self.stack.push(result);
                 return;
             } else if let Some(func_id) = second_val.as_function() {
                 // It's a function - create thunk with first_result as arg
-                let prepared = Value::thunk_with_heap(func_id, vec![first_result], &mut self.heap);
+                let arity = if let Some(native_func) = self.engine.functions.get(&func_id) {
+                    Self::min_arity(&native_func.arity)
+                } else if let Some(bytecode_func) = self.engine.bytecode_functions.get(&func_id) {
+                    bytecode_func.param_var_ids.len()
+                } else {
+                    1
+                };
+                let mut bound = vec![Some(first_result)];
+                while bound.len() < arity {
+                    bound.push(None);
+                }
+                let prepared = Value::thunk_with_heap(func_id, bound, &mut self.heap);
                 let result = self.invoke_thunk_value_recursive(prepared);
                 self.stack.push(result);
                 return;
@@ -1610,15 +2294,14 @@ impl<'a> VM<'a> {
             }
         }
 
+        // Handle regular thunk (not composed)
         let (func_id, mut args) = call.as_thunk(&self.heap)
             .expect("Invoke expects regular Thunk value");
 
         // Get the required number of parameters for this function
         let required_params = if self.engine.functions.contains_key(&func_id) {
-            // For native functions, we don't know the param count statically
-            // But we should use the number of args already in the Thunk
-            // Native functions should not consume extra stack values - they get exactly what's in the Thunk
-            args.len()
+            // For native functions, use the arity
+            Self::min_arity(&self.engine.functions.get(&func_id).unwrap().arity)
         } else if let Some(bytecode_func) = self.engine.bytecode_functions.get(&func_id) {
             bytecode_func.param_var_ids.len()
         } else {
@@ -1629,13 +2312,25 @@ impl<'a> VM<'a> {
         // This handles additional currying beyond what Thunk(n_args) already handled.
         let mut extra_args = Vec::new();
         let is_native = self.engine.functions.contains_key(&func_id);
+        let filled_count = args.iter().filter(|opt| opt.is_some()).count();
         if !is_native {
             // Only bytecode functions support currying (extra arguments)
-            while args.len() + extra_args.len() < required_params {
+            while filled_count + extra_args.len() < required_params {
                 if self.stack.is_empty() {
                     // Not enough arguments available, create a new Thunk (still partial)
-                    // Combine existing args with any extra args we collected
-                    args.extend(extra_args);
+                    // Fill holes with extra_args
+                    let mut arg_iter = extra_args.into_iter();
+                    for slot in args.iter_mut() {
+                        if slot.is_none() {
+                            if let Some(arg) = arg_iter.next() {
+                                *slot = Some(arg);
+                            }
+                        }
+                    }
+                    // Add any remaining extra_args to the end
+                    for arg in arg_iter {
+                        args.push(Some(arg));
+                    }
                     self.stack.push(Value::thunk_with_heap(func_id, args, &mut self.heap));
                     return;
                 }
@@ -1645,57 +2340,43 @@ impl<'a> VM<'a> {
         }
         // Reverse extra_args to get correct order (stack is LIFO)
         extra_args.reverse();
-        // Append extra args to existing args
-        args.extend(extra_args);
+        // Fill holes with extra_args
+        let mut arg_iter = extra_args.into_iter();
+        for slot in args.iter_mut() {
+            if slot.is_none() {
+                if let Some(arg) = arg_iter.next() {
+                    *slot = Some(arg);
+                }
+            }
+        }
+        // Add any remaining extra_args to the end
+        for arg in arg_iter {
+            args.push(Some(arg));
+        }
 
         // Ensure we have enough arguments before invoking
-        if args.len() < required_params {
+        let final_filled_count = args.iter().filter(|opt| opt.is_some()).count();
+        if final_filled_count < required_params {
             // Still not enough args, create a new Thunk (still partial application)
             self.stack.push(Value::thunk_with_heap(func_id, args, &mut self.heap));
             return;
         }
 
+        // Extract values from Option<Value> for function call
+        let final_args: Vec<Value> = args.into_iter()
+            .filter_map(|opt| opt)
+            .collect();
+
         // TRAMPOLINE: Instead of calling invoke_thunk_sync recursively, push a frame and let the VM loop handle it
         if is_native {
             // Native functions: call directly (no recursion, just a simple function call)
-            let args_str: Vec<String> = args
-                .into_iter()
-                .map(|v| v.value_to_string(&self.heap))
-                .collect();
-            let result = self.engine.functions.get(&func_id).unwrap()(&args_str);
-            self.stack.push(Value::string_with_heap(result, &mut self.heap));
+            let result = self.call_native_function(func_id, final_args);
+            self.stack.push(result);
         } else {
             // Bytecode functions: push frame and let VM loop handle execution (trampoline)
             let bytecode_func = self.engine.bytecode_functions.get(&func_id)
                 .expect("Bytecode function should exist");
-            
-            if bytecode_func.code.is_empty() {
-                panic!("Function {} has empty bytecode body", func_id);
-            }
-            
-            // Determine the maximum var_id we'll need for locals
-            let max_var_id = bytecode_func.param_var_ids.iter()
-                .max()
-                .copied()
-                .unwrap_or(0);
-            
-            // Initialize locals vector with arguments bound to parameter slots
-            // NOTE: We do NOT force thunk arguments here - thunks should be passed as-is.
-            // They will be forced when actually used (in binary operations, comparisons, invocations, etc.)
-            let mut locals = vec![Value::none(); (max_var_id + 1) as usize];
-            for (i, param_var_id) in bytecode_func.param_var_ids.iter().enumerate() {
-                if i < args.len() {
-                    // Pass arguments as-is (including thunks) - they'll be forced when used
-                    locals[*param_var_id as usize] = args[i];
-                }
-            }
-
-            // Push new frame with function bytecode - VM loop will execute it
-            self.call_stack.push(CallFrame {
-                code: bytecode_func.code,
-                ip: 0,  // Start at beginning of function
-                locals: locals.into_boxed_slice(),
-            });
+            self.create_bytecode_frame(bytecode_func, final_args);
             // Execution continues in the VM loop - no recursion!
         }
     }
@@ -1704,52 +2385,19 @@ impl<'a> VM<'a> {
     fn invoke_function(&mut self, func_id: u32, args: Vec<Value>) {
         // Check if it's a native function or bytecode function
         // IMPORTANT: Check native functions first, but bytecode functions should be the fallback
-        if let Some(native_func) = self.engine.functions.get(&func_id) {
+        if self.engine.functions.contains_key(&func_id) {
             // Native function: convert args to strings and call
-            let args_str: Vec<String> = args
-                .into_iter()
-                .map(|v| v.value_to_string(&self.heap))
-                .collect();
-            let result = native_func(&args_str);
-            self.stack.push(Value::string_with_heap(result, &mut self.heap));
+            let result = self.call_native_function(func_id, args);
+            self.stack.push(result);
         } else if let Some(bytecode_func) = self.engine.bytecode_functions.get(&func_id) {
             // Bytecode function: push new call frame
-            // CRITICAL: Ensure we have bytecode to execute
-            if bytecode_func.code.is_empty() {
-                panic!("Function {} has empty bytecode body", func_id);
-            }
-            
             // Safety check: ensure we have enough arguments
             let required_params = bytecode_func.param_var_ids.len();
             if args.len() < required_params {
                 panic!("Attempted to invoke function {} with {} args but it requires {}", 
                     func_id, args.len(), required_params);
             }
-            
-            // Determine the maximum var_id we'll need for locals
-            let max_var_id = bytecode_func.param_var_ids.iter()
-                .max()
-                .copied()
-                .unwrap_or(0);
-            
-            // Initialize locals vector with arguments bound to parameter slots
-            // NOTE: We do NOT force thunk arguments here - thunks should be passed as-is.
-            // They will be forced when actually used (in binary operations, comparisons, invocations, etc.)
-            let mut locals = vec![Value::none(); (max_var_id + 1) as usize];
-            for (i, param_var_id) in bytecode_func.param_var_ids.iter().enumerate() {
-                if i < args.len() {
-                    // Pass arguments as-is (including thunks) - they'll be forced when used
-                    locals[*param_var_id as usize] = args[i];
-                }
-            }
-
-            // Push new frame with function bytecode - use static reference, no cloning
-            // This is the critical part: we MUST create a call frame for user functions
-            self.call_stack.push(CallFrame {
-                code: bytecode_func.code,  // Already &'static [OpCode], no clone needed
-                ip: 0,  // Start at beginning of function
-                locals: locals.into_boxed_slice(),  // Convert Vec to Box<[Value]>
-            });
+            self.create_bytecode_frame(bytecode_func, args);
             // Execution will continue in the main loop with the new frame
         } else {
             panic!("Function {} not found (neither native nor bytecode)", func_id);

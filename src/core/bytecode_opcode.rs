@@ -38,6 +38,7 @@ pub enum OpCode {
     Print,          // Inline print builtin
     CallStack(u32),
     Thunk(u32),        // Prepare a call with arg_count (doesn't execute)
+    MakePartial { func_id: u32, bound_mask: u64, hole_count: u32 }, // Create partial thunk: func_id, bitmask of bound args (1=bound, 0=hole), number of holes
     ComposeThunk,      // Compose two thunks: pops g, then f, pushes composed thunk (g(f(x)))
     Invoke,            // Execute a Thunk value from the stack
     Ret,
@@ -85,6 +86,7 @@ impl OpCode {
             OpCode::Print => 22,
             OpCode::CallStack(_) => 23,
             OpCode::Thunk(_) => 24,
+            OpCode::MakePartial { .. } => 36,
             OpCode::ComposeThunk => 34,
             OpCode::Invoke => 25,
             OpCode::Ret => 26,
@@ -96,4 +98,4 @@ impl OpCode {
     }
 }
 
-pub const OPCODE_COUNT: usize = 36;
+pub const OPCODE_COUNT: usize = 37;

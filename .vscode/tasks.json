@@ -51,6 +51,112 @@
                 "panel": "new"
             },
             "problemMatcher": []
+        },
+        {
+            "label": "Quick Rebuild LSP (Dev)",
+            "type": "shell",
+            "windows": {
+                "command": "powershell",
+                "args": [
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    "${workspaceFolder}/rebuild-lsp-dev.ps1"
+                ]
+            },
+            "osx": {
+                "command": "${workspaceFolder}/rebuild-lsp-dev.sh"
+            },
+            "linux": {
+                "command": "${workspaceFolder}/rebuild-lsp-dev.sh"
+            },
+            "group": "none",
+            "presentation": {
+                "reveal": "always",
+                "panel": "new"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Watch: All (Auto-rebuild)",
+            "type": "shell",
+            "windows": {
+                "command": "powershell",
+                "args": [
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    "${workspaceFolder}/watch-all.ps1"
+                ]
+            },
+            "osx": {
+                "command": "${workspaceFolder}/watch-all.sh"
+            },
+            "linux": {
+                "command": "${workspaceFolder}/watch-all.sh"
+            },
+            "group": "none",
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "focus": false
+            },
+            "problemMatcher": [],
+            "isBackground": true
+        },
+        {
+            "label": "Watch: LSP (Auto-rebuild)",
+            "type": "shell",
+            "windows": {
+                "command": "powershell",
+                "args": [
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    "${workspaceFolder}/watch-lsp.ps1"
+                ]
+            },
+            "osx": {
+                "command": "${workspaceFolder}/watch-lsp.sh"
+            },
+            "linux": {
+                "command": "${workspaceFolder}/watch-lsp.sh"
+            },
+            "group": "none",
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "focus": false
+            },
+            "problemMatcher": [],
+            "isBackground": true
+        },
+        {
+            "label": "Watch: melon (Auto-rebuild)",
+            "type": "shell",
+            "windows": {
+                "command": "powershell",
+                "args": [
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    "${workspaceFolder}/watch-melon.ps1"
+                ]
+            },
+            "osx": {
+                "command": "${workspaceFolder}/watch-melon.sh"
+            },
+            "linux": {
+                "command": "${workspaceFolder}/watch-melon.sh"
+            },
+            "group": "none",
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "focus": false
+            },
+            "problemMatcher": [],
+            "isBackground": true
         }
     ]
 }
