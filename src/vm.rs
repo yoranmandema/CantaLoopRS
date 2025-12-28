@@ -1035,13 +1035,13 @@ impl<'a> VM<'a> {
                 .unwrap_or(0);
             
             // Initialize locals vector with arguments bound to parameter slots
-            // CRITICAL: Force any thunk arguments before binding to locals
+            // NOTE: We do NOT force thunk arguments here - thunks should be passed as-is.
+            // They will be forced when actually used (in binary operations, comparisons, invocations, etc.)
             let mut locals = vec![Value::none(); (max_var_id + 1) as usize];
             for (i, param_var_id) in bytecode_func.param_var_ids.iter().enumerate() {
                 if i < args.len() {
-                    // Force the argument if it's a thunk (evaluate it)
-                    let arg = self.force_value(args[i]);
-                    locals[*param_var_id as usize] = arg;
+                    // Pass arguments as-is (including thunks) - they'll be forced when used
+                    locals[*param_var_id as usize] = args[i];
                 }
             }
 
@@ -1239,6 +1239,8 @@ impl<'a> VM<'a> {
             // CRITICAL: Force any thunk arguments before binding to locals
             let mut locals = vec![Value::none(); (max_var_id + 1) as usize];
             // CRITICAL: Ensure we bind all required parameters, even if args.len() > required_params
+            // NOTE: We do NOT force thunk arguments here - thunks should be passed as-is.
+            // They will be forced when actually used (in binary operations, comparisons, invocations, etc.)
             for (i, param_var_id) in bytecode_func.param_var_ids.iter().enumerate() {
                 // We've already checked that args.len() >= required_params, so this is safe
                 // But defensively check that we have enough args
@@ -1246,8 +1248,8 @@ impl<'a> VM<'a> {
                     let args_debug: Vec<String> = args.iter().map(|v| v.value_to_string(&self.heap)).collect();
                     panic!("BUG: args.len()={} but trying to access args[{}]. Args: {:?}", args.len(), i, args_debug);
                 }
-                let arg = self.force_value(args[i]);
-                locals[*param_var_id as usize] = arg;
+                // Pass arguments as-is (including thunks) - they'll be forced when used
+                locals[*param_var_id as usize] = args[i];
             }
 
             // Push new frame with function bytecode
@@ -1502,13 +1504,13 @@ impl<'a> VM<'a> {
                 .unwrap_or(0);
             
             // Initialize locals vector with arguments bound to parameter slots
-            // CRITICAL: Force any thunk arguments before binding to locals
+            // NOTE: We do NOT force thunk arguments here - thunks should be passed as-is.
+            // They will be forced when actually used (in binary operations, comparisons, invocations, etc.)
             let mut locals = vec![Value::none(); (max_var_id + 1) as usize];
             for (i, param_var_id) in bytecode_func.param_var_ids.iter().enumerate() {
                 if i < args.len() {
-                    // Force the argument if it's a thunk (evaluate it)
-                    let arg = self.force_value(args[i]);
-                    locals[*param_var_id as usize] = arg;
+                    // Pass arguments as-is (including thunks) - they'll be forced when used
+                    locals[*param_var_id as usize] = args[i];
                 }
             }
 
@@ -1678,13 +1680,13 @@ impl<'a> VM<'a> {
                 .unwrap_or(0);
             
             // Initialize locals vector with arguments bound to parameter slots
-            // CRITICAL: Force any thunk arguments before binding to locals
+            // NOTE: We do NOT force thunk arguments here - thunks should be passed as-is.
+            // They will be forced when actually used (in binary operations, comparisons, invocations, etc.)
             let mut locals = vec![Value::none(); (max_var_id + 1) as usize];
             for (i, param_var_id) in bytecode_func.param_var_ids.iter().enumerate() {
                 if i < args.len() {
-                    // Force the argument if it's a thunk (evaluate it)
-                    let arg = self.force_value(args[i]);
-                    locals[*param_var_id as usize] = arg;
+                    // Pass arguments as-is (including thunks) - they'll be forced when used
+                    locals[*param_var_id as usize] = args[i];
                 }
             }
 
@@ -1731,13 +1733,13 @@ impl<'a> VM<'a> {
                 .unwrap_or(0);
             
             // Initialize locals vector with arguments bound to parameter slots
-            // CRITICAL: Force any thunk arguments before binding to locals
+            // NOTE: We do NOT force thunk arguments here - thunks should be passed as-is.
+            // They will be forced when actually used (in binary operations, comparisons, invocations, etc.)
             let mut locals = vec![Value::none(); (max_var_id + 1) as usize];
             for (i, param_var_id) in bytecode_func.param_var_ids.iter().enumerate() {
                 if i < args.len() {
-                    // Force the argument if it's a thunk (evaluate it)
-                    let arg = self.force_value(args[i]);
-                    locals[*param_var_id as usize] = arg;
+                    // Pass arguments as-is (including thunks) - they'll be forced when used
+                    locals[*param_var_id as usize] = args[i];
                 }
             }
 

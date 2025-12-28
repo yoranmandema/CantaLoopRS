@@ -34,11 +34,10 @@ fn fib(n: num) -> num {
 
 print("Starting...")!;
 
-let printHelloWorld: str ~> str = print("Hello, World!");
-
 // warmup
 sum_mul(50)!;
 
 // real runs
+
 print(sum_mul(2000)!)!;
 print(fib(30)!)!;
