@@ -4,7 +4,7 @@ use std::sync::Arc;
 use crate::core::{
     bytecode::{ByteCodeEmitter, OpCode},
     parser::parse_program,
-    semantic_analyser::{CompilerState, FunctionSignature, HirBuilder, HirError, ValueKind},
+    hir_lowering::{CompilerState, FunctionSignature, HirBuilder, HirError, ValueKind},
     vm::{VM, Value, ValueHeap},
 };
 
@@ -92,7 +92,7 @@ pub struct NativeFunction {
 #[macro_export]
 macro_rules! add_number_fn {
     ($engine:expr, $name:expr, $arity:expr, $body:expr) => {{
-        use crate::core::semantic_analyser::{FunctionSignature, ValueKind};
+        use crate::core::hir_lowering::{FunctionSignature, ValueKind};
         use crate::core::engine::Arity;
 
         let sig = FunctionSignature {
@@ -122,7 +122,7 @@ macro_rules! add_number_fn {
 #[macro_export]
 macro_rules! add_string_fn {
     ($engine:expr, $name:expr, $arity:expr, $body:expr) => {{
-        use crate::core::semantic_analyser::{FunctionSignature, ValueKind};
+        use crate::core::hir_lowering::{FunctionSignature, ValueKind};
         use crate::core::engine::Arity;
 
         let sig = FunctionSignature {
@@ -150,7 +150,7 @@ macro_rules! add_string_fn {
 #[macro_export]
 macro_rules! add_variadic_number_fn {
     ($engine:expr, $name:expr, $min:expr, $body:expr) => {{
-        use crate::core::semantic_analyser::{FunctionSignature, ValueKind};
+        use crate::core::hir_lowering::{FunctionSignature, ValueKind};
         use crate::core::engine::Arity;
         use crate::core::vm::Value;
 
@@ -410,7 +410,10 @@ impl Engine {
     /// It uses a fresh HirBuilder and registers all built-in functions.
     /// 
     /// Unlike `run()`, this method does not panic on errors but collects them in diagnostics.
-    pub fn compile_for_lsp(&self, src: &str) -> Result<CompilerState, pest::error::Error<crate::core::parser::Rule>> {
+    /// 
+    /// If `project_root` is provided, loads all modules from the project's src/ directory
+    /// before compiling, allowing imports to resolve correctly.
+    pub fn compile_for_lsp(&self, src: &str, project_root: Option<&Path>) -> Result<CompilerState, pest::error::Error<crate::core::parser::Rule>> {
         // Parse the source code twice - once to keep AST, once for HIR building
         // (This is acceptable for LSP where we need both AST and HIR)
         let ast = parse_program(src)?;
@@ -431,6 +434,11 @@ impl Engine {
             }
         }
         
+        // If project_root is provided, load all project modules
+        if let Some(project_root) = project_root {
+            Self::load_project_modules_for_lsp(&mut hir_builder, &self.hir_builder, project_root);
+        }
+        
         // Build HIR and collect errors
         let mut diagnostics = Vec::new();
         let hir_result = hir_builder.build(ast_for_hir);
@@ -445,11 +453,146 @@ impl Engine {
             }
         };
 
-        Ok(CompilerState::new(ast, hir, diagnostics))
+        Ok(CompilerState::new(ast, hir, diagnostics, Some(src)))
+    }
+    
+    /// Load project modules for LSP compilation (non-mutating version).
+    /// This loads modules into a HirBuilder without mutating the engine.
+    fn load_project_modules_for_lsp(
+        hir_builder: &mut HirBuilder,
+        source_hir_builder: &HirBuilder,
+        project_root: &Path,
+    ) {
+        let src_dir = project_root.join("src");
+        
+        if !src_dir.exists() {
+            return; // No src directory, no modules to load
+        }
+        
+        // Find all .mln files in src/
+        let entries = match std::fs::read_dir(&src_dir) {
+            Ok(entries) => entries,
+            Err(_) => return,
+        };
+        
+        for entry in entries {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+            let path = entry.path();
+            
+            if path.extension().and_then(|s| s.to_str()) == Some("mln") {
+                // Skip the main file (it's not a module)
+                if path.file_name().and_then(|n| n.to_str()) == Some("main.mln") {
+                    continue;
+                }
+                
+                // Try to load this file as a module
+                if let Err(_) = Self::load_module_for_lsp(hir_builder, source_hir_builder, &path) {
+                    // Silently skip modules that fail to load (they might have errors)
+                    continue;
+                }
+            }
+        }
+    }
+    
+    /// Load a single module file for LSP (non-mutating version).
+    fn load_module_for_lsp(
+        hir_builder: &mut HirBuilder,
+        source_hir_builder: &HirBuilder,
+        file_path: &Path,
+    ) -> Result<String, Box<dyn std::error::Error>> {
+        use crate::core::ast::Statement;
+        
+        // Read and parse the file
+        let content = std::fs::read_to_string(file_path)?;
+        
+        // Quick check: if the file doesn't start with "mod", skip it
+        if !content.trim_start().starts_with("mod") {
+            return Err("File does not start with 'mod' declaration".into());
+        }
+        
+        let ast = parse_program(&content)?;
+        
+        // Find the mod statement to get the module name
+        let mut module_name = None;
+        for block in &ast.blocks {
+            for stmt in &block.statements {
+                if let Statement::Mod { identifier } = stmt {
+                    module_name = Some(identifier.clone());
+                    break;
+                }
+            }
+            if module_name.is_some() {
+                break;
+            }
+        }
+        
+        let module_name = module_name.ok_or_else(|| "Module file missing 'mod' declaration")?;
+        
+        // Compile the module to get HIR (this processes all statements)
+        let mut module_hir_builder = HirBuilder::new();
+        // Copy stdlib modules so imports work
+        module_hir_builder.copy_modules_from(source_hir_builder);
+        // Copy built-in functions
+        for (func_id, func) in &source_hir_builder.ast.functions {
+            if *func_id >= 10000 {
+                module_hir_builder.register_builtin_function(&func.name, func.signature.clone(), *func_id);
+            }
+        }
+        
+        // Parse again for HIR building
+        let ast_for_hir = parse_program(&content)?;
+        let hir_result = module_hir_builder.build(ast_for_hir);
+        if let Err(_) = hir_result {
+            // If module compilation fails, we still register it with placeholder IDs
+            // so that the module name can be found (even if its members can't)
+        }
+        
+        // Extract public function names and constant names from AST
+        let mut pub_function_names = Vec::new();
+        let mut pub_constant_names = Vec::new();
+        for block in &ast.blocks {
+            for stmt in &block.statements {
+                match stmt {
+                    Statement::FunctionDeclaration { identifier, pub_visibility, .. } => {
+                        if *pub_visibility {
+                            pub_function_names.push(identifier.clone());
+                        }
+                    }
+                    Statement::Const { identifier, pub_visibility, .. } => {
+                        if *pub_visibility {
+                            pub_constant_names.push(identifier.clone());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        
+        // Register the module with placeholder function IDs (0) and constant IDs (0)
+        // The actual IDs will be resolved when the module is actually compiled
+        let mut module_functions = HashMap::new();
+        for func_name in pub_function_names {
+            module_functions.insert(func_name, 0); // Placeholder
+        }
+        
+        let mut module_constants = HashMap::new();
+        for const_name in pub_constant_names {
+            module_constants.insert(const_name, 0); // Placeholder
+        }
+        
+        // Register the module (even with placeholder IDs, so member access can find the module)
+        if !module_functions.is_empty() || !module_constants.is_empty() {
+            hir_builder.register_module(&module_name, module_functions, module_constants);
+        }
+        
+        Ok(module_name)
     }   
 
     pub fn get_constant(&self, id: u32, heap: &mut crate::core::vm::ValueHeap) -> crate::core::vm::Value {
-        use crate::core::semantic_analyser::ConstantValue;
+        use crate::core::hir_lowering::ConstantValue;
 
         let c = self
             .hir_builder

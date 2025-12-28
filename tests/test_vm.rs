@@ -4,7 +4,7 @@ use CantaLoopRS::{
     engine::Engine,
     vm::{VM, Value},
     bytecode::OpCode,
-    semantic_analyser::{FunctionSignature, ValueKind},
+    hir_lowering::{FunctionSignature, ValueKind},
 };
 
 #[test]

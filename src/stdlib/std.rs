@@ -1,5 +1,5 @@
 use crate::core::engine::{Arity, StdFunction, StdModule};
-use crate::core::semantic_analyser::{FunctionSignature, ValueKind};
+use crate::core::hir_lowering::{FunctionSignature, ValueKind};
 use crate::core::vm::Value;
 use std::sync::Arc;
 

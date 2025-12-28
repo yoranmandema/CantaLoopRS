@@ -2,7 +2,7 @@ mod common;
 
 use CantaLoopRS::{
     engine::Engine,
-    semantic_analyser::{FunctionSignature, ValueKind},
+    hir_lowering::{FunctionSignature, ValueKind},
 };
 
 /// Integration tests that test the full pipeline from parsing to execution

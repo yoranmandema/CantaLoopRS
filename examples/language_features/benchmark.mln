@@ -1,0 +1,45 @@
+use std.print;
+
+fn add(a: num, b: num) -> num {
+    return a + b;
+}
+
+fn mul(a: num, b: num) -> num {
+    return a * b;
+}
+
+fn sum_mul_rec(i: num, n: num, add10: num ~> num, mul2: num ~> num, acc: num) -> num {
+    if (i >= n) {
+        return acc;
+    } else {
+        // nested thunk invocations
+        let add10_result = add10(i)!;
+        let next: num = mul2(add10_result)!;
+
+        return sum_mul_rec(i + 1, n, add10, mul2, acc + next)!;
+    }
+}
+
+fn sum_mul(n: num) -> num {
+    let add10 = add(10);
+    let mul2 = mul(2);
+    return sum_mul_rec(0, n, add10, mul2, 0)!;
+}
+
+fn fib(n: num) -> num {
+    if (n <= 1) {
+        return n;
+    } else {
+        return fib(n - 1)! + fib(n - 2)!;
+    }
+}
+
+print("Starting...")!;
+
+// warmup
+sum_mul(50)!;
+
+// real runs
+
+print(sum_mul(2000)!)!;
+print(fib(30)!)!;

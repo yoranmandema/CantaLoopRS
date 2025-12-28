@@ -4,7 +4,7 @@ use CantaLoopRS::{
     engine::Engine,
     parser::parse_program,
     bytecode::OpCode,
-    semantic_analyser::{FunctionSignature, ValueKind},
+    hir_lowering::{FunctionSignature, ValueKind},
 };
 
 #[test]
@@ -103,7 +103,7 @@ fn test_bytecode_emit_logical_operations() {
 
 #[test]
 fn test_thunk_collapse_full_args() {
-    use CantaLoopRS::{bytecode::ByteCodeEmitter, semantic_analyser::HirBuilder};
+    use CantaLoopRS::{bytecode::ByteCodeEmitter, hir_lowering::HirBuilder};
     
     let mut engine = common::helpers::create_test_engine();
     let program = parse_program(r#"
@@ -153,7 +153,7 @@ add(5, 10)!;
 
 #[test]
 fn test_thunk_created_partial_application() {
-    use CantaLoopRS::{bytecode::ByteCodeEmitter, semantic_analyser::HirBuilder};
+    use CantaLoopRS::{bytecode::ByteCodeEmitter, hir_lowering::HirBuilder};
     
     let mut engine = common::helpers::create_test_engine();
     let program = parse_program(r#"

@@ -12,6 +12,7 @@ lsp-types = "0.94"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1.0", features = ["full"] }
+bitflags = "2.5"
 
 [profile.dev]
 opt-level = 1
@@ -23,8 +24,8 @@ opt-level = 2
 
 [[bin]]
 name = "cantaloop-lsp"
-path = "src/lsp/lsp_main.rs"
+path = "src/lsp/main.rs"
 
 [[bin]]
 name = "melon"
-path = "src/melon/melon_main.rs"
+path = "src/melon/main.rs"

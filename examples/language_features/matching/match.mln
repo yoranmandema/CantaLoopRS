@@ -1,0 +1,18 @@
+use std.print;
+
+let a = 1;
+
+match a {
+    > 0 { // Match greater than 0
+        print("a is greater than 0")!;
+    }
+    < 0 { // Match less than 0
+        print("a is less than 0")!;
+    }
+    0 { // Match literal 0
+        print("a is 0")!;
+    }
+    _ { // Match all other cases
+        print("Exhausted all cases")!;
+    }
+}

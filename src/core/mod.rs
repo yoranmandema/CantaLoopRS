@@ -10,8 +10,12 @@ pub mod bytecode_opcode;
 pub mod engine;
 /// Pest-based parser for CantaLoop source code.
 pub mod parser;
-/// Type checking and High-level Intermediate Representation (HIR) generation.
-pub mod semantic_analyser;
+/// HIR lowering pass: AST → HIR → CompilerState
+/// 
+/// This module performs the lowering transformation from AST to High-level Intermediate Representation (HIR),
+/// and builds CompilerState as the single source of truth for semantic information.
+/// It is no longer just "semantic analysis" - it defines symbol identity, scoping, binding, and semantic meaning.
+pub mod hir_lowering;
 /// Stack-based virtual machine for bytecode execution.
 pub mod vm;
 
@@ -20,5 +24,5 @@ pub use engine::Engine;
 pub use parser::parse_program;
 pub use vm::{VM, Value};
 pub use bytecode::{ByteCodeEmitter, OpCode};
-pub use semantic_analyser::{CompilerState, FunctionSignature, ValueKind, HirBuilder, Symbol, SymbolKind, SymbolTable};
+pub use hir_lowering::{CompilerState, FunctionSignature, ValueKind, HirBuilder, Symbol, SymbolKind, SymbolTable};
 

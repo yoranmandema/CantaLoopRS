@@ -1,6 +1,6 @@
 use CantaLoopRS::{
     engine::Engine,
-    semantic_analyser::{FunctionSignature, ValueKind},
+    hir_lowering::{FunctionSignature, ValueKind},
 };
 
 /// Helper function to create a test engine with basic functions

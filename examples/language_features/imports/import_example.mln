@@ -1,0 +1,22 @@
+use std.print;
+
+// Example demonstrating dot-path imports in CantaLoop
+
+// Single import: use math.utils.square;
+use math.max;
+
+// Multiple imports: use math.utils.{cube, pow};
+use math.{cube, pow};
+
+// Wildcard import: use math.utils.*;
+use math.*;
+
+// Use the imported functions
+let result1 = square(5)!;
+let result2 = cube(3)!;
+let result3 = pow(2, 8)!;
+
+print(result1)!;
+print(result2)!;
+print(result3)!;
+

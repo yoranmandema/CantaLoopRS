@@ -1,0 +1,15 @@
+use std.print;
+
+fn printHelloWorld() {
+    print("Hello world!")!;
+}
+
+printHelloWorld()!;
+
+fn printWithArgs(a: num) -> void {
+    print(a)!;
+}
+
+let printThunk = printWithArgs(1);
+
+printThunk!;

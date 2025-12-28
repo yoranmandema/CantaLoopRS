@@ -1,0 +1,11 @@
+use std.print;
+
+fn add(a: num, b: num) -> num {
+    return a + b;
+}
+
+let add10 = add(10);
+
+let res: num = add10(5)! + 15; // should be 30
+
+print(res)!;

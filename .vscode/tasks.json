@@ -5,19 +5,17 @@
             "label": "Rebuild Extension",
             "type": "shell",
             "windows": {
-                "command": "powershell",
+                "command": "C:\\Program Files\\Git\\bin\\bash.exe",
                 "args": [
-                    "-ExecutionPolicy",
-                    "Bypass",
-                    "-File",
-                    "${workspaceFolder}/rebuild-extension.ps1"
+                    "-c",
+                    "cd \"${workspaceFolder}\" && bash scripts/rebuild-extension.sh"
                 ]
             },
             "osx": {
-                "command": "${workspaceFolder}/rebuild-extension.sh"
+                "command": "${workspaceFolder}/scripts/rebuild-extension.sh"
             },
             "linux": {
-                "command": "${workspaceFolder}/rebuild-extension.sh"
+                "command": "${workspaceFolder}/scripts/rebuild-extension.sh"
             },
             "group": {
                 "kind": "build",
@@ -33,10 +31,10 @@
             "label": "Reinstall Extension",
             "type": "shell",
             "windows": {
-                "command": "powershell",
+                "command": "C:\\Program Files\\Git\\bin\\bash.exe",
                 "args": [
-                    "-Command",
-                    "cd .cantaloop-language; cursor --uninstall-extension yoran.cantaloop-language; cursor --install-extension cantaloop-language-0.0.1.vsix"
+                    "-c",
+                    "cd .cantaloop-language && cursor --uninstall-extension yoran.cantaloop-language && cursor --install-extension cantaloop-language-0.0.1.vsix"
                 ]
             },
             "osx": {
@@ -56,19 +54,17 @@
             "label": "Quick Rebuild LSP (Dev)",
             "type": "shell",
             "windows": {
-                "command": "powershell",
+                "command": "C:\\Program Files\\Git\\bin\\bash.exe",
                 "args": [
-                    "-ExecutionPolicy",
-                    "Bypass",
-                    "-File",
-                    "${workspaceFolder}/rebuild-lsp-dev.ps1"
+                    "-c",
+                    "cd \"${workspaceFolder}\" && bash scripts/rebuild-lsp-dev.sh"
                 ]
             },
             "osx": {
-                "command": "${workspaceFolder}/rebuild-lsp-dev.sh"
+                "command": "${workspaceFolder}/scripts/rebuild-lsp-dev.sh"
             },
             "linux": {
-                "command": "${workspaceFolder}/rebuild-lsp-dev.sh"
+                "command": "${workspaceFolder}/scripts/rebuild-lsp-dev.sh"
             },
             "group": "none",
             "presentation": {
@@ -81,19 +77,17 @@
             "label": "Watch: All (Auto-rebuild)",
             "type": "shell",
             "windows": {
-                "command": "powershell",
+                "command": "C:\\Program Files\\Git\\bin\\bash.exe",
                 "args": [
-                    "-ExecutionPolicy",
-                    "Bypass",
-                    "-File",
-                    "${workspaceFolder}/watch-all.ps1"
+                    "-c",
+                    "cd \"${workspaceFolder}\" && bash scripts/watch-all.sh"
                 ]
             },
             "osx": {
-                "command": "${workspaceFolder}/watch-all.sh"
+                "command": "${workspaceFolder}/scripts/watch-all.sh"
             },
             "linux": {
-                "command": "${workspaceFolder}/watch-all.sh"
+                "command": "${workspaceFolder}/scripts/watch-all.sh"
             },
             "group": "none",
             "presentation": {
@@ -108,19 +102,17 @@
             "label": "Watch: LSP (Auto-rebuild)",
             "type": "shell",
             "windows": {
-                "command": "powershell",
+                "command": "C:\\Program Files\\Git\\bin\\bash.exe",
                 "args": [
-                    "-ExecutionPolicy",
-                    "Bypass",
-                    "-File",
-                    "${workspaceFolder}/watch-lsp.ps1"
+                    "-c",
+                    "cd \"${workspaceFolder}\" && bash scripts/watch-lsp.sh"
                 ]
             },
             "osx": {
-                "command": "${workspaceFolder}/watch-lsp.sh"
+                "command": "${workspaceFolder}/scripts/watch-lsp.sh"
             },
             "linux": {
-                "command": "${workspaceFolder}/watch-lsp.sh"
+                "command": "${workspaceFolder}/scripts/watch-lsp.sh"
             },
             "group": "none",
             "presentation": {
@@ -135,19 +127,17 @@
             "label": "Watch: melon (Auto-rebuild)",
             "type": "shell",
             "windows": {
-                "command": "powershell",
+                "command": "C:\\Program Files\\Git\\bin\\bash.exe",
                 "args": [
-                    "-ExecutionPolicy",
-                    "Bypass",
-                    "-File",
-                    "${workspaceFolder}/watch-melon.ps1"
+                    "-c",
+                    "cd \"${workspaceFolder}\" && bash scripts/watch-melon.sh"
                 ]
             },
             "osx": {
-                "command": "${workspaceFolder}/watch-melon.sh"
+                "command": "${workspaceFolder}/scripts/watch-melon.sh"
             },
             "linux": {
-                "command": "${workspaceFolder}/watch-melon.sh"
+                "command": "${workspaceFolder}/scripts/watch-melon.sh"
             },
             "group": "none",
             "presentation": {
@@ -160,4 +150,3 @@
         }
     ]
 }
-

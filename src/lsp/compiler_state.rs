@@ -1,10 +1,11 @@
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::Arc;
 use tower_lsp::lsp_types::Url;
 use tower_lsp::Client;
 
 use crate::core::engine::Engine;
-use crate::core::semantic_analyser::CompilerState;
+use crate::core::hir_lowering::CompilerState;
 
 /// Manages compiler state caching and rebuilding for LSP.
 pub struct CompilerStateManager {
@@ -21,10 +22,33 @@ impl CompilerStateManager {
             client,
         }
     }
+    
+    fn find_project_root(uri: &Url) -> Option<std::path::PathBuf> {
+        // Convert URI to file path
+        let file_path = uri.to_file_path().ok()?;
+        
+        // Walk up the directory tree looking for melon.json
+        let mut current = file_path.parent()?;
+        loop {
+            let melon_json = current.join("melon.json");
+            if melon_json.exists() {
+                return Some(current.to_path_buf());
+            }
+            
+            if let Some(parent) = current.parent() {
+                current = parent;
+            } else {
+                return None;
+            }
+        }
+    }
 
     pub async fn rebuild(&self, uri: &Url, text: &str) {
+        // Find project root if this file is part of a project
+        let project_root = Self::find_project_root(uri);
+        
         // Use the compiler to build state - single source of truth
-        match self.engine.compile_for_lsp(text) {
+        match self.engine.compile_for_lsp(text, project_root.as_deref()) {
             Ok(state) => {
                 let mut cache = self.cache.write().await;
                 cache.insert(uri.clone(), state);

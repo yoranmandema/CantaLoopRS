@@ -1,0 +1,70 @@
+use std.print;
+
+// Continue statement - skip to next iteration of loop
+
+// Helper function to check divisibility
+fn is_divisible(n: num, d: num) -> bool {
+    loop remainder = n {
+        if remainder < d {
+            break remainder == 0;
+        }
+        if remainder == d {
+            break true;
+        }
+        remainder = remainder - d;
+    }
+}
+
+// Skip even numbers
+let i = 0;
+
+while i < 10 {
+    i = i + 1;
+    if is_divisible(i, 2)! {
+        continue; // Skip even numbers
+    }
+    print(i)!; // Only prints odd numbers
+}
+
+// Continue in for loop
+for j in 1..20 {
+    if is_divisible(j, 3)! {
+        continue; // Skip multiples of 3
+    }
+    print(j)!;
+}
+
+// Continue in scoped loop
+loop k = 1 {
+    if k > 15 {
+        break k;
+    }
+
+    if is_divisible(k, 5)! {
+        k = k + 1;
+        continue; // Skip multiples of 5
+    }
+
+    print(k)!;
+    k = k + 1;
+}
+
+// Find sum of numbers not divisible by 7
+fn sum_not_divisible_by_7(max: num) -> num {
+    let sum = 0;
+    let i = 1;
+
+    while i <= max {
+        if is_divisible(i, 7)! {
+            i = i + 1;
+            continue; // Skip numbers divisible by 7
+        }
+        sum = sum + i;
+        i = i + 1;
+    }
+
+    return sum;
+}
+
+print(sum_not_divisible_by_7(20)!)!; // Sum excluding multiples of 7, up to 20
+

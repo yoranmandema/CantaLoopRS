@@ -3,7 +3,7 @@ mod common;
 use CantaLoopRS::{
     engine::Engine,
     parser::parse_program,
-    semantic_analyser::{FunctionSignature, ValueKind},
+    hir_lowering::{FunctionSignature, ValueKind},
 };
 
 #[test]
