@@ -1,0 +1,56 @@
+{
+  "name": "cantaloop-language",
+  "displayName": "CantaLoop",
+  "publisher": "yoran",
+  "version": "0.0.1",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yoranmandema/CantaLoopRS.git"
+  },
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "activationEvents": [
+    "onLanguage:cantaloop"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "cantaloop",
+        "aliases": [
+          "CantaLoop",
+          "cantaloop"
+        ],
+        "extensions": [
+          ".mln"
+        ],
+        "configuration": "./language-configuration.json",
+        "icon": {
+          "light": "./icon.png",
+          "dark": "./icon.png"
+        }
+      }
+    ],
+    "grammars": [
+      {
+        "language": "cantaloop",
+        "scopeName": "source.cantaloop",
+        "path": "./syntaxes/cantaloop.tmLanguage.json"
+      }
+    ]
+  },
+  "dependencies": {
+    "vscode-languageclient": "^8.1.0"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": ""
+}

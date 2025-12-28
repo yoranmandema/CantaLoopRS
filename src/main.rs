@@ -13,8 +13,6 @@ extern crate lazy_static;
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let filename = args.get(1).map(|s| s.as_str()).unwrap_or("examples/thunk.mln");
-    let input = std::fs::read_to_string(filename)
-        .expect(&format!("Failed to read {}", filename));
 
     let mut engine = Engine::new();
 
@@ -27,5 +25,5 @@ fn main() {
         "".to_string()
     });
 
-    engine.run(&input);
+    engine.run(filename);
 }

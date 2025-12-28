@@ -1,4 +1,0 @@
-fn test() {
-    return 1
-}
-

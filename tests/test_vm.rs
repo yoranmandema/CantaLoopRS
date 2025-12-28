@@ -3,7 +3,7 @@ mod common;
 use CantaLoopRS::{
     engine::Engine,
     vm::{VM, Value},
-    bytecode::opcode::OpCode,
+    bytecode::OpCode,
     semantic_analyser::{FunctionSignature, ValueKind},
 };
 

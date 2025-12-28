@@ -1,0 +1,57 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Rebuild Extension",
+            "type": "shell",
+            "windows": {
+                "command": "powershell",
+                "args": [
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    "${workspaceFolder}/rebuild-extension.ps1"
+                ]
+            },
+            "osx": {
+                "command": "${workspaceFolder}/rebuild-extension.sh"
+            },
+            "linux": {
+                "command": "${workspaceFolder}/rebuild-extension.sh"
+            },
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "new"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Reinstall Extension",
+            "type": "shell",
+            "windows": {
+                "command": "powershell",
+                "args": [
+                    "-Command",
+                    "cd .cantaloop-language; cursor --uninstall-extension yoran.cantaloop-language; cursor --install-extension cantaloop-language-0.0.1.vsix"
+                ]
+            },
+            "osx": {
+                "command": "cd .cantaloop-language && cursor --uninstall-extension yoran.cantaloop-language && cursor --install-extension cantaloop-language-0.0.1.vsix"
+            },
+            "linux": {
+                "command": "cd .cantaloop-language && cursor --uninstall-extension yoran.cantaloop-language && cursor --install-extension cantaloop-language-0.0.1.vsix"
+            },
+            "group": "none",
+            "presentation": {
+                "reveal": "always",
+                "panel": "new"
+            },
+            "problemMatcher": []
+        }
+    ]
+}
+

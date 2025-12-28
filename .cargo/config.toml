@@ -1,0 +1,5 @@
+[build]
+rustflags = ["-C", "target-cpu=native"]
+
+[profile.dev.package."*"]
+opt-level = 2

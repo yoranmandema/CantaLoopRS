@@ -1,15 +1,22 @@
 program = { SOI ~ block ~ EOI }
 
-block = { (statement ~ (";" ~ WHITESPACE*)?)* }
-braced_block = { "{" ~ WHITESPACE* ~ block ~ WHITESPACE* ~ "}" }
-statement = { function_statement | if_statement | pattern_if_statement | return_statement | let_statement | assign_statement | assign_increment_statement | assign_decrement_statement | expression_statement }
+block = { (WHITESPACE* ~ statement_with_semicolon ~ ";" ~ WHITESPACE* | WHITESPACE* ~ statement_without_semicolon ~ WHITESPACE*)* }
+braced_block = ${ "{" ~ WHITESPACE* ~ block ~ WHITESPACE* ~ "}" }
+non_assign_statement = { return_statement | let_statement | break_statement | continue_statement | expression_statement }
+statement_with_semicolon = { let_statement | return_statement | break_statement | continue_statement | assign_statement | assign_increment_statement | assign_decrement_statement | expression_statement }
+// Try to match assignment patterns first before expression
+maybe_assign = { identifier ~ WHITESPACE* ~ "=" }
+maybe_assign_increment = { identifier ~ WHITESPACE* ~ "+=" }
+maybe_assign_decrement = { identifier ~ WHITESPACE* ~ "-=" }
+statement_without_semicolon = { function_statement | if_statement | pattern_match_statement | loop_statement | while_statement | for_statement }
+statement = { statement_with_semicolon | statement_without_semicolon }
 
 // Keywords - used for negative lookahead to prevent keywords from being identifiers
-keyword = _{ "fn" ~ !ASCII_ALPHANUMERIC | "if" ~ !ASCII_ALPHANUMERIC | "else" ~ !ASCII_ALPHANUMERIC | "elseif" ~ !ASCII_ALPHANUMERIC | "match" ~ !ASCII_ALPHANUMERIC | "return" ~ !ASCII_ALPHANUMERIC | "let" ~ !ASCII_ALPHANUMERIC | "true" ~ !ASCII_ALPHANUMERIC | "false" ~ !ASCII_ALPHANUMERIC | "and" ~ !ASCII_ALPHANUMERIC | "or" ~ !ASCII_ALPHANUMERIC }
+keyword = _{ "fn" ~ !ASCII_ALPHANUMERIC | "if" ~ !ASCII_ALPHANUMERIC | "else" ~ !ASCII_ALPHANUMERIC | "elseif" ~ !ASCII_ALPHANUMERIC | "match" ~ !ASCII_ALPHANUMERIC | "return" ~ !ASCII_ALPHANUMERIC | "let" ~ !ASCII_ALPHANUMERIC | "true" ~ !ASCII_ALPHANUMERIC | "false" ~ !ASCII_ALPHANUMERIC | "and" ~ !ASCII_ALPHANUMERIC | "or" ~ !ASCII_ALPHANUMERIC | "loop" ~ !ASCII_ALPHANUMERIC | "while" ~ !ASCII_ALPHANUMERIC | "for" ~ !ASCII_ALPHANUMERIC | "in" ~ !ASCII_ALPHANUMERIC | "break" ~ !ASCII_ALPHANUMERIC | "continue" ~ !ASCII_ALPHANUMERIC }
 
-expression_statement = { !("fn" ~ WHITESPACE) ~ !("return" ~ WHITESPACE) ~ !("let" ~ WHITESPACE) ~ expression }
-let_statement = ${ "let" ~ WHITESPACE+ ~ identifier ~ WHITESPACE* ~ "=" ~ WHITESPACE* ~ expression }
-assign_statement = { identifier ~ WHITESPACE* ~ "=" ~ WHITESPACE* ~ expression }
+expression_statement = { !("fn" ~ WHITESPACE) ~ !("return" ~ WHITESPACE) ~ !("let" ~ WHITESPACE) ~ !maybe_assign ~ !maybe_assign_increment ~ !maybe_assign_decrement ~ expression }
+let_statement = ${ "let" ~ WHITESPACE+ ~ identifier ~ (WHITESPACE* ~ ":" ~ WHITESPACE* ~ type_annotation)? ~ WHITESPACE* ~ "=" ~ WHITESPACE* ~ expression }
+assign_statement = ${ identifier ~ WHITESPACE* ~ "=" ~ WHITESPACE* ~ expression }
 assign_increment_statement = { identifier ~ WHITESPACE* ~ "+=" ~ WHITESPACE* ~ expression }
 assign_decrement_statement = { identifier ~ WHITESPACE* ~ "-=" ~ WHITESPACE* ~ expression }
 
@@ -17,31 +24,93 @@ return_statement = ${
     "return" ~ WHITESPACE+ ~ expression
 }
 
+loop_init_var = { identifier ~ WHITESPACE* ~ "=" ~ WHITESPACE* ~ expression }
+loop_init = ${ loop_init_var ~ (WHITESPACE* ~ "," ~ WHITESPACE* ~ loop_init_var)* }
+loop_statement = { "loop" ~ WHITESPACE* ~ (loop_init ~ WHITESPACE*)? ~ braced_block }
+while_statement = ${ "while" ~ WHITESPACE+ ~ expression ~ WHITESPACE* ~ braced_block }
+// For loop: for x in start .. end { body }
+// Parse manually like pattern_match_statement due to ".." not being a valid expression operator
+for_statement = ${ "for" ~ WHITESPACE+ ~ identifier ~ WHITESPACE* ~ "in" ~ !ASCII_ALPHANUMERIC ~ WHITESPACE* ~ for_range_content ~ WHITESPACE* ~ ".." ~ WHITESPACE* ~ for_range_content ~ WHITESPACE* ~ "{" ~ for_block_manual ~ "}" }
+for_range_content = { (for_range_char | "(" ~ for_range_content ~ ")" | "\"" ~ (!"\"" ~ ANY)* ~ "\"")* }
+for_range_char = { !"}" ~ !"{" ~ !".." ~ ANY }
+for_block_manual = { (for_block_char | "{" ~ for_block_manual ~ "}")* }
+for_block_char = { !"}" ~ !"{" ~ ANY }
+break_statement = ${ "break" ~ (WHITESPACE+ ~ expression)? }
+continue_statement = { "continue" }
+
 function_statement = ${
-    "fn" ~ WHITESPACE+ ~ identifier ~ WHITESPACE* ~ "(" ~ WHITESPACE* ~ function_args? ~ WHITESPACE* ~ ")" ~ WHITESPACE* ~ braced_block
+    "fn" ~ WHITESPACE+ ~ identifier ~ WHITESPACE* ~ "(" ~ WHITESPACE* ~ function_args? ~ WHITESPACE* ~ ")" ~ WHITESPACE* ~ (return_type_annotation ~ WHITESPACE*)? ~ braced_block
 }
+
+return_type_annotation = { "->" ~ WHITESPACE+ ~ type_annotation }
 
 function_args = { argument ~ ("," ~ WHITESPACE* ~ argument)* }
 
-argument = { identifier ~ (WHITESPACE+ ~ ":" ~ WHITESPACE+ ~ identifier)? }
+argument = { identifier ~ WHITESPACE* ~ ":" ~ WHITESPACE* ~ type_annotation }
+
+// Type annotations: atom_type (("->" | "~>") atom_type)*
+// Supports chained types like: num -> num, num ~> num, num -> num -> num, etc.
+type_annotation = { atom_type ~ (WHITESPACE* ~ ("->" | "~>") ~ WHITESPACE* ~ atom_type)* }
+
+// Atom types: num, str, bool, etc.
+atom_type = { identifier }
 
 if_statement = ${
-    "if" ~ WHITESPACE* ~ "(" ~ expression ~ ")" ~ WHITESPACE* ~ braced_block
-    ~ (WHITESPACE* ~ "elseif" ~ !ASCII_ALPHANUMERIC ~ WHITESPACE* ~ "(" ~ expression ~ ")" ~ WHITESPACE* ~ braced_block)*
+    "if" ~ WHITESPACE+ ~ expression ~ WHITESPACE* ~ braced_block
+    ~ (WHITESPACE* ~ "elseif" ~ !ASCII_ALPHANUMERIC ~ WHITESPACE+ ~ expression ~ WHITESPACE* ~ braced_block)*
     ~ (WHITESPACE* ~ "else" ~ !ASCII_ALPHA ~ WHITESPACE* ~ braced_block)?
 }
 pattern_if_statement = { "if" ~ WHITESPACE+ ~ identifier ~ WHITESPACE+ ~ "{" ~ WHITESPACE* ~ pattern_case+ ~ WHITESPACE* ~ "}" }
-pattern_match_statement = { "match" ~ WHITESPACE+ ~ identifier ~ WHITESPACE* ~ "{" ~ WHITESPACE* ~ pattern_case+ ~ WHITESPACE* ~ "}" }
-pattern_case = { comparison_operator ~ WHITESPACE+ ~ expression ~ WHITESPACE+ ~ braced_block }
+// pattern_match_statement is parsed manually from text due to silent expression rules
+// We just match the basic structure: "match" expression "{" ... "}"
+pattern_match_statement = ${ "match" ~ WHITESPACE+ ~ expression ~ WHITESPACE* ~ "{" ~ match_cases_content ~ "}" }
+// Match the content between braces manually (handles nested braces)
+match_cases_content = { (match_cases_char | "{" ~ match_cases_content ~ "}")* }
+match_cases_char = { !"}" ~ !"{" ~ ANY }
+pattern_case = ${ pattern_value ~ WHITESPACE+ ~ braced_block }
+pattern_value = { comparison_pattern | expression | wildcard }
+comparison_pattern = ${ comparison_operator ~ WHITESPACE+ ~ expression }
+wildcard = { "_" }
 comparison_operator = { gt | lt | ge | le | eq | ne }
 
-expression = { prefix? ~ WHITESPACE* ~ atom ~ (WHITESPACE* ~ infix ~ WHITESPACE* ~ prefix? ~ WHITESPACE* ~ atom)* }
+// --- Loop Expression ---
+// Fully atomic in expressions to prevent PEG from continuing infix parsing
+// The entire loop expression is matched atomically - AST builder parses init and body manually
+loop_expression = ${ "loop" ~ WHITESPACE* ~ (loop_init ~ WHITESPACE*)? ~ "{" ~ loop_block_manual ~ "}" }
+// Match optional init vars using the same grammar as loop_statement
+// Match block content with proper brace counting (handles nested braces)
+loop_block_manual = { (loop_block_char | "{" ~ loop_block_manual ~ "}")* }
+loop_block_char = { !"}" ~ !"{" ~ ANY }
+
+// Wrap loop_expression as atomic so PEG treats it as indivisible
+atomic_loop_expression = _{ loop_expression }
+
+// --- Primary Expressions ---
+primary   = { value | call_expression | atomic_loop_expression | identifier | "(" ~ expression ~ ")" }
+
+// --- Atom & Expression ---
 atom = { primary ~ (WHITESPACE* ~ postfix)* }
-infix     = _{ add | sub | mul | div | pow | eq | ne | gt | lt | ge | le | and | or }
+postfix   = { invoke | call }
+invoke    = { "!" ~ invoke_args? }
+invoke_args = { "(" ~ WHITESPACE* ~ expression_list? ~ WHITESPACE* ~ ")" }
+call      = { "(" ~ WHITESPACE* ~ expression_list? ~ WHITESPACE* ~ ")" }
+
+prefix    = _{ increment | decrement | neg | not }
+increment = { "++" }
+decrement = { "--" }
+neg       = { "-" }
+not       = { "!" }
+
+expression = _{
+    prefix? ~ WHITESPACE* ~ atom ~ (WHITESPACE* ~ infix ~ WHITESPACE* ~ prefix? ~ WHITESPACE* ~ atom)*
+}
+
+infix     = _{ add | sub | mul | div | modulo | pow | eq | ne | ge | le | gt | lt | and | or | pipe_forward | pipe_reverse }
 add       = { "+" }
 sub       = { "-" }
 mul       = { "*" }
 div       = { "/" }
+modulo    = { "%" }
 pow       = { "^" }
 eq        = { "==" }
 ne        = { "!=" }
@@ -51,22 +120,15 @@ ge        = { ">=" }
 le        = { "<=" }
 and       = { "and" }
 or        = { "or" }
-prefix    = _{ increment | decrement | neg | not }
-postfix   = { invoke }
-invoke    = { "!" ~ invoke_args? }
-invoke_args = { "(" ~ expression_list? ~ ")" }
-increment = { "++" }
-decrement = { "--" }
-neg       = { "-" }
-not       = { "!" }
-primary   = _{ value | call_expression | identifier | "(" ~ expression ~ ")" }
+pipe_forward = { "|>" }
+pipe_reverse = { "<|" }
 
-call_expression = { identifier ~ "(" ~ expression_list? ~ ")" }
-expression_list = { expression ~ ("," ~ expression)* }
+call_expression = ${ identifier ~ WHITESPACE* ~ "(" ~ WHITESPACE* ~ expression_list? ~ WHITESPACE* ~ ")" }
+expression_list = { expression ~ (WHITESPACE* ~ "," ~ WHITESPACE* ~ expression)* }
 
 value = { number | string | boolean }
 
-identifier = @{ !("fn" ~ (ASCII_ALPHANUMERIC | "_" | WHITESPACE)) ~ !("if" ~ (ASCII_ALPHANUMERIC | "_" | WHITESPACE)) ~ !("else" ~ (ASCII_ALPHANUMERIC | "_" | WHITESPACE)) ~ !("elseif" ~ (ASCII_ALPHANUMERIC | "_" | WHITESPACE)) ~ !("match" ~ (ASCII_ALPHANUMERIC | "_" | WHITESPACE)) ~ !("return" ~ (ASCII_ALPHANUMERIC | "_" | WHITESPACE)) ~ !("let" ~ (ASCII_ALPHANUMERIC | "_" | WHITESPACE)) ~ !("true" ~ (ASCII_ALPHANUMERIC | "_" | WHITESPACE)) ~ !("false" ~ (ASCII_ALPHANUMERIC | "_" | WHITESPACE)) ~ !("and" ~ (ASCII_ALPHANUMERIC | "_" | WHITESPACE)) ~ !("or" ~ (ASCII_ALPHANUMERIC | "_" | WHITESPACE)) ~ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
+identifier = @{ !("fn" ~ (ASCII_ALPHANUMERIC | "_" | WHITESPACE)) ~ !("if" ~ (ASCII_ALPHANUMERIC | "_" | WHITESPACE)) ~ !("else" ~ (ASCII_ALPHANUMERIC | "_" | WHITESPACE)) ~ !("elseif" ~ (ASCII_ALPHANUMERIC | "_" | WHITESPACE)) ~ !("match" ~ (ASCII_ALPHANUMERIC | "_" | WHITESPACE)) ~ !("return" ~ (ASCII_ALPHANUMERIC | "_" | WHITESPACE)) ~ !("let" ~ (ASCII_ALPHANUMERIC | "_" | WHITESPACE)) ~ !("true" ~ (ASCII_ALPHANUMERIC | "_" | WHITESPACE)) ~ !("false" ~ (ASCII_ALPHANUMERIC | "_" | WHITESPACE)) ~ !("and" ~ (ASCII_ALPHANUMERIC | "_" | WHITESPACE)) ~ !("or" ~ (ASCII_ALPHANUMERIC | "_" | WHITESPACE)) ~ !("loop" ~ (ASCII_ALPHANUMERIC | "_" | WHITESPACE)) ~ !("while" ~ (ASCII_ALPHANUMERIC | "_" | WHITESPACE)) ~ !("for" ~ (ASCII_ALPHANUMERIC | "_" | WHITESPACE)) ~ !("in" ~ (ASCII_ALPHANUMERIC | "_" | WHITESPACE)) ~ !("break" ~ (ASCII_ALPHANUMERIC | "_" | WHITESPACE)) ~ !("continue" ~ (ASCII_ALPHANUMERIC | "_" | WHITESPACE)) ~ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
 
 number = { digit+ ~ ("." ~ digit*)? }
 string = @{ "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
@@ -77,7 +139,7 @@ false = { "false" }
 alpha = { 'a'..'z' | 'A'..'Z' }
 digit = { '0'..'9' }
 
-operator = { "+" | "-" | "*" | "/" | "=" | "!=" | ">" | "<" | ">=" | "<=" }
+operator = { "+" | "-" | "*" | "/" | "%" | "=" | "!=" | ">" | "<" | ">=" | "<=" }
 
 // Comments
 line_comment = _{ "//" ~ (!"\n" ~ ANY)* }

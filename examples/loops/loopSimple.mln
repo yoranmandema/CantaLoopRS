@@ -1,0 +1,5 @@
+loop {
+    break 5;
+
+    print("This will not be printed")!;
+}

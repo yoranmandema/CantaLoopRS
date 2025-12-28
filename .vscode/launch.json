@@ -1,0 +1,15 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug LSP Server",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/target/debug/cantaloop-lsp.exe",
+            "args": [],
+            "stopAtEntry": false,
+            "console": "externalTerminal",
+            "cwd": "${workspaceFolder}"
+        }
+    ]
+}

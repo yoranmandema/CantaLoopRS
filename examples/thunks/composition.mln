@@ -1,0 +1,17 @@
+fn add(a: num, b: num) -> num {
+    return a + b;
+}
+
+fn mul(a: num, b: num) -> num {
+    return a * b;
+}
+
+let add10 = add(10);
+
+let add5 = add(5);
+
+let mul2 = mul(2);
+
+let compose_fn = add10 |> add5 |> mul2;
+
+print(compose_fn(5)!)!;

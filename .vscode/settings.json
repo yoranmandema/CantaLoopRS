@@ -1,0 +1,31 @@
+{
+    // Configure language associations for .mln files
+    "files.associations": {
+        "*.mln": "cantaloop"
+    },
+    
+    // Editor settings for CantaLoop files
+    "[cantaloop]": {
+        "editor.defaultFormatter": null,
+        "editor.formatOnSave": false,
+        "editor.wordBasedSuggestions": "off",
+        "editor.suggest.insertMode": "replace"
+    },
+    
+    // Semantic token styling for thunks (using deprecated modifier)
+    "editor.semanticTokenColorCustomizations": {
+        "enabled": true,
+        "[*]": {
+            "rules": {
+                "function": {
+                    "modifiers": ["deprecated"],
+                    "fontStyle": "underline"
+                },
+                "variable": {
+                    "modifiers": ["deprecated"],
+                    "fontStyle": "underline"
+                }
+            }
+        }
+    }
+}

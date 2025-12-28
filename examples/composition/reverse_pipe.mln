@@ -1,0 +1,40 @@
+// Reverse pipe operator (<|) - applies functions from right to left
+// f <| g means f(g(x)), which is the same as g |> f but written differently
+
+fn add(a: num, b: num) -> num {
+    return a + b;
+}
+
+fn mul(a: num, b: num) -> num {
+    return a * b;
+}
+
+fn square(n: num) -> num {
+    return n * n;
+}
+
+// Create partially applied functions
+let add10 = add(10);
+let mul2 = mul(2);
+let square_fn = square;
+
+// Reverse pipe: apply from right to left
+// mul2 <| add10 means mul2(add10(x))
+let compose_reverse = mul2 <| add10;
+
+// When applied to 5: add10(5) = 15, then mul2(15) = 30
+print(compose_reverse(5)!)!; // Should be 30
+
+// Compare with forward pipe (same result, different direction)
+let compose_forward = add10 |> mul2;
+print(compose_forward(5)!)!; // Should also be 30
+
+// More complex reverse composition
+// square <| add10 <| mul2 means square(add10(mul2(x)))
+let complex_reverse = square <| add10 <| mul2;
+print(complex_reverse(5)!)!; // mul2(5)=10, add10(10)=20, square(20)=400
+
+// Forward version for comparison
+let complex_forward = mul2 |> add10 |> square;
+print(complex_forward(5)!)!; // Should also be 400
+

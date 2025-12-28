@@ -1,11 +1,13 @@
 fn printHelloWorld() {
-    print("Hello world!")
+    print("Hello world!")!;
 }
 
-printHelloWorld()
+printHelloWorld()!;
 
-fn printWithArgs (a) {
-    print(a)
+fn printWithArgs(a: num) -> void {
+    print(a)!;
 }
 
-printWithArgs(1)
+let printThunk = printWithArgs(1);
+
+printThunk!;

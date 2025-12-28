@@ -7,3 +7,20 @@ edition = "2021"
 lazy_static = "1.5.0"
 pest = "2.8.4"
 pest_derive = "2.8.4"
+tower-lsp = "0.20"
+lsp-types = "0.94"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.0", features = ["full"] }
+
+[profile.dev]
+opt-level = 1
+debug = 1
+incremental = true
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[[bin]]
+name = "cantaloop-lsp"
+path = "src/lsp_main.rs"

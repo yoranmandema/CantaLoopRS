@@ -1,0 +1,43 @@
+let i = 0;
+let n = 5;
+
+loop {
+    if (i >= n) {
+        break i;
+    }
+
+    i = i + 1;
+
+    print(i)!;
+}
+
+loop x = 10 {
+    if x == 0 {
+        break x;
+    }
+
+    x = x - 1;
+
+    print(x)!;
+}
+
+fn fib(n: num) -> num {
+    let a = 0;
+    let b = 1;
+    let i = 0;
+
+    loop {
+        if i >= n {
+            break;
+        }
+
+        let next = a + b;
+        a = b;
+        b = next;
+        i = i + 1;
+    }
+
+    return a;
+}
+
+print(fib(10)!)!; // Expected: 55
