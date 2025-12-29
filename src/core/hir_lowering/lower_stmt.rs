@@ -1,19 +1,20 @@
 //! Statement lowering: AST Statement → HIR Statement
-//! 
+//!
 //! This module handles lowering AST statements to HIR statements and blocks,
 //! including the main HirBuilder implementation.
 
 use std::collections::HashMap;
 
 use crate::core::ast::{
-    Argument, BinaryOp, Block, CallArgument, Expression, Literal, PostfixOp, Program, Statement, UnaryOp,
+    Argument, BinaryOp, Block, CallArgument, Expression, Literal, PostfixOp, Program, Statement,
+    UnaryOp,
 };
+use serde::Serialize;
 
 use super::{
-    HirAst, HirExpression, ValueKind, Variable, Constant, ConstantValue,
-    Function, FunctionDefinition, FunctionSignature, HirError, ImportTable, Module,
-    scopes::{ScopeId, ScopeArena, HirBlockContext},
-    ReducerType,
+    scopes::{HirBlockContext, ScopeArena, ScopeId},
+    Constant, ConstantValue, Function, FunctionDefinition, FunctionSignature, HirAst, HirError,
+    HirExpression, ImportTable, Module, ReducerType, ValueKind, Variable,
 };
 
 // Hashable key for constant deduplication
@@ -36,7 +37,7 @@ impl ConstantKey {
 }
 
 /// High-level Intermediate Representation of a statement.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub enum HirStmt {
     Assign {
         slot: u32, // VarId
@@ -75,7 +76,7 @@ pub enum HirStmt {
 }
 
 /// High-level Intermediate Representation of a block.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct HirBlock {
     #[allow(dead_code)]
     pub scope: ScopeId,
@@ -83,7 +84,7 @@ pub struct HirBlock {
 }
 
 /// Builder for converting AST to HIR.
-/// 
+///
 /// This is the main entry point for the lowering pass.
 pub struct HirBuilder {
     pub ast: HirAst,
@@ -92,9 +93,12 @@ pub struct HirBuilder {
     next_function_id: u32,
     constant_map: HashMap<ConstantKey, u32>, // Maps constant value to constant ID
     /// Maps module paths (e.g., "math.utils") to their modules
-    modules: HashMap<String, Module>,
-    /// Maps imported symbol names to function IDs (compile-time only)
-    import_table: ImportTable,
+    pub modules: HashMap<String, Module>,
+    /// Maps module name to its import table
+    module_imports: HashMap<String, ImportTable>,
+
+    /// The current module being processed
+    current_module: Option<String>,
 }
 
 impl HirBuilder {
@@ -108,21 +112,64 @@ impl HirBuilder {
         });
 
         Self {
-            ast: HirAst {
-                constants: Vec::new(),
-                blocks: Vec::new(),
-                scopes,
-                functions: std::collections::HashMap::new(),
-                import_table: HashMap::new(),
-                imported_constant_values: HashMap::new(),
-            },
+            ast: HirAst::default(),
             current_scope: root,
             next_var_id: 0,
             next_function_id: 0,
             constant_map: HashMap::new(),
             modules: HashMap::new(),
-            import_table: HashMap::new(),
+            module_imports: HashMap::new(),
+            current_module: None,
         }
+    }
+
+    pub fn take_ast(&mut self) -> HirAst {
+        std::mem::take(&mut self.ast)
+    }
+
+    pub fn set_current_module(&mut self, module: Option<String>) {
+        self.current_module = module;
+    }
+
+    /// Get the import table for the current module
+    fn get_current_imports(&self) -> Option<&ImportTable> {
+        self.current_module
+            .as_ref()
+            .and_then(|m| self.module_imports.get(m))
+    }
+
+    /// Get a mutable reference to the current module's import table
+    fn get_current_imports_mut(&mut self) -> Option<&mut ImportTable> {
+        self.current_module
+            .as_ref()
+            .and_then(|module_name| self.module_imports.get_mut(module_name))
+    }
+
+    /// Resolve an imported symbol in the current module
+    fn resolve_import_in_current_module(&self, name: &str) -> Option<u32> {
+        self.get_current_imports()
+            .and_then(|imports| imports.get(name).copied())
+    }
+
+    /// Add a symbol to the current module's import table
+    fn add_import_to_current_module(&mut self, name: String, id: u32) -> Result<(), HirError> {
+        let module_name = self.current_module.clone().ok_or_else(|| {
+            HirError::TypeError("Cannot import symbols without a module declaration".to_string())
+        })?;
+
+        self.module_imports
+            .entry(module_name.clone())
+            .or_insert_with(HashMap::new)
+            .insert(name.clone(), id);
+
+        // Also update the HirAst for LSP access
+        self.ast
+            .module_imports
+            .entry(module_name)
+            .or_insert_with(HashMap::new)
+            .insert(name, id);
+
+        Ok(())
     }
 
     pub fn resolve_var(&self, name: &str) -> Option<u32> {
@@ -450,11 +497,13 @@ impl HirBuilder {
         }
     }
 
-
-    fn infer_partial_call_kind(&self, func_id: &u32, bound: &Vec<Option<HirExpression>>) -> ValueKind {
+    fn infer_partial_call_kind(
+        &self,
+        func_id: &u32,
+        bound: &Vec<Option<HirExpression>>,
+    ) -> ValueKind {
         if let Some(func) = self.ast.functions.get(func_id) {
-            let return_type_str =
-                Self::format_value_kind_for_type(&func.signature.return_type);
+            let return_type_str = Self::format_value_kind_for_type(&func.signature.return_type);
 
             // Find which parameters are holes (unbound)
             let mut hole_types = Vec::new();
@@ -491,6 +540,7 @@ impl HirBuilder {
         match expr {
             HirExpression::Number(_) => ValueKind::Number,
             HirExpression::String(_) => ValueKind::String,
+            HirExpression::Boolean(_) => ValueKind::Boolean,
             HirExpression::Constant(id) => self
                 .ast
                 .constants
@@ -520,7 +570,7 @@ impl HirBuilder {
                 self.infer_compose_thunk_kind(first, second)
             }
             HirExpression::PartialCall { func_id, bound } => {
-               self.infer_partial_call_kind(func_id, bound)
+                self.infer_partial_call_kind(func_id, bound)
             }
             HirExpression::Loop { break_slot, .. } => {
                 // Loop expression returns the type of the break value
@@ -559,7 +609,11 @@ impl HirBuilder {
                     _ => ValueKind::Array(Box::new(ValueKind::Unknown)),
                 }
             }
-            HirExpression::Reducer { reducer_type, reducer_args, .. } => {
+            HirExpression::Reducer {
+                reducer_type,
+                reducer_args,
+                ..
+            } => {
                 // Reducer returns the accumulator type
                 match reducer_type {
                     ReducerType::Sum => ValueKind::Number, // sum always returns number
@@ -576,7 +630,6 @@ impl HirBuilder {
         }
     }
 
-
     fn resolve_const(&self, name: &str) -> Option<u32> {
         // Only resolve data constants (not functions)
         self.ast
@@ -588,42 +641,38 @@ impl HirBuilder {
     }
 
     pub fn resolve_function(&self, name: &str) -> Option<u32> {
-        // Look up function by name in the functions registry
-        // But if the function belongs to a module, only allow resolution if it's imported
-        if let Some(func_id) = self.ast
-            .functions
-            .iter()
-            .find(|(_, func)| func.name == name)
-            .map(|(&id, _)| id) {
-            // Check if this function belongs to a module by checking if it's in any module's function map
-            // Also find which module it belongs to
-            let mut belongs_to_module: Option<&str> = None;
-            for (module_path, module) in &self.modules {
-                if module.functions.values().any(|&id| id == func_id) {
-                    belongs_to_module = Some(module_path);
-                    break;
-                }
+        // 1. Imports first
+        if let Some(imported_id) = self.resolve_import_in_current_module(name) {
+            if self.ast.functions.contains_key(&imported_id) {
+                return Some(imported_id);
             }
-            
-            if belongs_to_module.is_some() {
-                // This is a module function - only allow resolution if it's imported
-                // (Functions must be explicitly imported to be accessible from outside the module)
-                if self.import_table.contains_key(name) {
-                    Some(func_id)
-                } else {
-                    // Check if this function was just declared (within-module access)
-                    // We can detect this by checking if the function was recently added
-                    // For now, we'll be conservative and require import
-                    // TODO: Track module context to allow within-module access
-                    None
-                }
-            } else {
-                // Not a module function (e.g., built-in or local function) - allow resolution
-                Some(func_id)
-            }
-        } else {
-            None
         }
+    
+        // 2. Find function by name
+        let (func_id, _) = self.ast.functions.iter()
+            .find(|(_, f)| f.name == name)?;
+    
+        // 3. Check module ownership
+        if let Some(current_module) = &self.current_module {
+            // If function belongs to current module → allowed
+            if let Some(module) = self.modules.get(current_module) {
+                if module.functions.values().any(|&id| id == *func_id) {
+                    return Some(*func_id);
+                }
+            }
+        }
+    
+        // 4. Otherwise, function must be imported
+        let belongs_to_some_module = self.modules.values().any(|module| {
+            module.functions.values().any(|&id| id == *func_id)
+        });
+    
+        if belongs_to_some_module {
+            return None;
+        }
+    
+        // 5. Local or built-in function
+        Some(*func_id)
     }
 
     pub fn register_builtin_function(&mut self, name: &str, signature: FunctionSignature, id: u32) {
@@ -647,41 +696,72 @@ impl HirBuilder {
 
         self.ast.functions.insert(id, function);
     }
-    
-    /// Add a symbol to the import table (for within-module access)
+
+    /// Add a symbol to the current module's import table
+    /// This replaces the old add_to_import_table method
     pub fn add_to_import_table(&mut self, name: String, id: u32) {
-        self.import_table.insert(name.clone(), id);
-        self.ast.import_table.insert(name, id);
+        // This method should now be scoped to the current module
+        if let Err(e) = self.add_import_to_current_module(name, id) {
+            // Log error or handle appropriately
+            eprintln!("Warning: Failed to add import: {:?}", e);
+        }
     }
 
     /// Register a module that can be imported.
-    /// 
+    ///
     /// # Arguments
     /// * `path` - Dot-separated module path (e.g., "math.utils")
     /// * `functions` - Map of function names to their function IDs
     /// * `constants` - Map of constant names to their constant IDs
-    pub fn register_module(&mut self, path: &str, functions: HashMap<String, u32>, constants: HashMap<String, u32>) {
-        self.modules.insert(path.to_string(), Module { functions, constants });
+    pub fn register_module(
+        &mut self,
+        path: &str,
+        functions: HashMap<String, u32>,
+        constants: HashMap<String, u32>,
+    ) {
+        self.modules.insert(
+            path.to_string(),
+            Module {
+                functions,
+                constants,
+            },
+        );
     }
 
     /// Copy all modules from another HirBuilder.
     /// Used when creating a fresh HirBuilder for LSP compilation.
     pub fn copy_modules_from(&mut self, other: &HirBuilder) {
+        // Copy module definitions
         for (path, module) in &other.modules {
-            self.modules.insert(path.clone(), Module {
-                functions: module.functions.clone(),
-                constants: module.constants.clone(),
-            });
+            self.modules.insert(
+                path.clone(),
+                Module {
+                    functions: module.functions.clone(),
+                    constants: module.constants.clone(),
+                },
+            );
+        }
+
+        // NEW: Also copy module imports
+        for (module_name, imports) in &other.module_imports {
+            self.module_imports
+                .insert(module_name.clone(), imports.clone());
         }
     }
 
-    /// Resolve an import path and selector to function IDs.
-    /// Returns a map of imported symbol names to function IDs.
-    /// Note: Constants are also imported as "function IDs" (actually variable IDs) for compatibility.
-    fn resolve_import(&self, path: &[String], selector: &crate::core::ast::ImportSelector) -> Result<ImportTable, HirError> {
+    /// Resolve an import path and selector to function IDs or constant IDs.
+    /// Returns a map of imported symbol names to IDs.
+    /// Functions return function IDs, constants return constant IDs.
+    fn resolve_import(
+        &self,
+        path: &[String],
+        selector: &crate::core::ast::ImportSelector,
+    ) -> Result<ImportTable, HirError> {
         let module_path = path.join(".");
-        
-        let module = self.modules.get(&module_path)
+
+        let module = self
+            .modules
+            .get(&module_path)
             .ok_or_else(|| HirError::TypeError(format!("Module '{}' not found", module_path)))?;
 
         let mut imports = ImportTable::new();
@@ -692,10 +772,13 @@ impl HirBuilder {
                 if let Some(func_id) = module.functions.get(name) {
                     imports.insert(name.clone(), *func_id);
                 } else if let Some(const_id) = module.constants.get(name) {
-                    // Constants are stored as variable IDs, import them as such
+                    // Constants are stored as constant IDs
                     imports.insert(name.clone(), *const_id);
                 } else {
-                    return Err(HirError::TypeError(format!("Function or constant '{}' not found in module '{}'", name, module_path)));
+                    return Err(HirError::TypeError(format!(
+                        "Function or constant '{}' not found in module '{}'",
+                        name, module_path
+                    )));
                 }
             }
             crate::core::ast::ImportSelector::Multiple(names) => {
@@ -707,7 +790,10 @@ impl HirBuilder {
                         // Constants are stored as variable IDs, import them as such
                         imports.insert(name.clone(), *const_id);
                     } else {
-                        return Err(HirError::TypeError(format!("Function or constant '{}' not found in module '{}'", name, module_path)));
+                        return Err(HirError::TypeError(format!(
+                            "Function or constant '{}' not found in module '{}'",
+                            name, module_path
+                        )));
                     }
                 }
             }
@@ -726,7 +812,7 @@ impl HirBuilder {
     }
 
     /// Parse a type string into a structured ValueKind
-    /// Supports: simple types (num, str, bool), array types ([num], [string]), 
+    /// Supports: simple types (num, str, bool), array types ([num], [string]),
     /// function types (num -> num), and thunk types (num ~> num)
     fn parse_type_string(&self, type_str: &str) -> ValueKind {
         let trimmed = type_str.trim();
@@ -1063,27 +1149,34 @@ impl HirBuilder {
         }
     }
 
-    pub fn build(&mut self, program: Program) -> Result<&HirAst, HirError> {
+    pub fn finalize(self) -> HirAst {
+        self.ast
+    }
+
+    pub fn build_append(&mut self, program: Program) -> Result<(), HirError> {
+        debug_assert!(
+            self.current_module.is_some(),
+            "build_append called without current_module set"
+        );
+
         for block in program.blocks {
             let hir_block = self.process_block(block)?;
-
             self.ast.blocks.push(hir_block);
         }
-
-        Ok(&self.ast)
+        Ok(())
     }
 
-    fn intern_constant(&mut self, literal: Literal) -> u32 {
-        // Convert literal to constant value
-        let value = match &literal {
-            Literal::String(s) => ConstantValue::String(s.clone()),
-            Literal::Number(n) => ConstantValue::Number(*n),
-            Literal::Boolean(n) => ConstantValue::Boolean(*n),
-        };
+    // fn intern_constant(&mut self, literal: Literal) -> u32 {
+    //     // Convert literal to constant value
+    //     let value = match &literal {
+    //         Literal::String(s) => ConstantValue::String(s.clone()),
+    //         Literal::Number(n) => ConstantValue::Number(*n),
+    //         Literal::Boolean(n) => ConstantValue::Boolean(*n),
+    //     };
 
-        self.intern_constant_value(value)
-    }
-    
+    //     self.intern_constant_value(value)
+    // }
+
     /// Intern a constant value (for constant folding and constant declarations).
     fn intern_constant_value(&mut self, value: ConstantValue) -> u32 {
         // Create hashable key for deduplication
@@ -1223,20 +1316,23 @@ impl HirBuilder {
         &mut self,
         identifier: String,
         expression: Expression,
+        pub_visibility: bool,
     ) -> Result<HirStmt, HirError> {
         // Evaluate the expression at compile time
         let constant_value = self.compile_time_evaluate(&expression)?;
-        
+
         // Determine the kind from the value
         let kind = match &constant_value {
             ConstantValue::Number(_) => ValueKind::Number,
             ConstantValue::String(_) => ValueKind::String,
             ConstantValue::Boolean(_) => ValueKind::Boolean,
-            ConstantValue::None => return Err(HirError::TypeError(
-                "Constant must have a compile-time evaluable value".to_string()
-            )),
+            ConstantValue::None => {
+                return Err(HirError::TypeError(
+                    "Constant must have a compile-time evaluable value".to_string(),
+                ))
+            }
         };
-        
+
         // Variable must not already exist in current scope
         if self.var_exists_in_current_scope(&identifier) {
             return Err(HirError::VariableAlreadyDeclared(format!(
@@ -1244,11 +1340,11 @@ impl HirBuilder {
                 identifier
             )));
         }
-        
+
         // Create a constant entry
         let const_id = self.ast.constants.len() as u32;
         let key = ConstantKey::from_constant_value(&constant_value);
-        
+
         // Check if constant already exists (deduplication)
         let const_id = if let Some(&existing_id) = self.constant_map.get(&key) {
             existing_id
@@ -1262,16 +1358,31 @@ impl HirBuilder {
             self.constant_map.insert(key, const_id);
             const_id
         };
-        
+
         // Create a variable for the constant (so it can be referenced)
         let slot = self.init_var(&identifier, kind);
-        
+
+        // Register pub constants in the module registry
+        // Store constant ID (not variable slot ID) - imports need the constant, not the storage
+        if pub_visibility {
+            if let Some(module_name) = &self.current_module {
+                self.modules
+                    .entry(module_name.clone())
+                    .or_insert_with(|| Module {
+                        functions: HashMap::new(),
+                        constants: HashMap::new(),
+                    })
+                    .constants
+                    .insert(identifier.clone(), const_id);
+            }
+        }
+
         // Store the constant ID in the variable name for lookup
         // Actually, we need to track which variables are constants
         // For now, we'll use the constant directly in the HIR expression
-        Ok(HirStmt::Assign { 
-            slot, 
-            value: HirExpression::Constant(const_id) 
+        Ok(HirStmt::Assign {
+            slot,
+            value: HirExpression::Constant(const_id),
         })
     }
 
@@ -1325,7 +1436,7 @@ impl HirBuilder {
             }
         }
     }
-    
+
     /// Evaluate a binary operation on constant values.
     fn evaluate_binary_op(
         &self,
@@ -1334,162 +1445,138 @@ impl HirBuilder {
         rhs: &ConstantValue,
     ) -> Result<ConstantValue, HirError> {
         match op {
-            BinaryOp::Add => {
-                match (lhs, rhs) {
-                    (ConstantValue::Number(a), ConstantValue::Number(b)) => {
-                        Ok(ConstantValue::Number(a + b))
-                    }
-                    (ConstantValue::String(a), ConstantValue::String(b)) => {
-                        Ok(ConstantValue::String(format!("{}{}", a, b)))
-                    }
-                    (ConstantValue::String(a), ConstantValue::Number(b)) => {
-                        Ok(ConstantValue::String(format!("{}{}", a, b)))
-                    }
-                    (ConstantValue::Number(a), ConstantValue::String(b)) => {
-                        Ok(ConstantValue::String(format!("{}{}", a, b)))
-                    }
-                    _ => Err(HirError::TypeError(format!(
-                        "Invalid operands for addition: {:?} and {:?}",
-                        lhs, rhs
-                    ))),
+            BinaryOp::Add => match (lhs, rhs) {
+                (ConstantValue::Number(a), ConstantValue::Number(b)) => {
+                    Ok(ConstantValue::Number(a + b))
                 }
-            }
-            BinaryOp::Sub => {
-                match (lhs, rhs) {
-                    (ConstantValue::Number(a), ConstantValue::Number(b)) => {
-                        Ok(ConstantValue::Number(a - b))
-                    }
-                    _ => Err(HirError::TypeError(format!(
-                        "Subtraction requires number operands, got {:?} and {:?}",
-                        lhs, rhs
-                    ))),
+                (ConstantValue::String(a), ConstantValue::String(b)) => {
+                    Ok(ConstantValue::String(format!("{}{}", a, b)))
                 }
-            }
-            BinaryOp::Mul => {
-                match (lhs, rhs) {
-                    (ConstantValue::Number(a), ConstantValue::Number(b)) => {
-                        Ok(ConstantValue::Number(a * b))
-                    }
-                    _ => Err(HirError::TypeError(format!(
-                        "Multiplication requires number operands, got {:?} and {:?}",
-                        lhs, rhs
-                    ))),
+                (ConstantValue::String(a), ConstantValue::Number(b)) => {
+                    Ok(ConstantValue::String(format!("{}{}", a, b)))
                 }
-            }
-            BinaryOp::Div => {
-                match (lhs, rhs) {
-                    (ConstantValue::Number(a), ConstantValue::Number(b)) => {
-                        if *b == 0.0 {
-                            return Err(HirError::TypeError("Division by zero in constant expression".to_string()));
-                        }
-                        Ok(ConstantValue::Number(a / b))
-                    }
-                    _ => Err(HirError::TypeError(format!(
-                        "Division requires number operands, got {:?} and {:?}",
-                        lhs, rhs
-                    ))),
+                (ConstantValue::Number(a), ConstantValue::String(b)) => {
+                    Ok(ConstantValue::String(format!("{}{}", a, b)))
                 }
-            }
-            BinaryOp::Mod => {
-                match (lhs, rhs) {
-                    (ConstantValue::Number(a), ConstantValue::Number(b)) => {
-                        if *b == 0.0 {
-                            return Err(HirError::TypeError("Modulo by zero in constant expression".to_string()));
-                        }
-                        Ok(ConstantValue::Number(a % b))
-                    }
-                    _ => Err(HirError::TypeError(format!(
-                        "Modulo requires number operands, got {:?} and {:?}",
-                        lhs, rhs
-                    ))),
+                _ => Err(HirError::TypeError(format!(
+                    "Invalid operands for addition: {:?} and {:?}",
+                    lhs, rhs
+                ))),
+            },
+            BinaryOp::Sub => match (lhs, rhs) {
+                (ConstantValue::Number(a), ConstantValue::Number(b)) => {
+                    Ok(ConstantValue::Number(a - b))
                 }
-            }
-            BinaryOp::Pow => {
-                match (lhs, rhs) {
-                    (ConstantValue::Number(a), ConstantValue::Number(b)) => {
-                        Ok(ConstantValue::Number(a.powf(*b)))
-                    }
-                    _ => Err(HirError::TypeError(format!(
-                        "Power requires number operands, got {:?} and {:?}",
-                        lhs, rhs
-                    ))),
+                _ => Err(HirError::TypeError(format!(
+                    "Subtraction requires number operands, got {:?} and {:?}",
+                    lhs, rhs
+                ))),
+            },
+            BinaryOp::Mul => match (lhs, rhs) {
+                (ConstantValue::Number(a), ConstantValue::Number(b)) => {
+                    Ok(ConstantValue::Number(a * b))
                 }
-            }
-            BinaryOp::Eq => {
-                Ok(ConstantValue::Boolean(lhs == rhs))
-            }
-            BinaryOp::Ne => {
-                Ok(ConstantValue::Boolean(lhs != rhs))
-            }
-            BinaryOp::Gt => {
-                match (lhs, rhs) {
-                    (ConstantValue::Number(a), ConstantValue::Number(b)) => {
-                        Ok(ConstantValue::Boolean(a > b))
+                _ => Err(HirError::TypeError(format!(
+                    "Multiplication requires number operands, got {:?} and {:?}",
+                    lhs, rhs
+                ))),
+            },
+            BinaryOp::Div => match (lhs, rhs) {
+                (ConstantValue::Number(a), ConstantValue::Number(b)) => {
+                    if *b == 0.0 {
+                        return Err(HirError::TypeError(
+                            "Division by zero in constant expression".to_string(),
+                        ));
                     }
-                    _ => Err(HirError::TypeError(format!(
-                        "Comparison requires number operands, got {:?} and {:?}",
-                        lhs, rhs
-                    ))),
+                    Ok(ConstantValue::Number(a / b))
                 }
-            }
-            BinaryOp::Lt => {
-                match (lhs, rhs) {
-                    (ConstantValue::Number(a), ConstantValue::Number(b)) => {
-                        Ok(ConstantValue::Boolean(a < b))
+                _ => Err(HirError::TypeError(format!(
+                    "Division requires number operands, got {:?} and {:?}",
+                    lhs, rhs
+                ))),
+            },
+            BinaryOp::Mod => match (lhs, rhs) {
+                (ConstantValue::Number(a), ConstantValue::Number(b)) => {
+                    if *b == 0.0 {
+                        return Err(HirError::TypeError(
+                            "Modulo by zero in constant expression".to_string(),
+                        ));
                     }
-                    _ => Err(HirError::TypeError(format!(
-                        "Comparison requires number operands, got {:?} and {:?}",
-                        lhs, rhs
-                    ))),
+                    Ok(ConstantValue::Number(a % b))
                 }
-            }
-            BinaryOp::Ge => {
-                match (lhs, rhs) {
-                    (ConstantValue::Number(a), ConstantValue::Number(b)) => {
-                        Ok(ConstantValue::Boolean(a >= b))
-                    }
-                    _ => Err(HirError::TypeError(format!(
-                        "Comparison requires number operands, got {:?} and {:?}",
-                        lhs, rhs
-                    ))),
+                _ => Err(HirError::TypeError(format!(
+                    "Modulo requires number operands, got {:?} and {:?}",
+                    lhs, rhs
+                ))),
+            },
+            BinaryOp::Pow => match (lhs, rhs) {
+                (ConstantValue::Number(a), ConstantValue::Number(b)) => {
+                    Ok(ConstantValue::Number(a.powf(*b)))
                 }
-            }
-            BinaryOp::Le => {
-                match (lhs, rhs) {
-                    (ConstantValue::Number(a), ConstantValue::Number(b)) => {
-                        Ok(ConstantValue::Boolean(a <= b))
-                    }
-                    _ => Err(HirError::TypeError(format!(
-                        "Comparison requires number operands, got {:?} and {:?}",
-                        lhs, rhs
-                    ))),
+                _ => Err(HirError::TypeError(format!(
+                    "Power requires number operands, got {:?} and {:?}",
+                    lhs, rhs
+                ))),
+            },
+            BinaryOp::Eq => Ok(ConstantValue::Boolean(lhs == rhs)),
+            BinaryOp::Ne => Ok(ConstantValue::Boolean(lhs != rhs)),
+            BinaryOp::Gt => match (lhs, rhs) {
+                (ConstantValue::Number(a), ConstantValue::Number(b)) => {
+                    Ok(ConstantValue::Boolean(a > b))
                 }
-            }
-            BinaryOp::And => {
-                match (lhs, rhs) {
-                    (ConstantValue::Boolean(a), ConstantValue::Boolean(b)) => {
-                        Ok(ConstantValue::Boolean(*a && *b))
-                    }
-                    _ => Err(HirError::TypeError(format!(
-                        "Logical AND requires boolean operands, got {:?} and {:?}",
-                        lhs, rhs
-                    ))),
+                _ => Err(HirError::TypeError(format!(
+                    "Comparison requires number operands, got {:?} and {:?}",
+                    lhs, rhs
+                ))),
+            },
+            BinaryOp::Lt => match (lhs, rhs) {
+                (ConstantValue::Number(a), ConstantValue::Number(b)) => {
+                    Ok(ConstantValue::Boolean(a < b))
                 }
-            }
-            BinaryOp::Or => {
-                match (lhs, rhs) {
-                    (ConstantValue::Boolean(a), ConstantValue::Boolean(b)) => {
-                        Ok(ConstantValue::Boolean(*a || *b))
-                    }
-                    _ => Err(HirError::TypeError(format!(
-                        "Logical OR requires boolean operands, got {:?} and {:?}",
-                        lhs, rhs
-                    ))),
+                _ => Err(HirError::TypeError(format!(
+                    "Comparison requires number operands, got {:?} and {:?}",
+                    lhs, rhs
+                ))),
+            },
+            BinaryOp::Ge => match (lhs, rhs) {
+                (ConstantValue::Number(a), ConstantValue::Number(b)) => {
+                    Ok(ConstantValue::Boolean(a >= b))
                 }
-            }
+                _ => Err(HirError::TypeError(format!(
+                    "Comparison requires number operands, got {:?} and {:?}",
+                    lhs, rhs
+                ))),
+            },
+            BinaryOp::Le => match (lhs, rhs) {
+                (ConstantValue::Number(a), ConstantValue::Number(b)) => {
+                    Ok(ConstantValue::Boolean(a <= b))
+                }
+                _ => Err(HirError::TypeError(format!(
+                    "Comparison requires number operands, got {:?} and {:?}",
+                    lhs, rhs
+                ))),
+            },
+            BinaryOp::And => match (lhs, rhs) {
+                (ConstantValue::Boolean(a), ConstantValue::Boolean(b)) => {
+                    Ok(ConstantValue::Boolean(*a && *b))
+                }
+                _ => Err(HirError::TypeError(format!(
+                    "Logical AND requires boolean operands, got {:?} and {:?}",
+                    lhs, rhs
+                ))),
+            },
+            BinaryOp::Or => match (lhs, rhs) {
+                (ConstantValue::Boolean(a), ConstantValue::Boolean(b)) => {
+                    Ok(ConstantValue::Boolean(*a || *b))
+                }
+                _ => Err(HirError::TypeError(format!(
+                    "Logical OR requires boolean operands, got {:?} and {:?}",
+                    lhs, rhs
+                ))),
+            },
         }
     }
-    
+
     /// Evaluate a unary operation on a constant value.
     fn evaluate_unary_op(
         &self,
@@ -1497,29 +1584,32 @@ impl HirBuilder {
         rhs: &ConstantValue,
     ) -> Result<ConstantValue, HirError> {
         match op {
-            UnaryOp::Neg => {
-                match rhs {
-                    ConstantValue::Number(n) => Ok(ConstantValue::Number(-n)),
-                    _ => Err(HirError::TypeError(format!(
-                        "Negation requires number operand, got {:?}",
-                        rhs
-                    ))),
-                }
-            }
-            UnaryOp::Not => {
-                match rhs {
-                    ConstantValue::Boolean(b) => Ok(ConstantValue::Boolean(!b)),
-                    _ => Err(HirError::TypeError(format!(
-                        "Logical NOT requires boolean operand, got {:?}",
-                        rhs
-                    ))),
-                }
-            }
-            UnaryOp::Increment | UnaryOp::Decrement => {
-                Err(HirError::TypeError(format!(
-                    "Increment/decrement operations are not allowed in constant expressions"
-                )))
-            }
+            UnaryOp::Neg => match rhs {
+                ConstantValue::Number(n) => Ok(ConstantValue::Number(-n)),
+                _ => Err(HirError::TypeError(format!(
+                    "Negation requires number operand, got {:?}",
+                    rhs
+                ))),
+            },
+            UnaryOp::Not => match rhs {
+                ConstantValue::Boolean(b) => Ok(ConstantValue::Boolean(!b)),
+                _ => Err(HirError::TypeError(format!(
+                    "Logical NOT requires boolean operand, got {:?}",
+                    rhs
+                ))),
+            },
+            UnaryOp::Increment | UnaryOp::Decrement => Err(HirError::TypeError(format!(
+                "Increment/decrement operations are not allowed in constant expressions"
+            ))),
+        }
+    }
+
+    /// Check if an expression is a simple literal (possibly wrapped in groups)
+    fn is_simple_literal(expr: &Expression) -> Option<&Literal> {
+        match expr {
+            Expression::Literal(lit) => Some(lit),
+            Expression::Group(inner) => Self::is_simple_literal(inner),
+            _ => None,
         }
     }
 
@@ -1533,14 +1623,26 @@ impl HirBuilder {
     ) -> Result<HirStmt, HirError> {
         // Try to evaluate the expression at compile time (constant folding)
         let expr = if let Ok(constant_value) = self.compile_time_evaluate(&expression) {
-            // Expression can be evaluated at compile time - fold it
-            let const_id = self.intern_constant_value(constant_value);
-            HirExpression::Constant(const_id)
+            // Expression can be evaluated at compile time
+            // For simple literals, keep them as direct HIR expressions (Number/String/Boolean)
+            // Only use Constant for complex expressions (like 2+3 or const references)
+            if let Some(literal) = Self::is_simple_literal(&expression) {
+                // Simple literal - convert directly to HIR expression
+                match literal {
+                    Literal::Number(n) => HirExpression::Number(*n),
+                    Literal::String(s) => HirExpression::String(s.clone()),
+                    Literal::Boolean(b) => HirExpression::Boolean(*b),
+                }
+            } else {
+                // Complex constant expression - intern it
+                let const_id = self.intern_constant_value(constant_value);
+                HirExpression::Constant(const_id)
+            }
         } else {
             // Expression cannot be evaluated at compile time - process normally
             self.process_expression(expression)?
         };
-        
+
         let actual_kind = self.infer_variable_kind(&expr);
 
         // If type annotation is provided, use it and check compatibility
@@ -1665,6 +1767,7 @@ impl HirBuilder {
         arguments: Vec<Argument>,
         return_type: Option<String>,
         body: Block,
+        pub_visibility: bool,
     ) -> Result<HirStmt, HirError> {
         // Parse argument types
         let mut param_types = Vec::new();
@@ -1731,6 +1834,20 @@ impl HirBuilder {
 
         self.ast.functions.insert(func_id, function);
 
+        // Register pub functions in the module registry
+        if pub_visibility {
+            if let Some(module_name) = &self.current_module {
+                self.modules
+                    .entry(module_name.clone())
+                    .or_insert_with(|| Module {
+                        functions: HashMap::new(),
+                        constants: HashMap::new(),
+                    })
+                    .functions
+                    .insert(identifier.clone(), func_id);
+            }
+        }
+
         // Process the function body (now that the function is registered, recursive calls will work)
         let func_body = self.process_block(body)?;
 
@@ -1747,10 +1864,7 @@ impl HirBuilder {
     }
 
     /// Process a return statement
-    fn process_return_statement(
-        &mut self,
-        expression: Expression,
-    ) -> Result<HirStmt, HirError> {
+    fn process_return_statement(&mut self, expression: Expression) -> Result<HirStmt, HirError> {
         let expr = self.process_expression(expression)?;
         Ok(HirStmt::Return { value: expr })
     }
@@ -1955,8 +2069,8 @@ impl HirBuilder {
     fn process_statement(&mut self, statement: Statement) -> Result<HirStmt, HirError> {
         match statement {
             Statement::Mod { identifier: _ } => {
-                // Module declarations are handled at the project level, not during semantic analysis
-                // They just mark the module name for this file
+                // Module context is already set by the engine before build_append()
+                // mod declarations do not participate in HIR lowering
                 Ok(HirStmt::Nop)
             }
             Statement::Let {
@@ -1968,10 +2082,10 @@ impl HirBuilder {
             Statement::Const {
                 identifier,
                 expression,
-                pub_visibility: _,
+                pub_visibility,
             } => {
                 // Constants must be compile-time evaluable
-                self.process_const_statement(identifier, expression)
+                self.process_const_statement(identifier, expression, pub_visibility)
             }
             Statement::Assign {
                 identifier,
@@ -1985,9 +2099,7 @@ impl HirBuilder {
                 identifier,
                 expression,
             } => self.process_assign_increment_statement(identifier, expression),
-            Statement::If { arms, else_block } => {
-                self.process_if_statement(arms, else_block)
-            }
+            Statement::If { arms, else_block } => self.process_if_statement(arms, else_block),
             Statement::Match { expression, cases } => {
                 self.process_match_statement(expression, cases)
             }
@@ -1996,39 +2108,59 @@ impl HirBuilder {
                 arguments,
                 return_type,
                 body,
-                pub_visibility: _,
-            } => self.process_function_declaration_statement(identifier, arguments, return_type, body),
+                pub_visibility,
+            } => self.process_function_declaration_statement(
+                identifier,
+                arguments,
+                return_type,
+                body,
+                pub_visibility,
+            ),
             Statement::Return { expression } => self.process_return_statement(expression),
-            Statement::While { condition, body } => {
-                self.process_while_statement(condition, body)
-            }
+            Statement::While { condition, body } => self.process_while_statement(condition, body),
             Statement::For {
                 var_name,
                 start,
                 end,
                 body,
             } => self.process_for_statement(var_name, start, end, body),
-            Statement::Loop { init_vars, body } => {
-                self.process_loop_statement(init_vars, body)
-            }
+            Statement::Loop { init_vars, body } => self.process_loop_statement(init_vars, body),
             Statement::Break { expression } => self.process_break_statement(expression),
             Statement::Continue => self.process_continue_statement(),
-            Statement::Expression(expression) => {
-                self.process_expression_statement(expression)
-            }
+            Statement::Expression(expression) => self.process_expression_statement(expression),
             Statement::Use { path, selector } => {
-                // Process imports at compile-time: resolve symbols and add to import table
-                let imports = self.resolve_import(&path, &selector)?;
-                // Merge imports into the import table (both in HirBuilder and HirAst)
-                for (name, func_id) in imports {
-                    if self.import_table.contains_key(&name) {
-                        return Err(HirError::TypeError(format!("Symbol '{}' already imported", name)));
-                    }
-                    self.import_table.insert(name.clone(), func_id);
-                    // Also store in HirAst for LSP access
-                    self.ast.import_table.insert(name, func_id);
+                // Ensure we're inside a module
+                if self.current_module.is_none() {
+                    // If no module declared yet, treat as an implicit default module
+                    // This allows standalone files to work
+                    self.current_module = Some("__main__".to_string());
+                    self.module_imports
+                        .insert("__main__".to_string(), HashMap::new());
+                    self.ast
+                        .module_imports
+                        .insert("__main__".to_string(), HashMap::new());
                 }
-                // Use statements don't generate any HIR statements (compile-time only)
+
+                let imports = self.resolve_import(&path, &selector)?;
+
+                for (name, id) in imports {
+                    // Check for duplicate imports within THIS module only
+                    if let Some(existing_imports) = self.get_current_imports() {
+                        if existing_imports.contains_key(&name) {
+                            return Err(HirError::TypeError(format!(
+                                "Symbol '{}' already imported in module '{}'",
+                                name,
+                                self.current_module.as_ref().unwrap()
+                            )));
+                        }
+                    }
+
+                    // No constant copying, no searching, no reconstruction needed
+                    // The ID from resolve_import is already a constant ID (for constants)
+                    // or function ID (for functions) - both are valid import IDs
+                    self.add_import_to_current_module(name, id)?;
+                }
+
                 Ok(HirStmt::Nop)
             }
         }
@@ -2056,7 +2188,29 @@ impl HirBuilder {
         identifier: String,
         args: Option<Vec<Expression>>,
     ) -> Result<HirExpression, HirError> {
-        // Try to resolve as variable first (for thunks/PreparedCall stored in variables)
+        // Try to resolve as imported symbol first (module-scoped)
+        if let Some(imported_id) = self.resolve_import_in_current_module(&identifier) {
+            // Check if it's a variable (thunk)
+            if self
+                .ast
+                .scopes
+                .scopes
+                .iter()
+                .any(|scope| scope.vars.iter().any(|v| v.id == imported_id))
+            {
+                let processed_args = self.process_invoke_args(args)?;
+                return Ok(HirExpression::PostfixInvoke {
+                    operand: Box::new(HirExpression::Identifier(imported_id)),
+                    args: if processed_args.is_empty() {
+                        None
+                    } else {
+                        Some(processed_args)
+                    },
+                });
+            }
+        }
+
+        // Try to resolve as variable (for thunks stored in variables)
         if let Some(var_id) = self.resolve_var_aggressive(&identifier) {
             let processed_args = self.process_invoke_args(args)?;
             return Ok(HirExpression::PostfixInvoke {
@@ -2069,21 +2223,8 @@ impl HirBuilder {
             });
         }
 
-        // Double-check: if it exists as a variable in current scope, prefer that
-        if let Some(var_id) = self.resolve_var(&identifier) {
-            let processed_args = self.process_invoke_args(args)?;
-            return Ok(HirExpression::PostfixInvoke {
-                operand: Box::new(HirExpression::Identifier(var_id)),
-                args: if processed_args.is_empty() {
-                    None
-                } else {
-                    Some(processed_args)
-                },
-            });
-        }
-
-        // TYPE CHECKING: PostfixInvoke with ! operator MUST be a thunk variable, not a function
-        if let Some(_function_id) = self.resolve_function(&identifier) {
+        // Check if it's a function (should error - can't use ! on functions)
+        if self.resolve_function(&identifier).is_some() {
             return Err(HirError::TypeError(format!(
                 "Cannot use thunk invocation syntax '{}!' on a function. Use '{}' with parentheses to call the function.",
                 identifier, identifier
@@ -2218,12 +2359,21 @@ impl HirBuilder {
     }
 
     /// Process a literal expression
-    fn process_literal_expression(
-        &mut self,
-        lit: Literal,
-    ) -> Result<HirExpression, HirError> {
-        let cid = self.intern_constant(lit);
-        Ok(HirExpression::Constant(cid))
+    fn process_literal_expression(&mut self, lit: Literal) -> Result<HirExpression, HirError> {
+        return match lit {
+            Literal::String(s) => {
+                Ok(HirExpression::String(s.clone()))
+            }
+            Literal::Number(n) => {
+                Ok(HirExpression::Number(n))
+            }
+            Literal::Boolean(b) => {
+                Ok(HirExpression::Boolean(b))
+            }
+        }
+
+        // let cid = self.intern_constant(lit);
+        // Ok(HirExpression::Constant(cid))
     }
 
     /// Process a member access expression (e.g., utils.add)
@@ -2236,16 +2386,19 @@ impl HirBuilder {
         let module_name = match object {
             Expression::Identifier(name) => name,
             _ => {
-                return Err(HirError::TypeError(
-                    format!("Member access object must be an identifier, got: {:?}", object)
-                ));
+                return Err(HirError::TypeError(format!(
+                    "Member access object must be an identifier, got: {:?}",
+                    object
+                )));
             }
         };
-        
+
         // Look up the module
-        let module = self.modules.get(&module_name)
+        let module = self
+            .modules
+            .get(&module_name)
             .ok_or_else(|| HirError::TypeError(format!("Module '{}' not found", module_name)))?;
-        
+
         // Look up the member in the module
         if let Some(function_id) = module.functions.get(&member) {
             // It's a function
@@ -2255,14 +2408,15 @@ impl HirBuilder {
                 invoke: false,
             })
         } else if let Some(constant_id) = module.constants.get(&member) {
-            // It's a constant (stored as a variable in HIR)
-            // Return the variable ID so it can be loaded
-            Ok(HirExpression::Identifier(*constant_id))
+            // It's a constant - return the constant ID directly
+            // The constant ID is stored in modules.constants (not variable slot ID)
+            Ok(HirExpression::Constant(*constant_id))
         } else {
             // TODO: Also check variables
-            Err(HirError::TypeError(
-                format!("Member '{}' not found in module '{}'", member, module_name)
-            ))
+            Err(HirError::TypeError(format!(
+                "Member '{}' not found in module '{}'",
+                member, module_name
+            )))
         }
     }
 
@@ -2272,35 +2426,37 @@ impl HirBuilder {
         identifier: String,
     ) -> Result<HirExpression, HirError> {
         // First check imported symbols (compile-time resolved)
-        if let Some(imported_id) = self.import_table.get(&identifier) {
-            // Check if this is a variable ID (constant) or function ID
-            // Variable IDs are typically < 10000, function IDs for built-ins are >= 10000
-            // But we can also check if it exists as a variable in any scope
-            if self.ast.scopes.scopes.iter().any(|scope| {
-                scope.vars.iter().any(|v| v.id == *imported_id)
-            }) {
-                // It's a variable (constant) - return as identifier
-                Ok(HirExpression::Identifier(*imported_id))
+        if let Some(imported_id) = self.resolve_import_in_current_module(&identifier) {
+            // Check if this is a constant ID or function ID
+            // Constants are stored in hir_ast.constants, functions are in hir_ast.functions
+            if self.ast.constants.iter().any(|c| c.id == imported_id) {
+                // It's a constant - return as constant expression
+                return Ok(HirExpression::Constant(imported_id));
             } else {
                 // It's a function - convert to thunk by calling with no args
-                Ok(HirExpression::FunctionCall {
-                    function_id: *imported_id,
+                return Ok(HirExpression::FunctionCall {
+                    function_id: imported_id,
                     args: Vec::new(),
                     invoke: false,
-                })
+                });
             }
-        } else if let Some(slot) = self.resolve_var(&identifier) {
-            Ok(HirExpression::Identifier(slot))
-        } else if let Some(const_id) = self.resolve_const(&identifier) {
-            Ok(HirExpression::Constant(const_id))
-        } else if let Some(function_id) = self.resolve_function(&identifier) {
+        }
+
+        if let Some(slot) = self.resolve_var(&identifier) {
+            return Ok(HirExpression::Identifier(slot));
+        }
+        if let Some(const_id) = self.resolve_const(&identifier) {
+            return Ok(HirExpression::Constant(const_id));
+        }
+
+        if let Some(function_id) = self.resolve_function(&identifier) {
             // Function name used as identifier - convert to thunk by calling with no args
             // This allows functions to be used in compositions like: square <| add10
-            Ok(HirExpression::FunctionCall {
+            return Ok(HirExpression::FunctionCall {
                 function_id,
                 args: Vec::new(),
                 invoke: false,
-            })
+            });
         } else {
             Err(HirError::UnknownVariable(identifier))
         }
@@ -2403,76 +2559,59 @@ impl HirBuilder {
         callee: Expression,
         arguments: Vec<Expression>,
     ) -> Result<HirExpression, HirError> {
-        // Special case: if callee is an Identifier, check if it's a function name first
-        // before processing it as an expression
-        if let Expression::Identifier(ref identifier_name) = callee {
-            // Check imported symbols first (compile-time resolved)
-            let imported_func_id = self.import_table.get(identifier_name).copied();
-            let regular_func_id = self.resolve_function(identifier_name);
-            
-            if let Some(function_id) = imported_func_id.or(regular_func_id) {
-                // It's a function (imported or regular) - create FunctionCall with invoke: false (prepare the call)
-                let mut args: Vec<HirExpression> = Vec::new();
-                for argument in arguments {
-                    args.push(self.process_expression(argument)?);
-                }
-                return Ok(HirExpression::FunctionCall {
-                    function_id,
-                    args,
-                    invoke: false,
-                });
-            }
-            // Not a function - will be handled as variable below
+    
+        // Identifier callee: MUST be a function
+        if let Expression::Identifier(identifier_name) = callee {
+            let function_id = self
+                .resolve_function(&identifier_name)
+                .ok_or_else(|| {
+                    HirError::TypeError(format!(
+                        "'{}' is not a callable function",
+                        identifier_name
+                    ))
+                })?;
+    
+            let args = arguments
+                .into_iter()
+                .map(|arg| self.process_expression(arg))
+                .collect::<Result<Vec<_>, _>>()?;
+    
+            return Ok(HirExpression::FunctionCall {
+                function_id,
+                args,
+                invoke: false,
+            });
         }
-
-        // Process the callee expression
+    
+        // Non-identifier callees (thunks, compositions, etc.)
         let callee_expr = self.process_expression(callee)?;
-
-        // Process arguments
-        let mut processed_args = Vec::new();
-        for argument in arguments {
-            processed_args.push(self.process_expression(argument)?);
-        }
-
-        // Handle different callee types
+    
+        let processed_args = arguments
+            .into_iter()
+            .map(|arg| self.process_expression(arg))
+            .collect::<Result<Vec<_>, _>>()?;
+    
         match callee_expr {
-            // If callee is an identifier (variable/thunk)
-            HirExpression::Identifier(var_id) => {
-                // This is a variable - allow function call syntax on thunks
-                // This is the new semantics: f(x) creates a CallNode, not an invocation
-                Ok(HirExpression::PostfixInvoke {
-                    operand: Box::new(HirExpression::Identifier(var_id)),
-                    args: Some(processed_args),
-                })
-            }
-            // If callee is a ComposeThunk, wrap it in a PostfixInvoke
             HirExpression::ComposeThunk { first, second } => {
-                // Create a PostfixInvoke with the ComposeThunk as operand
-                // The bytecode emitter will handle calling a ComposeThunk
                 Ok(HirExpression::PostfixInvoke {
                     operand: Box::new(HirExpression::ComposeThunk { first, second }),
                     args: Some(processed_args),
                 })
             }
-            // If callee is a FunctionCall (nested call), combine the args
             HirExpression::FunctionCall {
                 function_id,
                 args: existing_args,
                 invoke: false,
             } => {
-                // This is a prepared call being called again - combine the args
-                let mut combined_args = existing_args;
-                combined_args.extend(processed_args);
+                let mut combined = existing_args;
+                combined.extend(processed_args);
                 Ok(HirExpression::FunctionCall {
                     function_id,
-                    args: combined_args,
+                    args: combined,
                     invoke: false,
                 })
             }
-            // Other expressions - try to treat as callable
             _ => {
-                // For other expressions, create a PostfixInvoke
-                // This allows calling any expression that evaluates to a callable
                 Ok(HirExpression::PostfixInvoke {
                     operand: Box::new(callee_expr),
                     args: Some(processed_args),
@@ -2517,10 +2656,7 @@ impl HirBuilder {
     }
 
     /// Process a group expression (parentheses)
-    fn process_group_expression(
-        &mut self,
-        expr: Expression,
-    ) -> Result<HirExpression, HirError> {
+    fn process_group_expression(&mut self, expr: Expression) -> Result<HirExpression, HirError> {
         // Group expressions (parentheses) just unwrap and process the inner expression
         self.process_expression(expr)
     }
@@ -2536,7 +2672,7 @@ impl HirBuilder {
         }
         Ok(HirExpression::Array(hir_elements))
     }
-    
+
     /// Process an array index expression
     /// Supports single index (arr[3]) and ranges/slices (arr[1..5], arr[1..=5], etc.)
     /// Multi-dimensional indexing not yet supported
@@ -2547,14 +2683,15 @@ impl HirBuilder {
     ) -> Result<HirExpression, HirError> {
         // For now, only support single dimension (one IndexSpec)
         if indices.len() != 1 {
-            return Err(HirError::TypeError(
-                format!("Multi-dimensional indexing not yet supported (got {} indices)", indices.len())
-            ));
+            return Err(HirError::TypeError(format!(
+                "Multi-dimensional indexing not yet supported (got {} indices)",
+                indices.len()
+            )));
         }
-        
+
         let index_spec = &indices[0];
         let array_expr = self.process_expression(array)?;
-        
+
         match index_spec {
             crate::core::ast::IndexSpec::Single(index_expr) => {
                 // Single index: arr[3]
@@ -2605,7 +2742,7 @@ impl HirBuilder {
                     array: Box::new(array_expr),
                     start: start_hir,
                     end: end_hir,
-                    step: None, // Inclusive range doesn't support step
+                    step: None,          // Inclusive range doesn't support step
                     inclusive_end: true, // Inclusive range has inclusive end
                 })
             }
@@ -2626,36 +2763,37 @@ impl HirBuilder {
         if !reverse {
             // Check if LHS is an array literal in the AST
             let is_array_literal = matches!(lhs, Expression::Array(_));
-            
+
             // Process both sides
             let first_expr = self.process_expression(lhs)?;
             let second_expr = self.process_expression(rhs)?;
 
             // Check if LHS is an array (either array literal or array variable)
-            let is_array = is_array_literal || match &first_expr {
-                HirExpression::Array(_) => true,
-                HirExpression::Identifier(var_id) => {
-                    // Check if variable is of array type
-                    if let Some(var_kind) = self.get_var_kind_from_id(*var_id) {
-                        matches!(var_kind, ValueKind::Array(_))
-                    } else {
-                        // If we can't get the type, infer it from the expression
-                        // This handles cases where the variable type hasn't been set yet
+            let is_array = is_array_literal
+                || match &first_expr {
+                    HirExpression::Array(_) => true,
+                    HirExpression::Identifier(var_id) => {
+                        // Check if variable is of array type
+                        if let Some(var_kind) = self.get_var_kind_from_id(*var_id) {
+                            matches!(var_kind, ValueKind::Array(_))
+                        } else {
+                            // If we can't get the type, infer it from the expression
+                            // This handles cases where the variable type hasn't been set yet
+                            let inferred = self.infer_variable_kind(&first_expr);
+                            matches!(inferred, ValueKind::Array(_))
+                        }
+                    }
+                    _ => {
+                        // For other expressions, infer the type
                         let inferred = self.infer_variable_kind(&first_expr);
                         matches!(inferred, ValueKind::Array(_))
                     }
-                }
-                _ => {
-                    // For other expressions, infer the type
-                    let inferred = self.infer_variable_kind(&first_expr);
-                    matches!(inferred, ValueKind::Array(_))
-                }
-            };
-            
+                };
+
             if is_array {
                 // Check if RHS is a reducer function (sum or fold)
                 let reducer_info = self.detect_reducer(&second_expr)?;
-                
+
                 if let Some((reducer_type, reducer_args)) = reducer_info {
                     // This is a reducer pattern - return a special reducer expression
                     // We'll lower this to bytecode that emits an internal loop
@@ -2666,7 +2804,7 @@ impl HirBuilder {
                     });
                 }
             }
-            
+
             // If not a reducer, treat as normal composition
             // f |> g means g(f(x)), so process f first, then g
             Ok(HirExpression::ComposeThunk {
@@ -2689,9 +2827,14 @@ impl HirBuilder {
 
     /// Detect if an expression is a reducer function (sum or fold)
     /// Returns (reducer_type, args) if it's a reducer, None otherwise
-    fn detect_reducer(&self, expr: &HirExpression) -> Result<Option<(ReducerType, Vec<HirExpression>)>, HirError> {
+    fn detect_reducer(
+        &self,
+        expr: &HirExpression,
+    ) -> Result<Option<(ReducerType, Vec<HirExpression>)>, HirError> {
         match expr {
-            HirExpression::FunctionCall { function_id, args, .. } => {
+            HirExpression::FunctionCall {
+                function_id, args, ..
+            } => {
                 // Check if this is a reducer function by name
                 // First try to get the function by ID
                 let func_name = if let Some(func) = self.ast.functions.get(function_id) {
@@ -2699,19 +2842,25 @@ impl HirBuilder {
                 } else {
                     // Fallback 1: search all functions to find one with this ID
                     // This handles cases where the function might be registered differently
-                    if let Some(name) = self.ast.functions.iter()
+                    if let Some(name) = self
+                        .ast
+                        .functions
+                        .iter()
                         .find(|(id, _)| *id == function_id)
-                        .map(|(_, func)| func.name.as_str()) {
+                        .map(|(_, func)| func.name.as_str())
+                    {
                         Some(name)
                     } else {
-                        // Fallback 2: look up the function name from import_table
-                        // This handles cases where the function is imported but not in ast.functions
-                        self.import_table.iter()
-                            .find(|(_, &imported_id)| imported_id == *function_id)
-                            .map(|(name, _)| name.as_str())
+                        // Search current module's imports
+                        self.get_current_imports().and_then(|imports| {
+                            imports
+                                .iter()
+                                .find(|(_, &imported_id)| imported_id == *function_id)
+                                .map(|(name, _)| name.as_str())
+                        })
                     }
                 };
-                
+
                 if let Some(name) = func_name {
                     // Check if the name is a reducer (strip module prefix if present)
                     let base_name = name.split('.').last().unwrap_or(name);
@@ -2783,15 +2932,11 @@ impl HirBuilder {
             Expression::ArrayIndex { array, indices } => {
                 self.process_array_index_expression(*array, indices)
             }
-            Expression::Identifier(identifier) => {
-                self.process_identifier_expression(identifier)
-            }
+            Expression::Identifier(identifier) => self.process_identifier_expression(identifier),
             Expression::MemberAccess { object, member } => {
                 self.process_member_access_expression(*object, member)
             }
-            Expression::Infix { lhs, op, rhs } => {
-                self.process_infix_expression(*lhs, op, *rhs)
-            }
+            Expression::Infix { lhs, op, rhs } => self.process_infix_expression(*lhs, op, *rhs),
             Expression::Prefix { op, rhs } => self.process_prefix_expression(op, *rhs),
             Expression::Postfix { lhs, op, args } => {
                 self.process_postfix_expression(*lhs, op, args)
@@ -2806,10 +2951,7 @@ impl HirBuilder {
             Expression::Compose { lhs, rhs, reverse } => {
                 self.process_compose_expression(*lhs, *rhs, reverse)
             }
-            Expression::Loop { init_vars, body } => {
-                self.process_loop_expression(init_vars, body)
-            }
+            Expression::Loop { init_vars, body } => self.process_loop_expression(init_vars, body),
         }
     }
 }
-

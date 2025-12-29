@@ -1,0 +1,71 @@
+
+[Function 0]
+  0000: LdVar(0)
+  0001: LdVar(1)
+  0002: AddNum
+  0003: Ret
+
+[Function 1]
+  0000: LdVar(6)
+  0001: LdVar(2)
+  0002: LdFunc(0)
+  0003: Thunk(2)
+  0004: Ret
+
+[Function 2]
+  0000: LdNum(1.0)
+  0001: StVar(9)
+  0002: LdNum(0.0)
+  0003: StVar(10)
+  0004: LdVar(7)
+  0005: LdFunc(10014)
+  0006: Thunk(1)
+  0007: Invoke
+  0008: StVar(11)
+  0009: LdNum(0.0)
+  0010: StVar(12)
+  0011: LdVar(12)
+  0012: LdVar(11)
+  0013: Ge
+  0014: JmpIfTrue(36)
+  0015: LdVar(10)
+  0016: LdVar(7)
+  0017: LdVar(12)
+  0018: ArrayIndex
+  0019: LdVar(8)
+  0020: LdVar(12)
+  0021: ArrayIndex
+  0022: Mul
+  0023: Add
+  0024: StVar(10)
+  0025: LdVar(9)
+  0026: LdVar(8)
+  0027: LdVar(12)
+  0028: ArrayIndex
+  0029: Add
+  0030: StVar(9)
+  0031: LdVar(12)
+  0032: LdNum(1.0)
+  0033: AddNum
+  0034: StVar(12)
+  0035: Jmp(11)
+  0036: Jmp(37)
+  0037: LdVar(10)
+  0038: LdVar(9)
+  0039: Div
+  0040: Ret
+
+[Main]
+  0000: LdNum(5.0)
+  0001: StVar(2)
+  0002: LdConst(0)
+  0003: StVar(3)
+  0004: LdConst(1)
+  0005: StVar(4)
+  0006: LdConst(2)
+  0007: StVar(5)
+  0008: LdStr("Hello, world!")
+  0009: LdFunc(10012)
+  0010: Thunk(1)
+  0011: Invoke
+  0012: Pop

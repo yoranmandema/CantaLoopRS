@@ -1,12 +1,14 @@
+use serde::Serialize;
+
 /// Represents a placeholder hole in partial application.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Hole;
 
 /// Represents an expression in the CantaLoop language.
 /// 
 /// Expressions are the building blocks of computation, including
 /// literals, variables, function calls, and operations.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub enum Expression {
     Literal(Literal),
     Identifier(String),
@@ -55,7 +57,7 @@ pub enum Expression {
 }
 
 /// Represents an array index specification.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub enum IndexSpec {
     /// Single index: arr[3] or arr[-1]
     Single(Expression),
@@ -73,7 +75,7 @@ pub enum IndexSpec {
 }
 
 /// Unary operators that operate on a single expression.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize)]
 pub enum UnaryOp {
     Neg,
     Increment,
@@ -81,13 +83,13 @@ pub enum UnaryOp {
     Not,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize)]
 pub enum PostfixOp {
     Invoke,
 }
 
 /// Binary operators that operate on two expressions.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize)]
 pub enum BinaryOp {
     Add,
     Sub,
@@ -108,7 +110,7 @@ pub enum BinaryOp {
 /// Represents a complete CantaLoop program.
 /// 
 /// A program consists of one or more blocks, which are executed sequentially.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Program {
     pub blocks: Vec<Block>
 }
@@ -116,19 +118,19 @@ pub struct Program {
 /// A block of statements executed sequentially.
 /// 
 /// Blocks create a new scope for variable declarations.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Block {
     pub statements: Vec<Statement>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Argument {
     pub identifier: String,
     pub kind: String
 }
 
 /// Represents an argument in a function call - either an expression or a hole placeholder.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub enum CallArgument {
     Expr(Expression),
     Hole,
@@ -138,7 +140,7 @@ pub enum CallArgument {
 /// 
 /// Statements are the top-level constructs that perform actions:
 /// variable declarations, assignments, control flow, function definitions.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub enum Statement {
     Mod {
         identifier: String,
@@ -210,7 +212,7 @@ pub enum Statement {
 }
 
 /// Represents what to import from a module path.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub enum ImportSelector {
     /// Import a single name: `use math.utils.square;`
     Single(String),
@@ -221,7 +223,7 @@ pub enum ImportSelector {
 }
 
 /// Literal values in source code: numbers, strings, and booleans.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub enum Literal {
     String(String),
     Number(f64),

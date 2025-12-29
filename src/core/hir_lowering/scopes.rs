@@ -4,11 +4,12 @@
 //! shadowing detection, and closure analysis.
 
 use super::{Variable, SymbolId};
+use serde::Serialize;
 
 /// Unique identifier for a scope.
 /// Scopes form a tree structure via parent relationships.
 /// Each scope contains a set of symbols.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub struct ScopeId(pub usize);
 
 impl ScopeId {
@@ -33,13 +34,13 @@ impl From<ScopeId> for usize {
 pub type ScopeIdOld = usize;
 
 /// Scope arena containing all scopes in the program.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ScopeArena {
     pub scopes: Vec<HirBlockContext>,
 }
 
 /// Context for a HIR block, containing variables and parent scope.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct HirBlockContext {
     pub vars: Vec<Variable>,
     pub parent: Option<ScopeId>,
@@ -49,7 +50,7 @@ pub struct HirBlockContext {
 /// 
 /// Scopes are now first-class entities with stable IDs.
 /// This enables proper scope resolution, shadowing detection, and closure analysis.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Scope {
     pub id: ScopeId,
     pub parent: Option<ScopeId>,

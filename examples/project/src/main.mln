@@ -1,9 +1,7 @@
+use add, fold from math;
 use print from std;
-use fold, add from math;
 
 let xs = [1, 2, 3, 4];
+let a = xs |> fold(0, add);
 
-print(add(1, 2)!)!;
-
-print(xs |> fold(1, add))!; // Works - incorrect! its not imported!
-// print(xs |> fold(1, mul))!; // Doesn't work - correct! its not imported!
+print(a)!;

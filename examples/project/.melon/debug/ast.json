@@ -1,0 +1,35 @@
+{
+  "blocks": [
+    {
+      "statements": [
+        {
+          "Expression": {
+            "Postfix": {
+              "lhs": {
+                "FunctionCall": {
+                  "callee": {
+                    "MemberAccess": {
+                      "object": {
+                        "Identifier": "std"
+                      },
+                      "member": "print"
+                    }
+                  },
+                  "arguments": [
+                    {
+                      "Literal": {
+                        "String": "Hello, world!"
+                      }
+                    }
+                  ]
+                }
+              },
+              "op": "Invoke",
+              "args": null
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

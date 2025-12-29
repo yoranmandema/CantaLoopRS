@@ -8,12 +8,13 @@
 
 use std::collections::HashMap;
 use bitflags::bitflags;
+use serde::Serialize;
 
 use super::{HirAst, ValueKind, Span};
 
 /// Unified semantic item kind for LSP tokenization.
 /// Represents all tokenizable items from the compiler's perspective.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub enum SemanticItemKind {
     Function,
     Variable,
@@ -27,7 +28,7 @@ pub enum SemanticItemKind {
 bitflags! {
     /// Semantic modifiers for LSP tokenization.
     /// These encode additional properties of semantic items (e.g., thunks, readonly).
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
     pub struct SemanticModifiers: u32 {
         const THUNK = 1 << 0;
         const READONLY = 1 << 1;
@@ -36,7 +37,7 @@ bitflags! {
 
 /// A semantic item representing a tokenizable unit in the source code.
 /// All semantic items (keywords, operators, identifiers, types) flow from AST analysis.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct SemanticItem {
     pub kind: SemanticItemKind,
     pub span: Span,
@@ -104,7 +105,8 @@ pub fn collect_semantic_items(ast: &crate::core::ast::Program, source: &str, hir
     // Also include imported functions
     // Imported constants are in var_types (we copy them), so if it's in import_table
     // but not in var_types, it's likely a function. Also check if the ID maps to a function.
-    for (name, func_id) in &hir.import_table {
+    for (_module_name, imports) in &hir.module_imports {
+        for (name, func_id) in imports {
         // Check if the ID maps to a function in hir.functions
         if hir.functions.contains_key(func_id) {
             function_names.insert(name.clone());
@@ -113,6 +115,7 @@ pub fn collect_semantic_items(ast: &crate::core::ast::Program, source: &str, hir
             function_names.insert(name.clone());
         }
     }
+}
     
     // Build a set of constant names from AST (variables declared with `const`)
     let mut constant_names: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -125,12 +128,14 @@ pub fn collect_semantic_items(ast: &crate::core::ast::Program, source: &str, hir
     }
     
     // Also include imported constants (they're in import_table and var_types, but not functions)
-    for (name, func_id) in &hir.import_table {
+    for (_module_name, imports) in &hir.module_imports {
+        for (name, func_id) in imports {
         // If it's in var_types and not in functions, it's likely a constant
         if var_types.contains_key(name) && !hir.functions.contains_key(func_id) {
             constant_names.insert(name.clone());
         }
     }
+}
     
     // Helper to find keyword span in source text
     let find_keyword_span = |keyword: &str, after_pos: usize| -> Option<Span> {

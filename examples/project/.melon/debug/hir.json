@@ -1,0 +1,780 @@
+{
+  "constants": [
+    {
+      "id": 0,
+      "name": "PI",
+      "value": {
+        "Number": 3.14
+      },
+      "kind": "Number"
+    },
+    {
+      "id": 1,
+      "name": "PI2",
+      "value": {
+        "Number": 6.28
+      },
+      "kind": "Number"
+    },
+    {
+      "id": 2,
+      "name": "dayInSeconds",
+      "value": {
+        "Number": 86400.0
+      },
+      "kind": "Number"
+    }
+  ],
+  "blocks": [
+    {
+      "scope": 0,
+      "statements": [
+        "Nop",
+        "Nop",
+        {
+          "Expression": {
+            "Constant": 0
+          }
+        },
+        {
+          "Assign": {
+            "slot": 2,
+            "value": {
+              "Number": 5.0
+            }
+          }
+        },
+        {
+          "Assign": {
+            "slot": 3,
+            "value": {
+              "Constant": 0
+            }
+          }
+        },
+        {
+          "Assign": {
+            "slot": 4,
+            "value": {
+              "Constant": 1
+            }
+          }
+        },
+        {
+          "Assign": {
+            "slot": 5,
+            "value": {
+              "Constant": 2
+            }
+          }
+        },
+        {
+          "Expression": {
+            "Constant": 0
+          }
+        },
+        {
+          "Expression": {
+            "Constant": 0
+          }
+        }
+      ]
+    },
+    {
+      "scope": 0,
+      "statements": [
+        {
+          "Expression": {
+            "FunctionCall": {
+              "function_id": 10012,
+              "args": [
+                {
+                  "String": "Hello, world!"
+                }
+              ],
+              "invoke": true
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "scopes": {
+    "scopes": [
+      {
+        "vars": [
+          {
+            "id": 0,
+            "name": "a",
+            "kind": "Number"
+          },
+          {
+            "id": 1,
+            "name": "b",
+            "kind": "Number"
+          },
+          {
+            "id": 2,
+            "name": "magicNumber",
+            "kind": "Number"
+          },
+          {
+            "id": 3,
+            "name": "PI",
+            "kind": "Number"
+          },
+          {
+            "id": 4,
+            "name": "PI2",
+            "kind": "Number"
+          },
+          {
+            "id": 5,
+            "name": "dayInSeconds",
+            "kind": "Number"
+          }
+        ],
+        "parent": 0
+      },
+      {
+        "vars": [
+          {
+            "id": 6,
+            "name": "a",
+            "kind": "Number"
+          }
+        ],
+        "parent": 0
+      },
+      {
+        "vars": [],
+        "parent": 1
+      },
+      {
+        "vars": [
+          {
+            "id": 7,
+            "name": "grades",
+            "kind": {
+              "Array": "Number"
+            }
+          },
+          {
+            "id": 8,
+            "name": "weights",
+            "kind": {
+              "Array": "Number"
+            }
+          }
+        ],
+        "parent": 0
+      },
+      {
+        "vars": [
+          {
+            "id": 9,
+            "name": "total_weight",
+            "kind": "Number"
+          },
+          {
+            "id": 10,
+            "name": "weighted_sum",
+            "kind": "Number"
+          },
+          {
+            "id": 11,
+            "name": "len",
+            "kind": "Number"
+          }
+        ],
+        "parent": 3
+      },
+      {
+        "vars": [
+          {
+            "id": 12,
+            "name": "i",
+            "kind": "Number"
+          }
+        ],
+        "parent": 4
+      },
+      {
+        "vars": [],
+        "parent": 5
+      },
+      {
+        "vars": [],
+        "parent": 6
+      }
+    ]
+  },
+  "functions": {
+    "10005": {
+      "id": 10005,
+      "name": "math.sqrt",
+      "signature": {
+        "params": [
+          "Number"
+        ],
+        "return_type": "Number"
+      },
+      "definition": {
+        "body": {
+          "scope": 0,
+          "statements": []
+        },
+        "param_var_ids": [],
+        "scope_id": 0
+      }
+    },
+    "10006": {
+      "id": 10006,
+      "name": "math.sum",
+      "signature": {
+        "params": [
+          "Number",
+          "Number"
+        ],
+        "return_type": "Number"
+      },
+      "definition": {
+        "body": {
+          "scope": 0,
+          "statements": []
+        },
+        "param_var_ids": [],
+        "scope_id": 0
+      }
+    },
+    "10010": {
+      "id": 10010,
+      "name": "math.min",
+      "signature": {
+        "params": [
+          "Number",
+          "Number"
+        ],
+        "return_type": "Number"
+      },
+      "definition": {
+        "body": {
+          "scope": 0,
+          "statements": []
+        },
+        "param_var_ids": [],
+        "scope_id": 0
+      }
+    },
+    "10003": {
+      "id": 10003,
+      "name": "math.abs",
+      "signature": {
+        "params": [
+          "Number"
+        ],
+        "return_type": "Number"
+      },
+      "definition": {
+        "body": {
+          "scope": 0,
+          "statements": []
+        },
+        "param_var_ids": [],
+        "scope_id": 0
+      }
+    },
+    "10008": {
+      "id": 10008,
+      "name": "math.add",
+      "signature": {
+        "params": [
+          "Number",
+          "Number"
+        ],
+        "return_type": "Number"
+      },
+      "definition": {
+        "body": {
+          "scope": 0,
+          "statements": []
+        },
+        "param_var_ids": [],
+        "scope_id": 0
+      }
+    },
+    "10004": {
+      "id": 10004,
+      "name": "math.pow",
+      "signature": {
+        "params": [
+          "Number",
+          "Number"
+        ],
+        "return_type": "Number"
+      },
+      "definition": {
+        "body": {
+          "scope": 0,
+          "statements": []
+        },
+        "param_var_ids": [],
+        "scope_id": 0
+      }
+    },
+    "10011": {
+      "id": 10011,
+      "name": "math.max",
+      "signature": {
+        "params": [
+          "Number",
+          "Number"
+        ],
+        "return_type": "Number"
+      },
+      "definition": {
+        "body": {
+          "scope": 0,
+          "statements": []
+        },
+        "param_var_ids": [],
+        "scope_id": 0
+      }
+    },
+    "10002": {
+      "id": 10002,
+      "name": "math.ceil",
+      "signature": {
+        "params": [
+          "Number"
+        ],
+        "return_type": "Number"
+      },
+      "definition": {
+        "body": {
+          "scope": 0,
+          "statements": []
+        },
+        "param_var_ids": [],
+        "scope_id": 0
+      }
+    },
+    "10000": {
+      "id": 10000,
+      "name": "math.round",
+      "signature": {
+        "params": [
+          "Number",
+          "Number"
+        ],
+        "return_type": "Number"
+      },
+      "definition": {
+        "body": {
+          "scope": 0,
+          "statements": []
+        },
+        "param_var_ids": [],
+        "scope_id": 0
+      }
+    },
+    "10007": {
+      "id": 10007,
+      "name": "math.fold",
+      "signature": {
+        "params": [
+          "Unknown",
+          {
+            "Function": "(num, num) -> num"
+          }
+        ],
+        "return_type": "Unknown"
+      },
+      "definition": {
+        "body": {
+          "scope": 0,
+          "statements": []
+        },
+        "param_var_ids": [],
+        "scope_id": 0
+      }
+    },
+    "10009": {
+      "id": 10009,
+      "name": "math.mul",
+      "signature": {
+        "params": [
+          "Number",
+          "Number"
+        ],
+        "return_type": "Number"
+      },
+      "definition": {
+        "body": {
+          "scope": 0,
+          "statements": []
+        },
+        "param_var_ids": [],
+        "scope_id": 0
+      }
+    },
+    "10014": {
+      "id": 10014,
+      "name": "std.array_length",
+      "signature": {
+        "params": [
+          "Unknown"
+        ],
+        "return_type": "Number"
+      },
+      "definition": {
+        "body": {
+          "scope": 0,
+          "statements": []
+        },
+        "param_var_ids": [],
+        "scope_id": 0
+      }
+    },
+    "0": {
+      "id": 0,
+      "name": "add",
+      "signature": {
+        "params": [
+          "Number",
+          "Number"
+        ],
+        "return_type": "Number"
+      },
+      "definition": {
+        "body": {
+          "scope": 0,
+          "statements": [
+            {
+              "Return": {
+                "value": {
+                  "Binary": {
+                    "lhs": {
+                      "Identifier": 0
+                    },
+                    "rhs": {
+                      "Identifier": 1
+                    },
+                    "operator": "Add"
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "param_var_ids": [
+          0,
+          1
+        ],
+        "scope_id": 0
+      }
+    },
+    "2": {
+      "id": 2,
+      "name": "calculate_something",
+      "signature": {
+        "params": [
+          {
+            "Array": "Number"
+          },
+          {
+            "Array": "Number"
+          }
+        ],
+        "return_type": "Number"
+      },
+      "definition": {
+        "body": {
+          "scope": 4,
+          "statements": [
+            {
+              "Assign": {
+                "slot": 9,
+                "value": {
+                  "Number": 1.0
+                }
+              }
+            },
+            {
+              "Assign": {
+                "slot": 10,
+                "value": {
+                  "Number": 0.0
+                }
+              }
+            },
+            {
+              "Assign": {
+                "slot": 11,
+                "value": {
+                  "FunctionCall": {
+                    "function_id": 10014,
+                    "args": [
+                      {
+                        "Identifier": 7
+                      }
+                    ],
+                    "invoke": true
+                  }
+                }
+              }
+            },
+            {
+              "Loop": {
+                "init_vars": [
+                  [
+                    12,
+                    {
+                      "Number": 0.0
+                    }
+                  ]
+                ],
+                "body": {
+                  "scope": 6,
+                  "statements": [
+                    {
+                      "If": {
+                        "arms": [
+                          [
+                            {
+                              "Binary": {
+                                "lhs": {
+                                  "Identifier": 12
+                                },
+                                "rhs": {
+                                  "Identifier": 11
+                                },
+                                "operator": "Ge"
+                              }
+                            },
+                            {
+                              "scope": 7,
+                              "statements": [
+                                {
+                                  "Break": {
+                                    "value": null
+                                  }
+                                }
+                              ]
+                            }
+                          ]
+                        ],
+                        "else_block": {
+                          "scope": 6,
+                          "statements": []
+                        }
+                      }
+                    },
+                    {
+                      "Assign": {
+                        "slot": 10,
+                        "value": {
+                          "Binary": {
+                            "lhs": {
+                              "Identifier": 10
+                            },
+                            "rhs": {
+                              "Binary": {
+                                "lhs": {
+                                  "ArrayIndex": {
+                                    "array": {
+                                      "Identifier": 7
+                                    },
+                                    "index": {
+                                      "Identifier": 12
+                                    }
+                                  }
+                                },
+                                "rhs": {
+                                  "ArrayIndex": {
+                                    "array": {
+                                      "Identifier": 8
+                                    },
+                                    "index": {
+                                      "Identifier": 12
+                                    }
+                                  }
+                                },
+                                "operator": "Mul"
+                              }
+                            },
+                            "operator": "Add"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "Assign": {
+                        "slot": 9,
+                        "value": {
+                          "Binary": {
+                            "lhs": {
+                              "Identifier": 9
+                            },
+                            "rhs": {
+                              "ArrayIndex": {
+                                "array": {
+                                  "Identifier": 8
+                                },
+                                "index": {
+                                  "Identifier": 12
+                                }
+                              }
+                            },
+                            "operator": "Add"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "Assign": {
+                        "slot": 12,
+                        "value": {
+                          "Binary": {
+                            "lhs": {
+                              "Identifier": 12
+                            },
+                            "rhs": {
+                              "Number": 1.0
+                            },
+                            "operator": "Add"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                "break_slot": null
+              }
+            },
+            {
+              "Return": {
+                "value": {
+                  "Binary": {
+                    "lhs": {
+                      "Identifier": 10
+                    },
+                    "rhs": {
+                      "Identifier": 9
+                    },
+                    "operator": "Div"
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "param_var_ids": [
+          7,
+          8
+        ],
+        "scope_id": 3
+      }
+    },
+    "1": {
+      "id": 1,
+      "name": "addMagicNumber",
+      "signature": {
+        "params": [
+          "Number"
+        ],
+        "return_type": "Number"
+      },
+      "definition": {
+        "body": {
+          "scope": 2,
+          "statements": [
+            {
+              "Return": {
+                "value": {
+                  "FunctionCall": {
+                    "function_id": 0,
+                    "args": [
+                      {
+                        "Identifier": 6
+                      },
+                      {
+                        "Identifier": 2
+                      }
+                    ],
+                    "invoke": false
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "param_var_ids": [
+          6
+        ],
+        "scope_id": 1
+      }
+    },
+    "10012": {
+      "id": 10012,
+      "name": "std.print",
+      "signature": {
+        "params": [
+          "String"
+        ],
+        "return_type": "String"
+      },
+      "definition": {
+        "body": {
+          "scope": 0,
+          "statements": []
+        },
+        "param_var_ids": [],
+        "scope_id": 0
+      }
+    },
+    "10013": {
+      "id": 10013,
+      "name": "std.format_number",
+      "signature": {
+        "params": [
+          "Number",
+          "Number"
+        ],
+        "return_type": "String"
+      },
+      "definition": {
+        "body": {
+          "scope": 0,
+          "statements": []
+        },
+        "param_var_ids": [],
+        "scope_id": 0
+      }
+    },
+    "10001": {
+      "id": 10001,
+      "name": "math.floor",
+      "signature": {
+        "params": [
+          "Number"
+        ],
+        "return_type": "Number"
+      },
+      "definition": {
+        "body": {
+          "scope": 0,
+          "statements": []
+        },
+        "param_var_ids": [],
+        "scope_id": 0
+      }
+    }
+  },
+  "module_imports": {
+    "utils": {
+      "array_length": 10014
+    }
+  },
+  "imported_constant_values": {}
+}

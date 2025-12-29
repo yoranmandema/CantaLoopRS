@@ -3,17 +3,18 @@
 //! This module handles lowering AST expressions to HIR expressions, including
 //! type inference and expression transformation.
 
+use serde::Serialize;
+
 use crate::core::ast::{BinaryOp, UnaryOp};
 
 use super::HirBlock;
 
 /// High-level Intermediate Representation of an expression.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub enum HirExpression {
-    #[allow(dead_code)]
     Number(f64),
-    #[allow(dead_code)]
     String(String),
+    Boolean(bool),
     Identifier(u32),
     Constant(u32),
     Binary {
@@ -67,7 +68,7 @@ pub enum HirExpression {
 }
 
 /// Type of reducer function
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum ReducerType {
     Sum,  // sum: equivalent to fold(0, add)
     Fold, // fold(init, fn): custom reducer

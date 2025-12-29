@@ -1,7 +1,7 @@
 use crate::core::{
     ast::{BinaryOp, UnaryOp},
     bytecode::OpCode,
-    hir_lowering::{HirAst, HirBlock, HirExpression, HirStmt, ValueKind, ReducerType},
+    hir_lowering::{HirAst, HirBlock, HirExpression, HirStmt, ReducerType, ValueKind},
 };
 
 pub struct ByteCodeEmitter {
@@ -12,7 +12,7 @@ struct LoopInfo {
     start: usize,
     end: usize,
     break_positions: Vec<usize>, // Positions of break jumps to patch
-    break_slot: Option<u32>,      // Variable slot for break value (None for statement loops, Some(slot) for expression loops)
+    break_slot: Option<u32>, // Variable slot for break value (None for statement loops, Some(slot) for expression loops)
 }
 
 impl ByteCodeEmitter {
@@ -27,7 +27,11 @@ impl ByteCodeEmitter {
     /// Functions without a return type are considered void (Unknown return type)
     fn is_void_expression(&self, expr: &HirExpression, program: &HirAst) -> bool {
         match expr {
-            HirExpression::FunctionCall { function_id, invoke, .. } => {
+            HirExpression::FunctionCall {
+                function_id,
+                invoke,
+                ..
+            } => {
                 if *invoke {
                     // Check if the function returns void (Unknown return type)
                     if let Some(func) = program.functions.get(function_id) {
@@ -99,8 +103,13 @@ impl ByteCodeEmitter {
             HirExpression::Binary { lhs, rhs, operator } => {
                 // For binary ops, check if both operands are numbers and the operator is numeric
                 match operator {
-                    BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Pow => {
-                        self.is_statically_number(lhs, program) && self.is_statically_number(rhs, program)
+                    BinaryOp::Add
+                    | BinaryOp::Sub
+                    | BinaryOp::Mul
+                    | BinaryOp::Div
+                    | BinaryOp::Pow => {
+                        self.is_statically_number(lhs, program)
+                            && self.is_statically_number(rhs, program)
                     }
                     _ => false,
                 }
@@ -149,7 +158,11 @@ impl ByteCodeEmitter {
             HirStmt::Return { value } => {
                 self.emit_stmt_return(ops, value, program);
             }
-            HirStmt::Loop { init_vars, body, break_slot } => {
+            HirStmt::Loop {
+                init_vars,
+                body,
+                break_slot,
+            } => {
                 self.emit_stmt_loop(ops, init_vars, body, *break_slot, program);
             }
             HirStmt::Break { value } => {
@@ -164,35 +177,59 @@ impl ByteCodeEmitter {
             HirStmt::Nop => {
                 // No-op statement (used for use statements which are compile-time only)
             }
-        }        
+        }
     }
 
     // Statement emission helpers
 
-    fn emit_stmt_assign(&mut self, ops: &mut Vec<OpCode>, slot: u32, value: &HirExpression, program: &HirAst) {
+    fn emit_stmt_assign(
+        &mut self,
+        ops: &mut Vec<OpCode>,
+        slot: u32,
+        value: &HirExpression,
+        program: &HirAst,
+    ) {
         self.emit_expression(ops, value, program);
         ops.push(OpCode::StVar(slot));
     }
 
-    fn emit_stmt_assign_increment(&mut self, ops: &mut Vec<OpCode>, slot: u32, value: &HirExpression, program: &HirAst) {
+    fn emit_stmt_assign_increment(
+        &mut self,
+        ops: &mut Vec<OpCode>,
+        slot: u32,
+        value: &HirExpression,
+        program: &HirAst,
+    ) {
         ops.push(OpCode::LdVar(slot));
         self.emit_expression(ops, value, program);
         ops.push(OpCode::Add);
         ops.push(OpCode::StVar(slot));
     }
 
-    fn emit_stmt_assign_decrement(&mut self, ops: &mut Vec<OpCode>, slot: u32, value: &HirExpression, program: &HirAst) {
+    fn emit_stmt_assign_decrement(
+        &mut self,
+        ops: &mut Vec<OpCode>,
+        slot: u32,
+        value: &HirExpression,
+        program: &HirAst,
+    ) {
         ops.push(OpCode::LdVar(slot));
         self.emit_expression(ops, value, program);
         ops.push(OpCode::Sub);
         ops.push(OpCode::StVar(slot));
     }
 
-    fn emit_stmt_if(&mut self, ops: &mut Vec<OpCode>, arms: &[(HirExpression, HirBlock)], else_block: &HirBlock, program: &HirAst) {
+    fn emit_stmt_if(
+        &mut self,
+        ops: &mut Vec<OpCode>,
+        arms: &[(HirExpression, HirBlock)],
+        else_block: &HirBlock,
+        program: &HirAst,
+    ) {
         let mut jump_to_end_positions = Vec::new();
         let mut jmp_if_false_positions = Vec::new();
         let mut condition_start_positions = Vec::new();
-        
+
         // Emit each arm
         for (condition, block) in arms {
             condition_start_positions.push(ops.len());
@@ -203,7 +240,7 @@ impl ByteCodeEmitter {
             jump_to_end_positions.push(ops.len());
             ops.push(OpCode::Jmp(0)); // Placeholder
         }
-        
+
         // Patch JmpIfFalse instructions: each should jump to the next condition or else block
         let else_block_start = ops.len();
         for (i, &jmp_pos) in jmp_if_false_positions.iter().enumerate() {
@@ -214,30 +251,36 @@ impl ByteCodeEmitter {
             };
             ops[jmp_pos] = OpCode::JmpIfFalse(target);
         }
-        
+
         // Emit else block if it has statements
         if !else_block.statements.is_empty() {
             self.emit_block(ops, else_block, program);
         }
         let end_pos = ops.len();
-        
+
         // Patch all jumps to end
         for &jmp_pos in &jump_to_end_positions {
             ops[jmp_pos] = OpCode::Jmp(end_pos);
         }
     }
 
-    fn emit_stmt_match(&mut self, ops: &mut Vec<OpCode>, expression: &HirExpression, cases: &[(Option<HirExpression>, HirBlock)], program: &HirAst) {
+    fn emit_stmt_match(
+        &mut self,
+        ops: &mut Vec<OpCode>,
+        expression: &HirExpression,
+        cases: &[(Option<HirExpression>, HirBlock)],
+        program: &HirAst,
+    ) {
         // Emit the match expression (evaluate it once)
         self.emit_expression(ops, expression, program);
         // Store it in a temporary variable slot to avoid re-evaluating it
         let temp_slot = 999999u32;
         ops.push(OpCode::StVar(temp_slot));
-        
+
         let mut jump_to_end_positions = Vec::new();
         let mut jmp_if_false_info = Vec::new(); // (jmp_pos, case_index)
         let mut case_block_starts = Vec::new();
-        
+
         // Emit each case
         for (case_idx, (pattern, block)) in cases.iter().enumerate() {
             if let Some(pattern_expr) = pattern {
@@ -246,13 +289,13 @@ impl ByteCodeEmitter {
                 jmp_if_false_info.push((ops.len(), case_idx));
                 ops.push(OpCode::JmpIfFalse(0)); // Placeholder
             }
-            
+
             case_block_starts.push(ops.len());
             self.emit_block(ops, block, program);
             jump_to_end_positions.push(ops.len());
             ops.push(OpCode::Jmp(0)); // Placeholder
         }
-        
+
         // Patch JmpIfFalse instructions
         let end_pos = ops.len();
         for (jmp_pos, case_idx) in jmp_if_false_info {
@@ -263,7 +306,7 @@ impl ByteCodeEmitter {
             };
             ops[jmp_pos] = OpCode::JmpIfFalse(target);
         }
-        
+
         // Patch all jumps to end
         for &jmp_pos in &jump_to_end_positions {
             ops[jmp_pos] = OpCode::Jmp(end_pos);
@@ -272,7 +315,12 @@ impl ByteCodeEmitter {
 
     fn emit_stmt_return(&mut self, ops: &mut Vec<OpCode>, value: &HirExpression, program: &HirAst) {
         // Check if this is a tail call: return f(x)!
-        if let HirExpression::FunctionCall { function_id, args, invoke: true } = value {
+        if let HirExpression::FunctionCall {
+            function_id,
+            args,
+            invoke: true,
+        } = value
+        {
             // Tail call - emit optimized RetInvoke
             for arg in args {
                 self.emit_expression(ops, arg, program);
@@ -288,29 +336,39 @@ impl ByteCodeEmitter {
         }
     }
 
-    fn emit_stmt_loop(&mut self, ops: &mut Vec<OpCode>, init_vars: &[(u32, HirExpression)], body: &HirBlock, break_slot: Option<u32>, program: &HirAst) {
+    fn emit_stmt_loop(
+        &mut self,
+        ops: &mut Vec<OpCode>,
+        init_vars: &[(u32, HirExpression)],
+        body: &HirBlock,
+        break_slot: Option<u32>,
+        program: &HirAst,
+    ) {
         // Emit initialization code for loop variables
         for (var_id, init_expr) in init_vars {
             self.emit_expression(ops, init_expr, program);
             ops.push(OpCode::StVar(*var_id));
         }
-        
+
         let loop_start = ops.len();
-        
+
         self.loop_stack.push(LoopInfo {
             start: loop_start,
             end: 0, // Will be patched later
             break_positions: Vec::new(),
             break_slot,
         });
-        
+
         // OPTIMIZATION: Detect pattern "if (condition) { break [value]; }" at start of loop
-        let (condition_opt, break_value_opt, remaining_body) = if let Some(first_stmt) = body.statements.first() {
+        let (condition_opt, break_value_opt, remaining_body) = if let Some(first_stmt) =
+            body.statements.first()
+        {
             if let HirStmt::If { arms, else_block } = first_stmt {
-                if arms.len() == 1 
+                if arms.len() == 1
                     && else_block.statements.is_empty()
                     && arms[0].1.statements.len() == 1
-                    && matches!(&arms[0].1.statements[0], HirStmt::Break { .. }) {
+                    && matches!(&arms[0].1.statements[0], HirStmt::Break { .. })
+                {
                     let condition = arms[0].0.clone();
                     let break_value = if let HirStmt::Break { value } = &arms[0].1.statements[0] {
                         value.clone()
@@ -328,18 +386,18 @@ impl ByteCodeEmitter {
         } else {
             (None, None, body.statements.clone())
         };
-        
+
         if let Some(condition) = condition_opt {
             // Optimized pattern
             self.emit_expression(ops, &condition, program);
             let jmp_if_true_pos = ops.len();
             ops.push(OpCode::JmpIfTrue(0)); // Placeholder
-            
+
             for stmt in &remaining_body {
                 self.emit_statement(ops, stmt, program);
             }
             ops.push(OpCode::Jmp(loop_start));
-            
+
             let break_handler_start = ops.len();
             if let Some(break_value) = break_value_opt {
                 self.emit_expression(ops, &break_value, program);
@@ -351,11 +409,11 @@ impl ByteCodeEmitter {
             }
             let break_handler_end = ops.len();
             ops.push(OpCode::Jmp(0)); // Placeholder
-            
+
             let loop_end = ops.len();
             ops[jmp_if_true_pos] = OpCode::JmpIfTrue(break_handler_start);
             ops[break_handler_end] = OpCode::Jmp(loop_end);
-            
+
             let break_slot_val = if let Some(loop_info) = self.loop_stack.last_mut() {
                 loop_info.end = loop_end;
                 for &break_pos in &loop_info.break_positions {
@@ -365,7 +423,7 @@ impl ByteCodeEmitter {
             } else {
                 None
             };
-            
+
             if let Some(slot) = break_slot_val {
                 ops.push(OpCode::LdVar(slot));
             }
@@ -373,7 +431,7 @@ impl ByteCodeEmitter {
             // Normal path
             self.emit_block(ops, body, program);
             ops.push(OpCode::Jmp(loop_start));
-            
+
             let loop_end = ops.len();
             let break_slot_val = if let Some(loop_info) = self.loop_stack.last_mut() {
                 loop_info.end = loop_end;
@@ -384,16 +442,21 @@ impl ByteCodeEmitter {
             } else {
                 None
             };
-            
+
             if let Some(slot) = break_slot_val {
                 ops.push(OpCode::LdVar(slot));
             }
         }
-        
+
         self.loop_stack.pop();
     }
 
-    fn emit_stmt_break(&mut self, ops: &mut Vec<OpCode>, value: &Option<HirExpression>, program: &HirAst) {
+    fn emit_stmt_break(
+        &mut self,
+        ops: &mut Vec<OpCode>,
+        value: &Option<HirExpression>,
+        program: &HirAst,
+    ) {
         if let Some(expr) = value {
             self.emit_expression(ops, expr, program);
             if let Some(loop_info) = self.loop_stack.last() {
@@ -402,7 +465,7 @@ impl ByteCodeEmitter {
                 }
             }
         }
-        
+
         if let Some(loop_info) = self.loop_stack.last_mut() {
             let break_pos = ops.len();
             ops.push(OpCode::Jmp(0)); // Placeholder
@@ -420,7 +483,12 @@ impl ByteCodeEmitter {
         }
     }
 
-    fn emit_stmt_expression(&mut self, ops: &mut Vec<OpCode>, expr: &HirExpression, program: &HirAst) {
+    fn emit_stmt_expression(
+        &mut self,
+        ops: &mut Vec<OpCode>,
+        expr: &HirExpression,
+        program: &HirAst,
+    ) {
         // Skip dummy constants (used for function declarations which don't need bytecode)
         if let HirExpression::Constant(0) = expr {
             return;
@@ -449,10 +517,22 @@ impl ByteCodeEmitter {
         ops.push(OpCode::LdConst(id));
     }
 
-    fn emit_expr_binary(&mut self, ops: &mut Vec<OpCode>, lhs: &HirExpression, rhs: &HirExpression, operator: &BinaryOp, program: &HirAst) {
+    fn emit_expr_boolean(&mut self, ops: &mut Vec<OpCode>, b: bool) {
+        ops.push(OpCode::LdBool(b));
+    }
+
+    fn emit_expr_binary(
+        &mut self,
+        ops: &mut Vec<OpCode>,
+        lhs: &HirExpression,
+        rhs: &HirExpression,
+        operator: &BinaryOp,
+        program: &HirAst,
+    ) {
         self.emit_expression(ops, lhs, program);
         self.emit_expression(ops, rhs, program);
-        let use_optimized = self.is_statically_number(lhs, program) && self.is_statically_number(rhs, program);
+        let use_optimized =
+            self.is_statically_number(lhs, program) && self.is_statically_number(rhs, program);
         match operator {
             BinaryOp::Add => {
                 if use_optimized {
@@ -489,7 +569,13 @@ impl ByteCodeEmitter {
         }
     }
 
-    fn emit_expr_unary(&mut self, ops: &mut Vec<OpCode>, operand: &HirExpression, operator: &UnaryOp, program: &HirAst) {
+    fn emit_expr_unary(
+        &mut self,
+        ops: &mut Vec<OpCode>,
+        operand: &HirExpression,
+        operator: &UnaryOp,
+        program: &HirAst,
+    ) {
         self.emit_expression(ops, operand, program);
         match operator {
             UnaryOp::Neg => ops.push(OpCode::Neg),
@@ -498,39 +584,38 @@ impl ByteCodeEmitter {
         }
     }
 
-    fn emit_expr_function_call(&mut self, ops: &mut Vec<OpCode>, function_id: u32, args: &[HirExpression], invoke: bool, program: &HirAst) {
+    fn emit_expr_function_call(
+        &mut self,
+        ops: &mut Vec<OpCode>,
+        function_id: u32,
+        args: &[HirExpression],
+        invoke: bool,
+        program: &HirAst,
+    ) {
         // Push arguments first (they'll be on the bottom of the stack)
         for arg in args {
             self.emit_expression(ops, arg, program);
         }
         ops.push(OpCode::LdFunc(function_id));
         let arg_count = args.len() as u32;
-        
+
         if invoke {
-            // Check if we have all required arguments - if so, use CallStack directly
-            // This is an optimization: skip thunk creation when fully applied
-            if let Some(func) = program.functions.get(&function_id) {
-                let param_count = func.signature.params.len();
-                if arg_count as usize == param_count {
-                    // All arguments provided - use direct call (works for 0+ params)
-                    ops.push(OpCode::CallStack(arg_count));
-                } else {
-                    // Partial application - use thunk
-                    ops.push(OpCode::Thunk(arg_count));
-                    ops.push(OpCode::Invoke);
-                }
-            } else {
-                // Function not found in program (might be built-in) - use thunk for safety
-                ops.push(OpCode::Thunk(arg_count));
-                ops.push(OpCode::Invoke);
-            }
+            // Always use Thunk + Invoke for proper thunk evaluation
+            ops.push(OpCode::Thunk(arg_count));
+            ops.push(OpCode::Invoke);
         } else {
             // Not invoked: create thunk for lazy evaluation
             ops.push(OpCode::Thunk(arg_count));
         }
     }
 
-    fn emit_expr_partial_call(&mut self, ops: &mut Vec<OpCode>, func_id: u32, bound: &[Option<HirExpression>], program: &HirAst) {
+    fn emit_expr_partial_call(
+        &mut self,
+        ops: &mut Vec<OpCode>,
+        func_id: u32,
+        bound: &[Option<HirExpression>],
+        program: &HirAst,
+    ) {
         // Push bound arguments onto the stack in the order they appear
         // (they'll be popped in reverse, so we need to push in reverse order)
         let mut bound_values = Vec::new();
@@ -543,7 +628,7 @@ impl ByteCodeEmitter {
             }
         }
         bound_values.reverse(); // Now in correct order (position 0 = first arg, etc.)
-        
+
         // Build bound_mask: bit i is 1 if argument position i is bound, 0 if it's a hole
         let mut bound_mask: u64 = 0;
         for (i, is_bound) in bound_values.iter().enumerate() {
@@ -551,10 +636,10 @@ impl ByteCodeEmitter {
                 bound_mask |= 1 << i;
             }
         }
-        
+
         // Count holes
         let hole_count = bound.iter().filter(|arg| arg.is_none()).count() as u32;
-        
+
         // Emit MakePartial opcode
         ops.push(OpCode::MakePartial {
             func_id,
@@ -563,13 +648,23 @@ impl ByteCodeEmitter {
         });
     }
 
-    fn emit_expr_postfix_invoke(&mut self, ops: &mut Vec<OpCode>, operand: &HirExpression, args: &Option<Vec<HirExpression>>, program: &HirAst) {
+    fn emit_expr_postfix_invoke(
+        &mut self,
+        ops: &mut Vec<OpCode>,
+        operand: &HirExpression,
+        args: &Option<Vec<HirExpression>>,
+        program: &HirAst,
+    ) {
         // Handle nested PostfixInvoke expressions.
         // NOTE: There's a known limitation in the HIR structure for nested invocations like
         // `mul2!(add10!(i))!`. The outer operand (mul2) is not properly represented in the HIR,
         // so we work around this by handling nested PostfixInvoke when args is None.
         if args.is_none() {
-            if let HirExpression::PostfixInvoke { operand: ref inner_operand, args: ref inner_args } = operand {
+            if let HirExpression::PostfixInvoke {
+                operand: ref inner_operand,
+                args: ref inner_args,
+            } = operand
+            {
                 if let Some(ref inner_arg_list) = inner_args {
                     // Emit the inner PostfixInvoke expression (e.g., add10!(i))
                     for arg in inner_arg_list {
@@ -588,7 +683,7 @@ impl ByteCodeEmitter {
                 }
             }
         }
-        
+
         // If there are additional arguments, emit them first
         if let Some(arg_list) = args {
             let arg_count = arg_list.len() as u32;
@@ -614,7 +709,13 @@ impl ByteCodeEmitter {
         }
     }
 
-    fn emit_expr_compose_thunk(&mut self, ops: &mut Vec<OpCode>, first: &HirExpression, second: &HirExpression, program: &HirAst) {
+    fn emit_expr_compose_thunk(
+        &mut self,
+        ops: &mut Vec<OpCode>,
+        first: &HirExpression,
+        second: &HirExpression,
+        program: &HirAst,
+    ) {
         // Emit both expressions onto the stack
         // Stack after both are emitted: [second, first]
         self.emit_expression(ops, second, program);
@@ -623,31 +724,38 @@ impl ByteCodeEmitter {
         ops.push(OpCode::ComposeThunk);
     }
 
-    fn emit_expr_loop(&mut self, ops: &mut Vec<OpCode>, init_vars: &[(u32, HirExpression)], body: &HirBlock, break_slot: Option<u32>, program: &HirAst) {
+    fn emit_expr_loop(
+        &mut self,
+        ops: &mut Vec<OpCode>,
+        init_vars: &[(u32, HirExpression)],
+        body: &HirBlock,
+        break_slot: Option<u32>,
+        program: &HirAst,
+    ) {
         // Emit initialization code for loop variables
         for (var_id, init_expr) in init_vars {
             self.emit_expression(ops, init_expr, program);
             ops.push(OpCode::StVar(*var_id));
         }
-        
+
         let loop_start = ops.len();
-        
+
         self.loop_stack.push(LoopInfo {
             start: loop_start,
             end: 0, // Will be patched later
             break_positions: Vec::new(),
             break_slot,
         });
-        
+
         // Emit the loop body
         self.emit_block(ops, body, program);
-        
+
         // Emit jump back to loop start
         ops.push(OpCode::Jmp(loop_start));
-        
+
         // Record the end of the loop (after the jump back)
         let loop_end = ops.len();
-        
+
         // Patch all break statements that jumped to this loop
         let break_slot_val = if let Some(loop_info) = self.loop_stack.last_mut() {
             loop_info.end = loop_end;
@@ -658,17 +766,22 @@ impl ByteCodeEmitter {
         } else {
             None
         };
-        
+
         // Push the break_slot value (for expression-valued loops)
         if let Some(slot) = break_slot_val {
             ops.push(OpCode::LdVar(slot));
         }
-        
+
         // Pop the loop from stack
         self.loop_stack.pop();
     }
 
-    fn emit_expr_array(&mut self, ops: &mut Vec<OpCode>, elements: &[HirExpression], program: &HirAst) {
+    fn emit_expr_array(
+        &mut self,
+        ops: &mut Vec<OpCode>,
+        elements: &[HirExpression],
+        program: &HirAst,
+    ) {
         // Emit all elements onto the stack
         for elem in elements {
             self.emit_expression(ops, elem, program);
@@ -677,7 +790,13 @@ impl ByteCodeEmitter {
         ops.push(OpCode::MakeArray(elements.len() as u32));
     }
 
-    fn emit_expr_array_index(&mut self, ops: &mut Vec<OpCode>, array: &HirExpression, index: &HirExpression, program: &HirAst) {
+    fn emit_expr_array_index(
+        &mut self,
+        ops: &mut Vec<OpCode>,
+        array: &HirExpression,
+        index: &HirExpression,
+        program: &HirAst,
+    ) {
         // Emit array expression (pushes array onto stack)
         self.emit_expression(ops, array, program);
         // Emit index expression (pushes index onto stack)
@@ -698,7 +817,7 @@ impl ByteCodeEmitter {
     ) {
         // Emit array expression
         self.emit_expression(ops, array, program);
-        
+
         // Emit start (or None sentinel)
         if let Some(start_expr) = start {
             self.emit_expression(ops, start_expr, program);
@@ -714,35 +833,42 @@ impl ByteCodeEmitter {
             // For now, let's use a large negative number as sentinel: -999999999.0
             ops.push(OpCode::LdNum(-999999999.0)); // Sentinel for None
         }
-        
+
         // Emit end (or None sentinel)
         if let Some(end_expr) = end {
             self.emit_expression(ops, end_expr, program);
         } else {
             ops.push(OpCode::LdNum(-999999999.0)); // Sentinel for None
         }
-        
+
         // Emit step (or None sentinel)
         if let Some(step_expr) = step {
             self.emit_expression(ops, step_expr, program);
         } else {
             ops.push(OpCode::LdNum(-999999999.0)); // Sentinel for None
         }
-        
+
         // Emit inclusive_end flag (as number: 1.0 for true, 0.0 for false)
         ops.push(OpCode::LdNum(if inclusive_end { 1.0 } else { 0.0 }));
-        
+
         // ArraySlice opcode pops (array, start, end, step, inclusive_flag) and pushes sliced array
         ops.push(OpCode::ArraySlice);
     }
 
-    fn emit_expr_reducer(&mut self, ops: &mut Vec<OpCode>, array: &HirExpression, reducer_type: ReducerType, reducer_args: &[HirExpression], program: &HirAst) {
+    fn emit_expr_reducer(
+        &mut self,
+        ops: &mut Vec<OpCode>,
+        array: &HirExpression,
+        reducer_type: ReducerType,
+        reducer_args: &[HirExpression],
+        program: &HirAst,
+    ) {
         // Emit the array
         self.emit_expression(ops, array, program);
-        
+
         // Start iteration (consumes array, pushes iterator)
         ops.push(OpCode::ArrayIter);
-        
+
         // Initialize accumulator BEFORE the loop
         // We need to keep the iterator on the stack, so we'll initialize the accumulator first
         // by loading it into a variable, then we can work with the iterator
@@ -781,13 +907,13 @@ impl ByteCodeEmitter {
                 }
             }
         };
-        
+
         // Store iterator in a variable so we can reload it for each iteration
         // The iterator state is stored in the heap, so reloading the reference will work
         let iter_slot = 999996u32;
         ops.push(OpCode::StVar(iter_slot));
         // Stack: [] (iterator was stored)
-        
+
         // Emit reduction loop:
         // loop {
         //   iter = reload iterator (state is preserved in heap)
@@ -795,38 +921,38 @@ impl ByteCodeEmitter {
         //   if !has_more { break acc }
         //   acc = fn(acc, x)!
         // }
-        
+
         let loop_start = ops.len();
-        
+
         // Reload iterator for this iteration (state is preserved in heap)
         ops.push(OpCode::LdVar(iter_slot));
         // Stack: [iterator]
-        
+
         // Get next element: ArrayNext expects iterator on stack, pushes (has_more, element)
         ops.push(OpCode::ArrayNext);
         // Stack: [has_more, element]
-        
+
         // Store element first (we always need to process it, even if has_more is false)
         let elem_slot = 999997u32;
         // Swap has_more and element so we can store element
         // Stack: [has_more, element] -> we need [element, has_more] to store element
         // Actually, we can't swap easily, so we'll duplicate has_more, store element, then check has_more
         // Better: store element, then check has_more, and if false break after processing
-        
+
         // Duplicate has_more so we can check it after storing element
         // We'll pop has_more, store element, then check has_more from a temp var
         let has_more_slot = 999995u32;
         ops.push(OpCode::StVar(has_more_slot)); // Store has_more
-        // Stack: [element] (has_more was stored)
-        
+                                                // Stack: [element] (has_more was stored)
+
         // Store element
         ops.push(OpCode::StVar(elem_slot));
         // Stack: [] (element was stored)
-        
+
         // Load accumulator and element
         ops.push(OpCode::LdVar(acc_slot));
         ops.push(OpCode::LdVar(elem_slot));
-        
+
         // Call reducer function
         if use_add_opcode {
             // sum uses Add opcode
@@ -837,22 +963,22 @@ impl ByteCodeEmitter {
             ops.push(OpCode::Thunk(2));
             ops.push(OpCode::Invoke);
         }
-        
+
         // Store result back to accumulator
         ops.push(OpCode::StVar(acc_slot));
-        
+
         // Check has_more - if false, break
         ops.push(OpCode::LdVar(has_more_slot));
         let has_more_pos = ops.len();
         ops.push(OpCode::JmpIfFalse(0)); // Will patch later
-        
+
         // Jump back to loop start
         ops.push(OpCode::Jmp(loop_start));
-        
+
         // Patch the break jump (when has_more is false)
         let loop_end = ops.len();
         ops[has_more_pos] = OpCode::JmpIfFalse(loop_end);
-        
+
         // Load accumulator as result
         ops.push(OpCode::LdVar(acc_slot));
     }
@@ -861,11 +987,22 @@ impl ByteCodeEmitter {
     /// For binary pattern expressions (like == 0, > 10), the left-hand side is the match expression
     /// which is already on the stack, so we skip emitting it and only emit the right-hand side and operator.
     /// Handles nested patterns like "> 0 and < 10" recursively.
-    fn emit_pattern_expression(&mut self, ops: &mut Vec<OpCode>, pattern_expr: &HirExpression, match_expr: &HirExpression, program: &HirAst) {
+    fn emit_pattern_expression(
+        &mut self,
+        ops: &mut Vec<OpCode>,
+        pattern_expr: &HirExpression,
+        match_expr: &HirExpression,
+        program: &HirAst,
+    ) {
         match pattern_expr {
             HirExpression::Binary { lhs, rhs, operator } => {
                 match operator {
-                    BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Gt | BinaryOp::Lt | BinaryOp::Ge | BinaryOp::Le => {
+                    BinaryOp::Eq
+                    | BinaryOp::Ne
+                    | BinaryOp::Gt
+                    | BinaryOp::Lt
+                    | BinaryOp::Ge
+                    | BinaryOp::Le => {
                         // Comparison operator: lhs is match_expr (already on stack), just emit rhs and operator
                         self.emit_expression(ops, rhs, program);
                         match operator {
@@ -911,6 +1048,7 @@ impl ByteCodeEmitter {
         match expr {
             HirExpression::Number(n) => self.emit_expr_number(ops, *n),
             HirExpression::String(s) => self.emit_expr_string(ops, s),
+            HirExpression::Boolean(b) => self.emit_expr_boolean(ops, *b),
             HirExpression::Identifier(slot) => self.emit_expr_identifier(ops, *slot),
             HirExpression::Constant(id) => self.emit_expr_constant(ops, *id),
             HirExpression::Binary { lhs, rhs, operator } => {
@@ -919,7 +1057,11 @@ impl ByteCodeEmitter {
             HirExpression::Unary { operand, operator } => {
                 self.emit_expr_unary(ops, operand, operator, program);
             }
-            HirExpression::FunctionCall { function_id, args, invoke } => {
+            HirExpression::FunctionCall {
+                function_id,
+                args,
+                invoke,
+            } => {
                 self.emit_expr_function_call(ops, *function_id, args, *invoke, program);
             }
             HirExpression::PartialCall { func_id, bound } => {
@@ -931,7 +1073,11 @@ impl ByteCodeEmitter {
             HirExpression::ComposeThunk { first, second } => {
                 self.emit_expr_compose_thunk(ops, first, second, program);
             }
-            HirExpression::Loop { init_vars, body, break_slot } => {
+            HirExpression::Loop {
+                init_vars,
+                body,
+                break_slot,
+            } => {
                 self.emit_expr_loop(ops, init_vars, body, *break_slot, program);
             }
             HirExpression::Array(elements) => {
@@ -940,13 +1086,22 @@ impl ByteCodeEmitter {
             HirExpression::ArrayIndex { array, index } => {
                 self.emit_expr_array_index(ops, array, index, program);
             }
-            HirExpression::ArraySlice { array, start, end, step, inclusive_end } => {
+            HirExpression::ArraySlice {
+                array,
+                start,
+                end,
+                step,
+                inclusive_end,
+            } => {
                 self.emit_expr_array_slice(ops, array, start, end, step, *inclusive_end, program);
             }
-            HirExpression::Reducer { array, reducer_type, reducer_args } => {
+            HirExpression::Reducer {
+                array,
+                reducer_type,
+                reducer_args,
+            } => {
                 self.emit_expr_reducer(ops, array, *reducer_type, reducer_args, program);
             }
         }
     }
-    
 }

@@ -1,11 +1,12 @@
 //! Symbol table and symbol management for HIR lowering.
-//! 
+//!
 //! Symbols are the named entities in the program (variables, functions, parameters, modules).
 //! All symbols have stable IDs for fast lookups, cross-file resolution, and editor features.
 
 use std::collections::HashMap;
 
-use super::{HirAst, ValueKind, Span, ScopeId, FunctionSignature};
+use super::{FunctionSignature, HirAst, ScopeId, Span, ValueKind};
+use serde::Serialize;
 
 /// Format a function signature as a type string for display.
 fn format_function_type_string(sig: &FunctionSignature) -> String {
@@ -24,36 +25,32 @@ fn format_function_type_string(sig: &FunctionSignature) -> String {
             }
         }
     }
-    let format_kind = |kind: &ValueKind| -> String {
-        format_kind_recursive(kind)
-    };
-    
-    let params: Vec<String> = sig.params.iter()
-        .map(|p| format_kind(p))
-        .collect();
-    
+    let format_kind = |kind: &ValueKind| -> String { format_kind_recursive(kind) };
+
+    let params: Vec<String> = sig.params.iter().map(|p| format_kind(p)).collect();
+
     let param_str = if params.len() == 1 {
         params[0].clone()
     } else {
         format!("({})", params.join(","))
     };
-    
+
     let return_str = format_kind(&sig.return_type);
     format!("{} -> {}", param_str, return_str)
 }
 
 /// Unique identifier for a symbol (variable, function, parameter, module).
 /// Symbols are the named entities in the program that can be referenced.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub struct SymbolId(pub u32);
 
 /// Unique identifier for a type.
 /// Types are interned and deduplicated, so identical types share the same TypeId.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub struct TypeId(pub u32);
 
 /// Kind of symbol in the symbol table.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub enum SymbolKind {
     Function,
     Variable,
@@ -62,10 +59,10 @@ pub enum SymbolKind {
 }
 
 /// A symbol in the symbol table, representing a named entity in the program.
-/// 
+///
 /// This is the ID-based representation. All references to symbols use SymbolId,
 /// not strings. The name is stored for display and debugging, but lookups use IDs.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Symbol {
     /// Unique identifier for this symbol.
     pub id: SymbolId,
@@ -85,7 +82,7 @@ pub struct Symbol {
 /// Symbol table mapping names to symbols.
 /// For now, we use a Vec to preserve order and allow multiple symbols with the same name
 /// (shadowing). The LSP can filter by scope as needed.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct SymbolTable {
     pub symbols: Vec<Symbol>,
 }
@@ -109,15 +106,19 @@ impl SymbolTable {
 }
 
 /// Build a symbol table from HIR, extracting spans from AST.
-pub fn build_symbol_table(hir: &HirAst, ast: &crate::core::ast::Program, source: &str) -> SymbolTable {
+pub fn build_symbol_table(
+    hir: &HirAst,
+    ast: &crate::core::ast::Program,
+    source: &str,
+) -> SymbolTable {
     let mut table = SymbolTable::new();
-    
+
     // Extract all identifier spans from AST
     let span_map = extract_identifier_spans(ast, source);
-    
+
     // Track which spans we've used for each name
     let mut used_spans: HashMap<String, usize> = HashMap::new();
-    
+
     // Symbol ID counter - each symbol gets a unique ID
     let mut next_symbol_id = 0u32;
 
@@ -147,25 +148,29 @@ pub fn build_symbol_table(hir: &HirAst, ast: &crate::core::ast::Program, source:
             id: symbol_id,
             name: func.name.clone(),
             kind: SymbolKind::Function,
-            ty: ValueKind::Function(
-                format_function_type_string(&func.signature),
-            ),
+            ty: ValueKind::Function(format_function_type_string(&func.signature)),
             defined_at: get_span(&func.name),
             scope,
         });
     }
 
     // Add imported functions (they're not in hir.functions, but in import_table)
-    for (name, func_id) in &hir.import_table {
+    for (name, func_id) in hir.all_imports() {
         // Check if this is a constant (variable ID) or a function
-        let is_constant = hir.scopes.scopes.iter().any(|scope| {
-            scope.vars.iter().any(|v| v.id == *func_id)
-        });
-        
+        let is_constant = hir
+            .scopes
+            .scopes
+            .iter()
+            .any(|scope| scope.vars.iter().any(|v| v.id == *func_id));
+
         if is_constant {
             // It's a constant - add as a variable
-            if let Some(var) = hir.scopes.scopes.iter()
-                .find_map(|scope| scope.vars.iter().find(|v| v.id == *func_id)) {
+            if let Some(var) = hir
+                .scopes
+                .scopes
+                .iter()
+                .find_map(|scope| scope.vars.iter().find(|v| v.id == *func_id))
+            {
                 let symbol_id = SymbolId(next_symbol_id);
                 next_symbol_id += 1;
                 let scope = ScopeId(0);
@@ -187,7 +192,7 @@ pub fn build_symbol_table(hir: &HirAst, ast: &crate::core::ast::Program, source:
                 // This happens when importing from other modules
                 ValueKind::Function("unknown -> unknown".to_string())
             };
-            
+
             let symbol_id = SymbolId(next_symbol_id);
             next_symbol_id += 1;
             // Imported symbols are in root scope
@@ -244,25 +249,29 @@ pub fn build_symbol_table_without_spans(hir: &HirAst) -> SymbolTable {
             id: symbol_id,
             name: func.name.clone(),
             kind: SymbolKind::Function,
-            ty: ValueKind::Function(
-                format_function_type_string(&func.signature),
-            ),
+            ty: ValueKind::Function(format_function_type_string(&func.signature)),
             defined_at: None,
             scope: ScopeId(0),
         });
     }
 
     // Add imported functions
-    for (name, func_id) in &hir.import_table {
+    for (name, func_id) in hir.all_imports() {
         // Check if this is a constant (variable ID) or a function
-        let is_constant = hir.scopes.scopes.iter().any(|scope| {
-            scope.vars.iter().any(|v| v.id == *func_id)
-        });
-        
+        let is_constant = hir
+            .scopes
+            .scopes
+            .iter()
+            .any(|scope| scope.vars.iter().any(|v| v.id == *func_id));
+
         if is_constant {
             // It's a constant - add as a variable
-            if let Some(var) = hir.scopes.scopes.iter()
-                .find_map(|scope| scope.vars.iter().find(|v| v.id == *func_id)) {
+            if let Some(var) = hir
+                .scopes
+                .scopes
+                .iter()
+                .find_map(|scope| scope.vars.iter().find(|v| v.id == *func_id))
+            {
                 let symbol_id = SymbolId(next_symbol_id);
                 next_symbol_id += 1;
                 table.symbols.push(Symbol {
@@ -282,7 +291,7 @@ pub fn build_symbol_table_without_spans(hir: &HirAst) -> SymbolTable {
                 // Function from another module - use generic function type
                 ValueKind::Function("unknown -> unknown".to_string())
             };
-            
+
             let symbol_id = SymbolId(next_symbol_id);
             next_symbol_id += 1;
             table.symbols.push(Symbol {
@@ -317,9 +326,12 @@ pub fn build_symbol_table_without_spans(hir: &HirAst) -> SymbolTable {
 }
 
 /// Extract identifier spans from AST by walking the tree and finding identifiers in source text.
-fn extract_identifier_spans(ast: &crate::core::ast::Program, source: &str) -> HashMap<String, Vec<Span>> {
+fn extract_identifier_spans(
+    ast: &crate::core::ast::Program,
+    source: &str,
+) -> HashMap<String, Vec<Span>> {
     let mut span_map: HashMap<String, Vec<Span>> = HashMap::new();
-    
+
     // Helper to find identifier position in source text
     let find_identifier_span = |name: &str, start_from: usize| -> Option<Span> {
         let name_bytes = name.as_bytes();
@@ -335,18 +347,21 @@ fn extract_identifier_spans(ast: &crate::core::ast::Program, source: &str) -> Ha
                         let ch = source.as_bytes()[i + name_bytes.len()] as char;
                         !ch.is_alphanumeric() && ch != '_'
                     };
-                    
+
                     if before_ok && after_ok {
                         // Check if it's in a comment
                         let line_start = source[..i].rfind('\n').map(|p| p + 1).unwrap_or(0);
                         let line_text = &source[line_start..];
                         let col_in_line = i - line_start;
-                        
+
                         // Simple check: if we find // before this position on the same line
-                        if line_text[..col_in_line.min(line_text.len())].find("//").is_some() {
+                        if line_text[..col_in_line.min(line_text.len())]
+                            .find("//")
+                            .is_some()
+                        {
                             continue; // Skip if in comment
                         }
-                        
+
                         return Some(Span::new(i, i + name_bytes.len()));
                     }
                 }
@@ -354,7 +369,7 @@ fn extract_identifier_spans(ast: &crate::core::ast::Program, source: &str) -> Ha
         }
         None
     };
-    
+
     // Walk AST to find all identifiers
     let mut current_pos = 0;
     for block in &ast.blocks {
@@ -362,50 +377,68 @@ fn extract_identifier_spans(ast: &crate::core::ast::Program, source: &str) -> Ha
             match stmt {
                 crate::core::ast::Statement::FunctionDeclaration { identifier, .. } => {
                     if let Some(span) = find_identifier_span(identifier, current_pos) {
-                        span_map.entry(identifier.clone()).or_insert_with(Vec::new).push(span);
+                        span_map
+                            .entry(identifier.clone())
+                            .or_insert_with(Vec::new)
+                            .push(span);
                         current_pos = span.end;
                     }
                 }
                 crate::core::ast::Statement::Let { identifier, .. } => {
                     if let Some(span) = find_identifier_span(identifier, current_pos) {
-                        span_map.entry(identifier.clone()).or_insert_with(Vec::new).push(span);
+                        span_map
+                            .entry(identifier.clone())
+                            .or_insert_with(Vec::new)
+                            .push(span);
                         current_pos = span.end;
                     }
                 }
                 crate::core::ast::Statement::Const { identifier, .. } => {
                     if let Some(span) = find_identifier_span(identifier, current_pos) {
-                        span_map.entry(identifier.clone()).or_insert_with(Vec::new).push(span);
+                        span_map
+                            .entry(identifier.clone())
+                            .or_insert_with(Vec::new)
+                            .push(span);
                         current_pos = span.end;
                     }
                 }
-                crate::core::ast::Statement::Assign { identifier, .. } |
-                crate::core::ast::Statement::AssignIncrement { identifier, .. } |
-                crate::core::ast::Statement::AssignDecrement { identifier, .. } => {
+                crate::core::ast::Statement::Assign { identifier, .. }
+                | crate::core::ast::Statement::AssignIncrement { identifier, .. }
+                | crate::core::ast::Statement::AssignDecrement { identifier, .. } => {
                     if let Some(span) = find_identifier_span(identifier, current_pos) {
-                        span_map.entry(identifier.clone()).or_insert_with(Vec::new).push(span);
+                        span_map
+                            .entry(identifier.clone())
+                            .or_insert_with(Vec::new)
+                            .push(span);
                         current_pos = span.end;
                     }
                 }
                 crate::core::ast::Statement::For { var_name, .. } => {
                     if let Some(span) = find_identifier_span(var_name, current_pos) {
-                        span_map.entry(var_name.clone()).or_insert_with(Vec::new).push(span);
+                        span_map
+                            .entry(var_name.clone())
+                            .or_insert_with(Vec::new)
+                            .push(span);
                         current_pos = span.end;
                     }
                 }
                 crate::core::ast::Statement::Mod { identifier } => {
                     if let Some(span) = find_identifier_span(identifier, current_pos) {
-                        span_map.entry(identifier.clone()).or_insert_with(Vec::new).push(span);
+                        span_map
+                            .entry(identifier.clone())
+                            .or_insert_with(Vec::new)
+                            .push(span);
                         current_pos = span.end;
                     }
                 }
                 _ => {}
             }
-            
+
             // Also walk expressions to find identifiers
             walk_expression_for_spans(stmt, source, &mut span_map, &mut current_pos);
         }
     }
-    
+
     span_map
 }
 
@@ -417,7 +450,7 @@ fn walk_expression_for_spans(
     current_pos: &mut usize,
 ) {
     use crate::core::ast::{Expression, Statement};
-    
+
     let find_identifier_span = |name: &str, start_from: usize| -> Option<Span> {
         let name_bytes = name.as_bytes();
         for i in start_from..source.len() {
@@ -435,7 +468,10 @@ fn walk_expression_for_spans(
                         let line_start = source[..i].rfind('\n').map(|p| p + 1).unwrap_or(0);
                         let line_text = &source[line_start..];
                         let col_in_line = i - line_start;
-                        if line_text[..col_in_line.min(line_text.len())].find("//").is_some() {
+                        if line_text[..col_in_line.min(line_text.len())]
+                            .find("//")
+                            .is_some()
+                        {
                             continue;
                         }
                         return Some(Span::new(i, i + name_bytes.len()));
@@ -445,7 +481,7 @@ fn walk_expression_for_spans(
         }
         None
     };
-    
+
     fn walk_expr(
         expr: &Expression,
         source: &str,
@@ -456,11 +492,16 @@ fn walk_expression_for_spans(
         match expr {
             Expression::Identifier(name) => {
                 if let Some(span) = find_identifier_span(name, *current_pos) {
-                    span_map.entry(name.clone()).or_insert_with(Vec::new).push(span);
+                    span_map
+                        .entry(name.clone())
+                        .or_insert_with(Vec::new)
+                        .push(span);
                     *current_pos = span.end;
                 }
             }
-            Expression::FunctionCall { callee, arguments, .. } => {
+            Expression::FunctionCall {
+                callee, arguments, ..
+            } => {
                 walk_expr(callee, source, span_map, current_pos, find_identifier_span);
                 for arg in arguments {
                     walk_expr(arg, source, span_map, current_pos, find_identifier_span);
@@ -477,7 +518,10 @@ fn walk_expression_for_spans(
             Expression::MemberAccess { object, member, .. } => {
                 walk_expr(object, source, span_map, current_pos, find_identifier_span);
                 if let Some(span) = find_identifier_span(member, *current_pos) {
-                    span_map.entry(member.clone()).or_insert_with(Vec::new).push(span);
+                    span_map
+                        .entry(member.clone())
+                        .or_insert_with(Vec::new)
+                        .push(span);
                     *current_pos = span.end;
                 }
             }
@@ -498,7 +542,10 @@ fn walk_expression_for_spans(
             Expression::Loop { init_vars, .. } => {
                 for (var_name, _) in init_vars {
                     if let Some(span) = find_identifier_span(var_name, *current_pos) {
-                        span_map.entry(var_name.clone()).or_insert_with(Vec::new).push(span);
+                        span_map
+                            .entry(var_name.clone())
+                            .or_insert_with(Vec::new)
+                            .push(span);
                         *current_pos = span.end;
                     }
                 }
@@ -511,18 +558,26 @@ fn walk_expression_for_spans(
             _ => {}
         }
     }
-    
+
     match expr_or_stmt {
-        Statement::Let { expression, .. } |
-        Statement::Const { expression, .. } |
-        Statement::Assign { expression, .. } |
-        Statement::AssignIncrement { expression, .. } |
-        Statement::AssignDecrement { expression, .. } |
-        Statement::Return { expression, .. } |
-        Statement::Expression(expression) => {
-            walk_expr(expression, source, span_map, current_pos, &find_identifier_span);
+        Statement::Let { expression, .. }
+        | Statement::Const { expression, .. }
+        | Statement::Assign { expression, .. }
+        | Statement::AssignIncrement { expression, .. }
+        | Statement::AssignDecrement { expression, .. }
+        | Statement::Return { expression, .. }
+        | Statement::Expression(expression) => {
+            walk_expr(
+                expression,
+                source,
+                span_map,
+                current_pos,
+                &find_identifier_span,
+            );
         }
-        Statement::If { arms, else_block, .. } => {
+        Statement::If {
+            arms, else_block, ..
+        } => {
             for (expr, _) in arms {
                 walk_expr(expr, source, span_map, current_pos, &find_identifier_span);
             }
@@ -532,8 +587,16 @@ fn walk_expression_for_spans(
                 }
             }
         }
-        Statement::Match { expression, cases, .. } => {
-            walk_expr(expression, source, span_map, current_pos, &find_identifier_span);
+        Statement::Match {
+            expression, cases, ..
+        } => {
+            walk_expr(
+                expression,
+                source,
+                span_map,
+                current_pos,
+                &find_identifier_span,
+            );
             for (opt_expr, block) in cases {
                 if let Some(expr) = opt_expr {
                     walk_expr(expr, source, span_map, current_pos, &find_identifier_span);
@@ -543,15 +606,23 @@ fn walk_expression_for_spans(
                 }
             }
         }
-        Statement::While { condition, body, .. } => {
-            walk_expr(condition, source, span_map, current_pos, &find_identifier_span);
+        Statement::While {
+            condition, body, ..
+        } => {
+            walk_expr(
+                condition,
+                source,
+                span_map,
+                current_pos,
+                &find_identifier_span,
+            );
             for stmt in &body.statements {
                 walk_expression_for_spans(stmt, source, span_map, current_pos);
             }
         }
-        Statement::Loop { body, .. } |
-        Statement::For { body, .. } |
-        Statement::FunctionDeclaration { body, .. } => {
+        Statement::Loop { body, .. }
+        | Statement::For { body, .. }
+        | Statement::FunctionDeclaration { body, .. } => {
             for stmt in &body.statements {
                 walk_expression_for_spans(stmt, source, span_map, current_pos);
             }
@@ -559,4 +630,3 @@ fn walk_expression_for_spans(
         _ => {}
     }
 }
-

@@ -1,21 +1,22 @@
 //! HIR lowering pass: AST → HIR → CompilerState
-//! 
+//!
 //! This module performs the lowering transformation from AST to High-level Intermediate Representation (HIR),
 //! and builds CompilerState as the single source of truth for semantic information.
 //! It is no longer just "semantic analysis" - it defines symbol identity, scoping, binding, and semantic meaning.
 
-pub mod scopes;
-pub mod symbols;
 pub mod lower_expr;
 pub mod lower_stmt;
 pub mod project_semantic_items;
+pub mod scopes;
+pub mod symbols;
 
 // Re-export core types
-pub use scopes::{ScopeId, ScopeIdOld, Scope, ScopeArena, HirBlockContext};
-pub use symbols::{SymbolId, TypeId, Symbol, SymbolKind, SymbolTable};
 pub use lower_expr::{HirExpression, ReducerType};
-pub use lower_stmt::{HirStmt, HirBlock, HirBuilder};
+pub use lower_stmt::{HirBlock, HirBuilder, HirStmt};
 pub use project_semantic_items::{SemanticItem, SemanticItemKind, SemanticModifiers};
+pub use scopes::{HirBlockContext, Scope, ScopeArena, ScopeId, ScopeIdOld};
+use serde::Serialize;
+pub use symbols::{Symbol, SymbolId, SymbolKind, SymbolTable, TypeId};
 
 // Core types that belong in the main module
 use std::collections::HashMap;
@@ -25,7 +26,7 @@ use std::collections::HashMap;
 /// Function signature describing parameter types and return type.
 ///
 /// Used for type checking function calls and declarations.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct FunctionSignature {
     #[allow(dead_code)]
     pub params: Vec<ValueKind>,
@@ -37,7 +38,7 @@ pub struct FunctionSignature {
 ///
 /// Includes primitive types (Number, String, Boolean) and
 /// function/thunk types with their signatures.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub enum ValueKind {
     Number,
     String,
@@ -52,7 +53,7 @@ pub enum ValueKind {
     Array(Box<ValueKind>),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub enum ConstantValue {
     Number(f64),
     String(String),
@@ -61,7 +62,7 @@ pub enum ConstantValue {
     None,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Constant {
     pub id: u32,
     pub name: String,
@@ -69,14 +70,14 @@ pub struct Constant {
     pub kind: ValueKind,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Variable {
     pub id: u32,
     pub name: String,
     pub kind: ValueKind,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct FunctionDefinition {
     pub body: HirBlock,
     pub param_var_ids: Vec<u32>, // Variable IDs for parameters, in order
@@ -84,7 +85,7 @@ pub struct FunctionDefinition {
     pub scope_id: scopes::ScopeId, // The function's scope ID
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Function {
     #[allow(dead_code)]
     pub id: u32,
@@ -103,16 +104,29 @@ pub struct Function {
 /// - Import table (imported symbols)
 ///
 /// This is the input to the bytecode compiler.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct HirAst {
     pub constants: Vec<Constant>,
     pub blocks: Vec<HirBlock>,
     pub scopes: ScopeArena,
     pub functions: std::collections::HashMap<u32, Function>, // Function ID -> Function struct
-    /// Maps imported symbol names to function IDs (for LSP and symbol resolution)
-    pub import_table: ImportTable,
+    pub module_imports: HashMap<String, ImportTable>,
     /// Maps imported constant names to their values (for LSP hover)
     pub imported_constant_values: HashMap<String, ConstantValue>,
+}
+
+
+impl Default for HirAst {
+    fn default() -> Self {
+        HirAst {
+            constants: Vec::new(),
+            blocks: Vec::new(),
+            scopes: ScopeArena { scopes: Vec::new() },
+            functions: HashMap::new(),
+            module_imports: HashMap::new(),
+            imported_constant_values: HashMap::new(),
+        }
+    }
 }
 
 impl HirAst {
@@ -151,12 +165,33 @@ impl HirAst {
         }
         None
     }
+
+    /// Get all imports from all modules as a flat iterator
+    pub fn all_imports(&self) -> impl Iterator<Item = (&String, &u32)> {
+        self.module_imports
+            .values()
+            .flat_map(|imports| imports.iter())
+    }
+
+    /// Get all imported function names across all modules
+    pub fn all_imported_function_names(&self) -> impl Iterator<Item = &String> {
+        self.all_imports()
+            .filter(|(_, func_id)| self.functions.contains_key(func_id))
+            .map(|(name, _)| name)
+    }
+
+    /// Get all imported constant names across all modules
+    pub fn all_imported_constant_names(&self) -> impl Iterator<Item = &String> {
+        self.all_imports()
+            .filter(|(_, func_id)| !self.functions.contains_key(func_id))
+            .map(|(name, _)| name)
+    }
 }
 
 /// Source code span (byte offsets).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct Span {
-    pub start: usize,  // byte offset
+    pub start: usize, // byte offset
     pub end: usize,
 }
 
@@ -164,7 +199,7 @@ impl Span {
     pub fn new(start: usize, end: usize) -> Self {
         Self { start, end }
     }
-    
+
     pub fn length(&self) -> usize {
         self.end - self.start
     }
@@ -172,7 +207,7 @@ impl Span {
 
 /// Precomputed line index for efficient byte-to-line/column conversion.
 /// Built once and reused for all token lookups.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct LineIndex {
     pub line_starts: Vec<usize>,
 }
@@ -181,16 +216,16 @@ impl LineIndex {
     /// Build a line index from source text.
     pub fn new(source: &str) -> Self {
         let mut line_starts = vec![0]; // First line starts at byte 0
-        
+
         for (byte_pos, ch) in source.char_indices() {
             if ch == '\n' {
                 line_starts.push(byte_pos + 1); // Next line starts after newline
             }
         }
-        
+
         Self { line_starts }
     }
-    
+
     /// Lookup line and column from byte offset.
     pub fn lookup(&self, byte: usize) -> (u32, u32) {
         // Find the line containing this byte offset
@@ -200,7 +235,7 @@ impl LineIndex {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub enum HirError {
     #[allow(dead_code)]
     NotImplemented,
@@ -221,12 +256,22 @@ pub enum HirError {
     // You can add more specific error variants as needed
 }
 
+impl std::fmt::Display for HirError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
+impl std::error::Error for HirError {}
+
+
 /// Maps imported symbol names to their function IDs.
 /// Used for compile-time resolution of imports.
 pub type ImportTable = HashMap<String, u32>; // symbol_name -> function_id
 
 /// Represents a module that can be imported from.
 /// A module is a collection of functions and constants identified by dot-separated paths.
+#[derive(Debug, Clone, Serialize)]
 pub struct Module {
     /// Functions in this module: function_name -> function_id
     pub functions: HashMap<String, u32>,
@@ -235,10 +280,10 @@ pub struct Module {
 }
 
 /// Compiler state containing all semantic information from compilation.
-/// 
+///
 /// This is the single source of truth for the compiler's understanding of the program.
 /// The LSP consumes this state instead of re-parsing or re-analyzing.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct CompilerState {
     pub ast: crate::core::ast::Program,
     pub hir: HirAst,
@@ -253,32 +298,37 @@ pub struct CompilerState {
 
 impl CompilerState {
     /// Create a CompilerState from compilation results.
-    /// 
+    ///
     /// This is the single source of truth for the compiler's understanding of the program.
     /// The LSP consumes this state instead of re-parsing or re-analyzing.
-    /// 
+    ///
     /// Note: source text is needed to extract spans, but we don't store it in CompilerState.
     /// If source is None, spans will be None. Semantic items are projected from the state.
-    pub fn new(ast: crate::core::ast::Program, hir: HirAst, diagnostics: Vec<HirError>, source: Option<&str>) -> Self {
+    pub fn new(
+        ast: crate::core::ast::Program,
+        hir: HirAst,
+        diagnostics: Vec<HirError>,
+        source: Option<&str>,
+    ) -> Self {
         let symbols = if let Some(src) = source {
             Self::build_symbol_table(&hir, &ast, src)
         } else {
             Self::build_symbol_table_without_spans(&hir)
         };
-        
+
         let line_index = if let Some(src) = source {
             Some(LineIndex::new(src))
         } else {
             None
         };
-        
+
         // Project semantic items from compiler state (editor projection pass)
         let semantic_items = if let Some(src) = source {
             project_semantic_items::collect_semantic_items(&ast, src, &hir)
         } else {
             Vec::new()
         };
-        
+
         Self {
             ast,
             hir,
@@ -288,28 +338,31 @@ impl CompilerState {
             line_index,
         }
     }
-    
+
     /// Project editor items from compiler state.
-    /// 
+    ///
     /// This is a pure projection function that extracts semantic items (keywords, operators,
     /// identifiers, types) from the compiler state. It does not perform analysis - it only
     /// projects what the compiler already knows into a form suitable for editor tooling.
-    /// 
+    ///
     /// This function is the single source of truth for LSP semantic tokenization.
     /// No text scanning. No heuristics. No divergence from compiler state.
     pub fn project_editor_items(&self, source: &str) -> Vec<SemanticItem> {
         project_semantic_items::collect_semantic_items(&self.ast, source, &self.hir)
     }
-    
+
     // Symbol table building functions (moved from symbols module for now due to dependencies)
-    fn build_symbol_table(hir: &HirAst, ast: &crate::core::ast::Program, source: &str) -> SymbolTable {
+    fn build_symbol_table(
+        hir: &HirAst,
+        ast: &crate::core::ast::Program,
+        source: &str,
+    ) -> SymbolTable {
         symbols::build_symbol_table(hir, ast, source)
     }
-    
+
     fn build_symbol_table_without_spans(hir: &HirAst) -> SymbolTable {
         symbols::build_symbol_table_without_spans(hir)
     }
 }
 
 // HirBuilder is already re-exported above
-
