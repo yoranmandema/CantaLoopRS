@@ -1,3 +1,3 @@
-use std.print;
+use print from std;
 
 print("Hello world!")!; 

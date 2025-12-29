@@ -48,6 +48,14 @@ pub enum OpCode {
     JmpIfFalse(usize),  // Pop value from stack, if false jump to offset
     JmpIfTrue(usize),   // Pop value from stack, if true jump to offset
     Jmp(usize),         // Unconditional jump to offset
+    
+    // Array operations
+    MakeArray(u32),     // Create array from n values on stack (pops n values, pushes array)
+    ArrayIter,          // Start iteration: pops array, pushes iterator
+    ArrayNext,          // Get next element: pops iterator, pushes (has_more: bool, element: value)
+    ArrayIndex,         // Index array: pops (array, index), pushes element at index
+    ArraySlice,         // Slice array: pops (array, step?, end?, start?), pushes sliced array
+    // ArraySlice stack order: array, then optional step, optional end, optional start (None values use sentinel)
 }
 
 impl OpCode {
@@ -94,8 +102,13 @@ impl OpCode {
             OpCode::JmpIfFalse(_) => 27,
             OpCode::JmpIfTrue(_) => 33,
             OpCode::Jmp(_) => 28,
+            OpCode::MakeArray(_) => 37,
+            OpCode::ArrayIter => 38,
+            OpCode::ArrayNext => 39,
+            OpCode::ArrayIndex => 40,
+            OpCode::ArraySlice => 41,
         }
     }
 }
 
-pub const OPCODE_COUNT: usize = 37;
+pub const OPCODE_COUNT: usize = 42;

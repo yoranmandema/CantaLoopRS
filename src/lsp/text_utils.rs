@@ -43,18 +43,6 @@ pub fn extract_identifier_at_position(text: &str, line: usize, col: usize) -> Op
     Some((line_text[start..end].to_string(), start, end))
 }
 
-/// Check if a position in a line is inside a comment.
-pub fn is_in_comment(line: &str, byte_pos: usize) -> bool {
-    // Check for line comment (//)
-    if let Some(comment_pos) = line.find("//") {
-        if byte_pos > comment_pos {
-            return true;
-        }
-    }
-    // TODO: Handle block comments (/* ... */) - would need multi-line tracking
-    false
-}
-
 /// Create an LSP Range from line, column, and length.
 pub fn create_range(line: usize, col: usize, length: usize) -> Range {
     Range {

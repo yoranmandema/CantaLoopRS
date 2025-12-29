@@ -1,11 +1,7 @@
 /// Abstract Syntax Tree representation and builder.
 pub mod ast;
-pub mod ast_builder;
-pub mod ast_enums;
 /// Bytecode compilation and instruction set.
 pub mod bytecode;
-pub mod bytecode_emitter;
-pub mod bytecode_opcode;
 /// Main engine orchestrating compilation and execution.
 pub mod engine;
 /// Pest-based parser for CantaLoop source code.

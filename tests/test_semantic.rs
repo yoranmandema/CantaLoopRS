@@ -1,9 +1,10 @@
 mod common;
 
 use CantaLoopRS::{
-    engine::Engine,
-    parser::parse_program,
-    hir_lowering::{FunctionSignature, ValueKind},
+    Engine,
+    parse_program,
+    FunctionSignature,
+    ValueKind,
 };
 
 #[test]
@@ -20,7 +21,7 @@ fn test_semantic_simple_program() {
 fn test_semantic_function_definition() {
     let mut engine = common::helpers::create_test_engine();
     let program = parse_program(r#"
-fn add(a, b) {
+fn add(a: num, b: num) -> num {
     return a + b;
 }
 "#).unwrap();
@@ -92,7 +93,7 @@ fn test_semantic_error_undefined_variable() {
 fn test_semantic_error_wrong_argument_count() {
     let mut engine = common::helpers::create_test_engine();
     let program = parse_program(r#"
-fn add(a, b) {
+fn add(a: num, b: num) -> num {
     return a + b;
 }
 

@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::path::Path;
 use std::sync::Arc;
 use tower_lsp::lsp_types::Url;
 use tower_lsp::Client;
@@ -47,8 +46,11 @@ impl CompilerStateManager {
         // Find project root if this file is part of a project
         let project_root = Self::find_project_root(uri);
         
+        // Get the current file path to skip it when loading modules
+        let current_file = uri.to_file_path().ok();
+        
         // Use the compiler to build state - single source of truth
-        match self.engine.compile_for_lsp(text, project_root.as_deref()) {
+        match self.engine.compile_for_lsp(text, project_root.as_deref(), current_file.as_deref()) {
             Ok(state) => {
                 let mut cache = self.cache.write().await;
                 cache.insert(uri.clone(), state);

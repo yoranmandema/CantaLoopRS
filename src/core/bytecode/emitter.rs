@@ -1,7 +1,7 @@
 use crate::core::{
     ast::{BinaryOp, UnaryOp},
     bytecode::OpCode,
-    hir_lowering::{HirAst, HirBlock, HirExpression, HirStmt, ValueKind},
+    hir_lowering::{HirAst, HirBlock, HirExpression, HirStmt, ValueKind, ReducerType},
 };
 
 pub struct ByteCodeEmitter {
@@ -505,11 +505,25 @@ impl ByteCodeEmitter {
         }
         ops.push(OpCode::LdFunc(function_id));
         let arg_count = args.len() as u32;
-        // All function calls go through thunks for consistency
+        
         if invoke {
-            // Invoked call: create thunk and immediately execute
-            ops.push(OpCode::Thunk(arg_count));
-            ops.push(OpCode::Invoke);
+            // Check if we have all required arguments - if so, use CallStack directly
+            // This is an optimization: skip thunk creation when fully applied
+            if let Some(func) = program.functions.get(&function_id) {
+                let param_count = func.signature.params.len();
+                if arg_count as usize == param_count {
+                    // All arguments provided - use direct call (works for 0+ params)
+                    ops.push(OpCode::CallStack(arg_count));
+                } else {
+                    // Partial application - use thunk
+                    ops.push(OpCode::Thunk(arg_count));
+                    ops.push(OpCode::Invoke);
+                }
+            } else {
+                // Function not found in program (might be built-in) - use thunk for safety
+                ops.push(OpCode::Thunk(arg_count));
+                ops.push(OpCode::Invoke);
+            }
         } else {
             // Not invoked: create thunk for lazy evaluation
             ops.push(OpCode::Thunk(arg_count));
@@ -654,6 +668,195 @@ impl ByteCodeEmitter {
         self.loop_stack.pop();
     }
 
+    fn emit_expr_array(&mut self, ops: &mut Vec<OpCode>, elements: &[HirExpression], program: &HirAst) {
+        // Emit all elements onto the stack
+        for elem in elements {
+            self.emit_expression(ops, elem, program);
+        }
+        // Create array from n elements
+        ops.push(OpCode::MakeArray(elements.len() as u32));
+    }
+
+    fn emit_expr_array_index(&mut self, ops: &mut Vec<OpCode>, array: &HirExpression, index: &HirExpression, program: &HirAst) {
+        // Emit array expression (pushes array onto stack)
+        self.emit_expression(ops, array, program);
+        // Emit index expression (pushes index onto stack)
+        self.emit_expression(ops, index, program);
+        // ArrayIndex opcode pops (array, index) and pushes element
+        ops.push(OpCode::ArrayIndex);
+    }
+
+    fn emit_expr_array_slice(
+        &mut self,
+        ops: &mut Vec<OpCode>,
+        array: &HirExpression,
+        start: &Option<Box<HirExpression>>,
+        end: &Option<Box<HirExpression>>,
+        step: &Option<Box<HirExpression>>,
+        inclusive_end: bool,
+        program: &HirAst,
+    ) {
+        // Emit array expression
+        self.emit_expression(ops, array, program);
+        
+        // Emit start (or None sentinel)
+        if let Some(start_expr) = start {
+            self.emit_expression(ops, start_expr, program);
+        } else {
+            // Push None sentinel - we'll use a special constant or just push a marker
+            // For now, we'll use a negative number as sentinel, but None is cleaner
+            // Actually, we need to push a Value::none() - let's use a special constant
+            // For simplicity, we'll push a magic number that the VM recognizes as "None"
+            // Actually, the VM can check for None using Value::is_none()
+            // Let's use LdConst with a special constant ID that represents None
+            // Or better: push -1 as a sentinel and convert None to -1 in the VM
+            // Actually, the cleanest: push None as a number that represents "not specified"
+            // For now, let's use a large negative number as sentinel: -999999999.0
+            ops.push(OpCode::LdNum(-999999999.0)); // Sentinel for None
+        }
+        
+        // Emit end (or None sentinel)
+        if let Some(end_expr) = end {
+            self.emit_expression(ops, end_expr, program);
+        } else {
+            ops.push(OpCode::LdNum(-999999999.0)); // Sentinel for None
+        }
+        
+        // Emit step (or None sentinel)
+        if let Some(step_expr) = step {
+            self.emit_expression(ops, step_expr, program);
+        } else {
+            ops.push(OpCode::LdNum(-999999999.0)); // Sentinel for None
+        }
+        
+        // Emit inclusive_end flag (as number: 1.0 for true, 0.0 for false)
+        ops.push(OpCode::LdNum(if inclusive_end { 1.0 } else { 0.0 }));
+        
+        // ArraySlice opcode pops (array, start, end, step, inclusive_flag) and pushes sliced array
+        ops.push(OpCode::ArraySlice);
+    }
+
+    fn emit_expr_reducer(&mut self, ops: &mut Vec<OpCode>, array: &HirExpression, reducer_type: ReducerType, reducer_args: &[HirExpression], program: &HirAst) {
+        // Emit the array
+        self.emit_expression(ops, array, program);
+        
+        // Start iteration (consumes array, pushes iterator)
+        ops.push(OpCode::ArrayIter);
+        
+        // Initialize accumulator BEFORE the loop
+        // We need to keep the iterator on the stack, so we'll initialize the accumulator first
+        // by loading it into a variable, then we can work with the iterator
+        let acc_slot = 999998u32;
+        let (func_id, use_add_opcode) = match reducer_type {
+            ReducerType::Sum => {
+                // sum is equivalent to fold(0, add)
+                // Load initial value (0) and store it
+                // Stack: [iterator]
+                ops.push(OpCode::LdNum(0.0));
+                // Stack: [iterator, 0]
+                ops.push(OpCode::StVar(acc_slot));
+                // Stack: [iterator] (0 was popped and stored)
+                // sum uses Add opcode, not a function call
+                (0, true)
+            }
+            ReducerType::Fold => {
+                // fold(init, fn) - emit init
+                if reducer_args.len() >= 2 {
+                    // Stack: [iterator]
+                    self.emit_expression(ops, &reducer_args[0], program);
+                    // Stack: [iterator, init]
+                    ops.push(OpCode::StVar(acc_slot));
+                    // Stack: [iterator] (init was popped and stored)
+                    // Get function ID from the function expression
+                    let func_id = match &reducer_args[1] {
+                        HirExpression::FunctionCall { function_id, .. } => *function_id,
+                        HirExpression::Identifier(_) => {
+                            panic!("fold function must be a function call, not a variable");
+                        }
+                        _ => panic!("fold function must be a function call or identifier"),
+                    };
+                    (func_id, false)
+                } else {
+                    panic!("fold requires 2 arguments");
+                }
+            }
+        };
+        
+        // Store iterator in a variable so we can reload it for each iteration
+        // The iterator state is stored in the heap, so reloading the reference will work
+        let iter_slot = 999996u32;
+        ops.push(OpCode::StVar(iter_slot));
+        // Stack: [] (iterator was stored)
+        
+        // Emit reduction loop:
+        // loop {
+        //   iter = reload iterator (state is preserved in heap)
+        //   (has_more, x) = array_next(iter)
+        //   if !has_more { break acc }
+        //   acc = fn(acc, x)!
+        // }
+        
+        let loop_start = ops.len();
+        
+        // Reload iterator for this iteration (state is preserved in heap)
+        ops.push(OpCode::LdVar(iter_slot));
+        // Stack: [iterator]
+        
+        // Get next element: ArrayNext expects iterator on stack, pushes (has_more, element)
+        ops.push(OpCode::ArrayNext);
+        // Stack: [has_more, element]
+        
+        // Store element first (we always need to process it, even if has_more is false)
+        let elem_slot = 999997u32;
+        // Swap has_more and element so we can store element
+        // Stack: [has_more, element] -> we need [element, has_more] to store element
+        // Actually, we can't swap easily, so we'll duplicate has_more, store element, then check has_more
+        // Better: store element, then check has_more, and if false break after processing
+        
+        // Duplicate has_more so we can check it after storing element
+        // We'll pop has_more, store element, then check has_more from a temp var
+        let has_more_slot = 999995u32;
+        ops.push(OpCode::StVar(has_more_slot)); // Store has_more
+        // Stack: [element] (has_more was stored)
+        
+        // Store element
+        ops.push(OpCode::StVar(elem_slot));
+        // Stack: [] (element was stored)
+        
+        // Load accumulator and element
+        ops.push(OpCode::LdVar(acc_slot));
+        ops.push(OpCode::LdVar(elem_slot));
+        
+        // Call reducer function
+        if use_add_opcode {
+            // sum uses Add opcode
+            ops.push(OpCode::Add);
+        } else {
+            // fold uses function call
+            ops.push(OpCode::LdFunc(func_id));
+            ops.push(OpCode::Thunk(2));
+            ops.push(OpCode::Invoke);
+        }
+        
+        // Store result back to accumulator
+        ops.push(OpCode::StVar(acc_slot));
+        
+        // Check has_more - if false, break
+        ops.push(OpCode::LdVar(has_more_slot));
+        let has_more_pos = ops.len();
+        ops.push(OpCode::JmpIfFalse(0)); // Will patch later
+        
+        // Jump back to loop start
+        ops.push(OpCode::Jmp(loop_start));
+        
+        // Patch the break jump (when has_more is false)
+        let loop_end = ops.len();
+        ops[has_more_pos] = OpCode::JmpIfFalse(loop_end);
+        
+        // Load accumulator as result
+        ops.push(OpCode::LdVar(acc_slot));
+    }
+
     /// Emit a pattern expression for match statements.
     /// For binary pattern expressions (like == 0, > 10), the left-hand side is the match expression
     /// which is already on the stack, so we skip emitting it and only emit the right-hand side and operator.
@@ -676,7 +879,7 @@ impl ByteCodeEmitter {
                         }
                     }
                     BinaryOp::And | BinaryOp::Or => {
-                        // For "and"/"or" patterns like "> 0 and < 10":
+                        // For "&&"/"||" patterns like "> 0 && < 10":
                         // lhs is (match_expr > 0), rhs is (match_expr < 10)
                         // Emit lhs (which will handle match_expr > 0)
                         self.emit_pattern_expression(ops, lhs, match_expr, program);
@@ -730,6 +933,18 @@ impl ByteCodeEmitter {
             }
             HirExpression::Loop { init_vars, body, break_slot } => {
                 self.emit_expr_loop(ops, init_vars, body, *break_slot, program);
+            }
+            HirExpression::Array(elements) => {
+                self.emit_expr_array(ops, elements, program);
+            }
+            HirExpression::ArrayIndex { array, index } => {
+                self.emit_expr_array_index(ops, array, index, program);
+            }
+            HirExpression::ArraySlice { array, start, end, step, inclusive_end } => {
+                self.emit_expr_array_slice(ops, array, start, end, step, *inclusive_end, program);
+            }
+            HirExpression::Reducer { array, reducer_type, reducer_args } => {
+                self.emit_expr_reducer(ops, array, *reducer_type, reducer_args, program);
             }
         }
     }

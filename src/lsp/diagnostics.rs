@@ -44,10 +44,27 @@ pub fn find_error_location(text: &str, error: &HirError) -> (usize, usize) {
             }
         }
         HirError::TypeMismatch { variable, .. } => {
+            // Find the variable name in a let statement (after "let" keyword)
+            // This ensures we highlight the variable declaration, not just any occurrence
             for (line_num, line) in lines.iter().enumerate() {
-                if let Some(pos) = line.find(variable) {
-                    return (line_num, pos);
+                // Look for "let variable" or "let variable:" pattern with word boundaries
+                let let_pattern = format!("let {}", variable);
+                if let Some(pos) = line.find(&let_pattern) {
+                    // Check word boundary after variable name
+                    let after_pos = pos + let_pattern.len();
+                    let is_word_boundary = after_pos >= line.len() || {
+                        let ch = line.chars().nth(after_pos);
+                        ch.map_or(true, |c| !c.is_alphanumeric() && c != '_')
+                    };
+                    if is_word_boundary {
+                        // Return position at the start of the variable name (after "let ")
+                        return (line_num, pos + 4); // "let " is 4 characters
+                    }
                 }
+            }
+            // Fallback: find variable name anywhere (for cases where pattern doesn't match)
+            if let Some((line_num, col)) = text_utils::find_variable_in_code(&lines, variable) {
+                return (line_num, col);
             }
         }
         HirError::UnknownVariable(msg) => {

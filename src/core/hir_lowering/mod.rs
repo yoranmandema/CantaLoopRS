@@ -13,7 +13,7 @@ pub mod project_semantic_items;
 // Re-export core types
 pub use scopes::{ScopeId, ScopeIdOld, Scope, ScopeArena, HirBlockContext};
 pub use symbols::{SymbolId, TypeId, Symbol, SymbolKind, SymbolTable};
-pub use lower_expr::HirExpression;
+pub use lower_expr::{HirExpression, ReducerType};
 pub use lower_stmt::{HirStmt, HirBlock, HirBuilder};
 pub use project_semantic_items::{SemanticItem, SemanticItemKind, SemanticModifiers};
 
@@ -48,9 +48,11 @@ pub enum ValueKind {
     Function(String),
     // Thunk type: stores the full type string like "num ~> num" or "(num, num) ~> num"
     Thunk(String),
+    // Array type: stores the inner element type
+    Array(Box<ValueKind>),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ConstantValue {
     Number(f64),
     String(String),
@@ -109,6 +111,8 @@ pub struct HirAst {
     pub functions: std::collections::HashMap<u32, Function>, // Function ID -> Function struct
     /// Maps imported symbol names to function IDs (for LSP and symbol resolution)
     pub import_table: ImportTable,
+    /// Maps imported constant names to their values (for LSP hover)
+    pub imported_constant_values: HashMap<String, ConstantValue>,
 }
 
 impl HirAst {
@@ -230,25 +234,6 @@ pub struct Module {
     pub constants: HashMap<String, u32>,
 }
 
-// Hashable key for constant deduplication
-#[derive(Hash, PartialEq, Eq, Clone)]
-enum ConstantKey {
-    Number(u64), // f64 bit representation
-    String(String),
-    Boolean(bool),
-}
-
-impl ConstantKey {
-    fn from_constant_value(value: &ConstantValue) -> Self {
-        match value {
-            ConstantValue::Number(n) => ConstantKey::Number(n.to_bits()),
-            ConstantValue::String(s) => ConstantKey::String(s.clone()),
-            ConstantValue::Boolean(b) => ConstantKey::Boolean(*b),
-            ConstantValue::None => panic!("Cannot create key from None constant"),
-        }
-    }
-}
-
 /// Compiler state containing all semantic information from compilation.
 /// 
 /// This is the single source of truth for the compiler's understanding of the program.
@@ -324,35 +309,6 @@ impl CompilerState {
     fn build_symbol_table_without_spans(hir: &HirAst) -> SymbolTable {
         symbols::build_symbol_table_without_spans(hir)
     }
-}
-
-/// Format a function signature as a type string for display.
-fn format_function_type_string(sig: &FunctionSignature) -> String {
-    // Use HirBuilder's format_value_kind_for_type logic (duplicated here for module-level access)
-    let format_kind = |kind: &ValueKind| -> String {
-        match kind {
-            ValueKind::Number => "num".to_string(),
-            ValueKind::String => "string".to_string(),
-            ValueKind::Boolean => "bool".to_string(),
-            ValueKind::Unknown => "unknown".to_string(),
-            ValueKind::Function(ty) => ty.clone(),
-            ValueKind::Thunk(ty) => ty.clone(),
-            ValueKind::Void => "void".to_string(),
-        }
-    };
-    
-    let params: Vec<String> = sig.params.iter()
-        .map(|p| format_kind(p))
-        .collect();
-    
-    let param_str = if params.len() == 1 {
-        params[0].clone()
-    } else {
-        format!("({})", params.join(","))
-    };
-    
-    let return_str = format_kind(&sig.return_type);
-    format!("{} -> {}", param_str, return_str)
 }
 
 // HirBuilder is already re-exported above

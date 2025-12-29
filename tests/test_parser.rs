@@ -1,7 +1,7 @@
 mod common;
 
 use common::helpers::*;
-use CantaLoopRS::parser::parse_program;
+use CantaLoopRS::parse_program;
 
 #[test]
 fn test_parse_simple_assignment() {
@@ -63,9 +63,9 @@ fn test_parse_comparison_operators() {
 
 #[test]
 fn test_parse_logical_operators() {
-    assert_parse_success("true and false;");
-    assert_parse_success("true or false;");
-    assert_parse_success("not true;");
+    assert_parse_success("true && false;");
+    assert_parse_success("true || false;");
+    assert_parse_success("! true;");
 }
 
 #[test]
@@ -80,7 +80,7 @@ fn test() {
 #[test]
 fn test_parse_function_with_parameters() {
     assert_parse_success(r#"
-fn add(a, b) {
+fn add(a: num, b: num) -> num {
     return a + b;
 }
 "#);

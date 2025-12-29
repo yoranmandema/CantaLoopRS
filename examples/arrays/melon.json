@@ -1,0 +1,9 @@
+{
+    "name": "arrays",
+    "version": "0.1.0",
+    "description": "A new melon project",
+    "main": "main.mln",
+    "compiler_options": {
+        "optimize": true
+    }
+}

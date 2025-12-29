@@ -7,6 +7,8 @@ pub fn add(a: num, b: num) -> num { // This is a public function
 let magicNumber = 5; // This is a private variable
 
 pub const PI = 3.14; // This is a public constant
+pub const PI2 = PI * 2;
+pub const dayInSeconds = 60 * 60 * 24;
 
 pub fn addMagicNumber(a: num) -> num {
     return add(a, magicNumber); // This is a public function

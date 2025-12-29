@@ -1,4 +1,4 @@
-use std.print;
+use print from std;
 
 // While loop example
 // While loops continue as long as the condition is true

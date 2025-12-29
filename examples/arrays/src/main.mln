@@ -1,0 +1,35 @@
+use print from std;
+
+let xs = [1, 2, 3, 4, 5, 6, 7, 8];
+
+print("=== Single Index ===")!;
+print(xs[0])!;  // 1
+print(xs[3])!;  // 4
+print(xs[-1])!; // 8 (negative index: last element)
+
+print("=== Exclusive Range (start..end) ===")!;
+print(xs[1..5])!;  // [2, 3, 4, 5] - indices 1 to 4 (exclusive end)
+
+print("=== Inclusive Range (start..=end) ===")!;
+print(xs[1..=5])!;  // [2, 3, 4, 5, 6] - indices 1 to 5 (inclusive end)
+
+print("=== From Start (..end) ===")!;
+print(xs[..3])!;  // [1, 2, 3] - indices 0 to 2
+
+print("=== To End (start..) ===")!;
+print(xs[5..])!;  // [6, 7, 8] - indices 5 to end
+
+print("=== Full Range (..) ===")!;
+print(xs[..])!;  // [1, 2, 3, 4, 5, 6, 7, 8] - all elements
+
+print("=== With Step (start..end..step) ===")!;
+print(xs[0..8..2])!;  // [1, 3, 5, 7] - every 2nd element
+
+print("=== Negative Indices ===")!;
+print(xs[-1])!;     // 8 - last element
+print(xs[-2..])!;   // [7, 8] - from second-to-last to end
+print(xs[..-2])!;   // [1, 2, 3, 4, 5, 6] - from start to third-to-last
+
+
+let id = 100;
+print(xs[id])!;

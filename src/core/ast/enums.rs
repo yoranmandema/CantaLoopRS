@@ -47,6 +47,29 @@ pub enum Expression {
         object: Box<Expression>, // e.g., "utils" in "utils.add"
         member: String, // e.g., "add" in "utils.add"
     },
+    Array(Vec<Expression>), // Array literal: [expr, expr, ...]
+    ArrayIndex {
+        array: Box<Expression>, // The array being indexed
+        indices: Vec<IndexSpec>, // Index specifications (supports multi-dimensional)
+    },
+}
+
+/// Represents an array index specification.
+#[derive(Debug, Clone)]
+pub enum IndexSpec {
+    /// Single index: arr[3] or arr[-1]
+    Single(Expression),
+    /// Range (inclusive start, exclusive end): arr[1..5]
+    Range {
+        start: Option<Expression>, // None means from start
+        end: Option<Expression>,   // None means to end
+        step: Option<Expression>,  // None means step of 1
+    },
+    /// Inclusive range (both inclusive): arr[1..=5]
+    InclusiveRange {
+        start: Option<Expression>,
+        end: Option<Expression>,
+    },
 }
 
 /// Unary operators that operate on a single expression.
@@ -204,12 +227,14 @@ pub enum Literal {
     Number(f64),
     Boolean(bool)
 }
-impl Literal {
-    pub(crate) fn to_string(&self) -> String {
+
+impl std::fmt::Display for Literal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Literal::Number(val) => format!("Number({})", val),
-            Literal::String(val) => format!("String({})", val),
-            Literal::Boolean(val) => format!("Bool({})", val),
+            Literal::Number(val) => write!(f, "Number({})", val),
+            Literal::String(val) => write!(f, "String({})", val),
+            Literal::Boolean(val) => write!(f, "Bool({})", val),
         }
     }
 }
+

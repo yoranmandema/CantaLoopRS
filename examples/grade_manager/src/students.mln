@@ -1,0 +1,62 @@
+mod students;
+
+use calculate_average from grades;
+use calculate_final_grade from grades;
+use grade_statistics from grades;
+use highest_grade from grades;
+use lowest_grade from grades;
+use array_length from std;
+
+// Convert numeric grade to letter grade
+pub fn letterGrade(grade: num) -> string {
+    if grade >= 90 {
+        return "A";
+    }
+    if grade >= 80 {
+        return "B";
+    }
+    if grade >= 70 {
+        return "C";
+    }
+    if grade >= 60 {
+        return "D";
+    }
+    return "F";
+}
+
+/// Calculate a student's overall performance
+pub fn student_performance(assignments: [num], exams: [num]) -> num {
+    // Use 60% assignments, 40% exams weighting
+    return calculate_final_grade(assignments, exams, 0.6, 0.4);
+}
+
+/// Generate a formatted report for a student
+pub fn generate_student_report(student_name: string, assignments: [num], exams: [num]) -> string {
+    let report = "=== Student Report: " + student_name + " ===\n";
+    
+    // Assignment grades
+    let assignment_avg = calculate_average(assignments);
+    report = report + "Assignment Average: " + assignment_avg + "\n";
+    report = report + "Assignment Grades: " + assignments + "\n";
+    
+    // Exam grades
+    let exam_avg = calculate_average(exams);
+    report = report + "Exam Average: " + exam_avg + "\n";
+    report = report + "Exam Grades: " + exams + "\n";
+    
+    // Final grade
+    let final_grade = student_performance(assignments, exams);
+    let letter = letter_grade(final_grade);
+    report = report + "Final Grade: " + final_grade + " (" + letter + ")\n";
+    
+    // Calculate statistics for assignments and exams separately
+    let assign_stats = grade_statistics(assignments);
+    let exam_stats = grade_statistics(exams);
+    
+    report = report + "\nAssignment Statistics:\n";
+    report = report + "  Average: " + assign_stats[0] + ", Highest: " + assign_stats[1] + ", Lowest: " + assign_stats[2] + "\n";
+    report = report + "\nExam Statistics:\n";
+    report = report + "  Average: " + exam_stats[0] + ", Highest: " + exam_stats[1] + ", Lowest: " + exam_stats[2] + "\n";
+    
+    return report;
+}

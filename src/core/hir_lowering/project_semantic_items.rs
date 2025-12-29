@@ -95,6 +95,43 @@ pub fn collect_semantic_items(ast: &crate::core::ast::Program, source: &str, hir
         }
     }
     
+    // Build a set of function names for function detection
+    let mut function_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for func in hir.functions.values() {
+        function_names.insert(func.name.clone());
+    }
+    
+    // Also include imported functions
+    // Imported constants are in var_types (we copy them), so if it's in import_table
+    // but not in var_types, it's likely a function. Also check if the ID maps to a function.
+    for (name, func_id) in &hir.import_table {
+        // Check if the ID maps to a function in hir.functions
+        if hir.functions.contains_key(func_id) {
+            function_names.insert(name.clone());
+        } else if !var_types.contains_key(name) {
+            // If not in var_types and not in functions, assume it's a function from another module
+            function_names.insert(name.clone());
+        }
+    }
+    
+    // Build a set of constant names from AST (variables declared with `const`)
+    let mut constant_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for block in &ast.blocks {
+        for stmt in &block.statements {
+            if let crate::core::ast::Statement::Const { identifier, .. } = stmt {
+                constant_names.insert(identifier.clone());
+            }
+        }
+    }
+    
+    // Also include imported constants (they're in import_table and var_types, but not functions)
+    for (name, func_id) in &hir.import_table {
+        // If it's in var_types and not in functions, it's likely a constant
+        if var_types.contains_key(name) && !hir.functions.contains_key(func_id) {
+            constant_names.insert(name.clone());
+        }
+    }
+    
     // Helper to find keyword span in source text
     let find_keyword_span = |keyword: &str, after_pos: usize| -> Option<Span> {
         let keyword_bytes = keyword.as_bytes();
@@ -151,7 +188,14 @@ pub fn collect_semantic_items(ast: &crate::core::ast::Program, source: &str, hir
     for block in &ast.blocks {
         for stmt in &block.statements {
             match stmt {
-                crate::core::ast::Statement::FunctionDeclaration { identifier, arguments, return_type, .. } => {
+                crate::core::ast::Statement::FunctionDeclaration { identifier, arguments, return_type, pub_visibility, .. } => {
+                    // Keyword: pub (if public)
+                    if *pub_visibility {
+                        if let Some(span) = find_keyword_span("pub", current_pos) {
+                            items.push(SemanticItem::keyword(span));
+                            current_pos = span.end;
+                        }
+                    }
                     // Keyword: fn
                     if let Some(span) = find_keyword_span("fn", current_pos) {
                         items.push(SemanticItem::keyword(span));
@@ -178,7 +222,14 @@ pub fn collect_semantic_items(ast: &crate::core::ast::Program, source: &str, hir
                         }
                     }
                 }
-                crate::core::ast::Statement::Let { identifier, type_annotation, .. } => {
+                crate::core::ast::Statement::Let { identifier, type_annotation, pub_visibility, .. } => {
+                    // Keyword: pub (if public)
+                    if *pub_visibility {
+                        if let Some(span) = find_keyword_span("pub", current_pos) {
+                            items.push(SemanticItem::keyword(span));
+                            current_pos = span.end;
+                        }
+                    }
                     // Keyword: let
                     if let Some(span) = find_keyword_span("let", current_pos) {
                         items.push(SemanticItem::keyword(span));
@@ -205,7 +256,15 @@ pub fn collect_semantic_items(ast: &crate::core::ast::Program, source: &str, hir
                         }
                     }
                 }
-                crate::core::ast::Statement::Const { identifier, .. } => {
+                crate::core::ast::Statement::Const { identifier, pub_visibility, .. } => {
+                    // Keyword: pub (if public)
+                    if *pub_visibility {
+                        if let Some(span) = find_keyword_span("pub", current_pos) {
+                            items.push(SemanticItem::keyword(span));
+                            current_pos = span.end;
+                        }
+                    }
+                    // Keyword: const
                     if let Some(span) = find_keyword_span("const", current_pos) {
                         items.push(SemanticItem::keyword(span));
                         current_pos = span.end;
@@ -278,10 +337,55 @@ pub fn collect_semantic_items(ast: &crate::core::ast::Program, source: &str, hir
                         current_pos = span.end;
                     }
                 }
-                crate::core::ast::Statement::Use { .. } => {
+                crate::core::ast::Statement::Use { path, selector } => {
                     if let Some(span) = find_keyword_span("use", current_pos) {
                         items.push(SemanticItem::keyword(span));
                         current_pos = span.end;
+                    }
+                    // Highlight module path identifiers
+                    for path_part in path {
+                        if let Some(span) = find_identifier_span(path_part, source, current_pos) {
+                            items.push(SemanticItem::module(span));
+                            current_pos = span.end;
+                        }
+                    }
+                    // Highlight imported identifiers
+                    match selector {
+                        crate::core::ast::ImportSelector::Single(name) => {
+                            if let Some(span) = find_identifier_span(name, source, current_pos) {
+                                // Check if it's a function or constant
+                                let item = if function_names.contains(name) {
+                                    SemanticItem::function(span)
+                                } else if constant_names.contains(name) {
+                                    SemanticItem::variable(span).with_modifiers(SemanticModifiers::READONLY)
+                                } else {
+                                    // Unknown - assume it's a function (will be resolved later)
+                                    SemanticItem::function(span)
+                                };
+                                items.push(item);
+                                current_pos = span.end;
+                            }
+                        }
+                        crate::core::ast::ImportSelector::Multiple(names) => {
+                            for name in names {
+                                if let Some(span) = find_identifier_span(name, source, current_pos) {
+                                    // Check if it's a function or constant
+                                    let item = if function_names.contains(name) {
+                                        SemanticItem::function(span)
+                                    } else if constant_names.contains(name) {
+                                        SemanticItem::variable(span).with_modifiers(SemanticModifiers::READONLY)
+                                    } else {
+                                        // Unknown - assume it's a function (will be resolved later)
+                                        SemanticItem::function(span)
+                                    };
+                                    items.push(item);
+                                    current_pos = span.end;
+                                }
+                            }
+                        }
+                        crate::core::ast::ImportSelector::Wildcard => {
+                            // Wildcard imports - nothing to highlight
+                        }
                     }
                 }
                 crate::core::ast::Statement::Mod { identifier } => {
@@ -298,7 +402,7 @@ pub fn collect_semantic_items(ast: &crate::core::ast::Program, source: &str, hir
             }
             
             // Walk expressions to find operators and identifiers
-            collect_expression_operators(stmt, source, &mut items, &mut current_pos, &var_types);
+            collect_expression_operators(stmt, source, &mut items, &mut current_pos, &var_types, &function_names, &constant_names);
         }
     }
     
@@ -354,6 +458,8 @@ fn collect_expression_operators(
     items: &mut Vec<SemanticItem>,
     current_pos: &mut usize,
     var_types: &HashMap<String, ValueKind>,
+    function_names: &std::collections::HashSet<String>,
+    constant_names: &std::collections::HashSet<String>,
 ) {
     use crate::core::ast::{Expression, Statement, BinaryOp, UnaryOp};
     
@@ -363,11 +469,13 @@ fn collect_expression_operators(
         items: &mut Vec<SemanticItem>,
         current_pos: &mut usize,
         var_types: &HashMap<String, ValueKind>,
+        function_names: &std::collections::HashSet<String>,
+        constant_names: &std::collections::HashSet<String>,
     ) {
         match expr {
             Expression::Infix { op, lhs, rhs, .. } => {
                 // Recurse into left side first
-                walk_expr(lhs, source, items, current_pos, var_types);
+                walk_expr(lhs, source, items, current_pos, var_types, function_names, constant_names);
                 // Extract operator
                 let op_str = match op {
                     BinaryOp::Add => "+",
@@ -390,7 +498,7 @@ fn collect_expression_operators(
                     *current_pos = span.end;
                 }
                 // Recurse into right side
-                walk_expr(rhs, source, items, current_pos, var_types);
+                walk_expr(rhs, source, items, current_pos, var_types, function_names, constant_names);
             }
             Expression::Prefix { op, rhs, .. } => {
                 // Extract operator
@@ -405,11 +513,11 @@ fn collect_expression_operators(
                     *current_pos = span.end;
                 }
                 // Recurse into operand
-                walk_expr(rhs, source, items, current_pos, var_types);
+                walk_expr(rhs, source, items, current_pos, var_types, function_names, constant_names);
             }
             Expression::Postfix { op, lhs, .. } => {
                 // Recurse into operand first
-                walk_expr(lhs, source, items, current_pos, var_types);
+                walk_expr(lhs, source, items, current_pos, var_types, function_names, constant_names);
                 // Extract operator
                 let op_str = match op {
                     crate::core::ast::PostfixOp::Invoke => "!",
@@ -421,7 +529,7 @@ fn collect_expression_operators(
             }
             Expression::Compose { reverse, lhs, rhs, .. } => {
                 // Recurse into left side
-                walk_expr(lhs, source, items, current_pos, var_types);
+                walk_expr(lhs, source, items, current_pos, var_types, function_names, constant_names);
                 // Extract operator
                 let op_str = if *reverse { "<|" } else { "|>" };
                 if let Some(span) = find_op_span_in_expr(op_str, source, *current_pos) {
@@ -429,43 +537,58 @@ fn collect_expression_operators(
                     *current_pos = span.end;
                 }
                 // Recurse into right side
-                walk_expr(rhs, source, items, current_pos, var_types);
+                walk_expr(rhs, source, items, current_pos, var_types, function_names, constant_names);
             }
             Expression::Identifier(name) => {
-                // Identifier in expression - check if it's a thunk
+                // Identifier in expression - check if it's a function, variable, or constant
                 if let Some(span) = find_identifier_span_in_expr(name, source, *current_pos) {
-                    let mut item = SemanticItem::variable(span);
-                    // Check if this identifier is a thunk
-                    if let Some(ty) = var_types.get(name) {
-                        if matches!(ty, ValueKind::Thunk(_)) {
-                            item = item.with_modifiers(SemanticModifiers::THUNK);
+                    let item = if function_names.contains(name) {
+                        // It's a function
+                        SemanticItem::function(span)
+                    } else {
+                        // It's a variable or constant - check if it's a constant or thunk
+                        let mut modifiers = SemanticModifiers::empty();
+                        if constant_names.contains(name) {
+                            // It's a constant - mark with READONLY modifier
+                            modifiers |= SemanticModifiers::READONLY;
                         }
-                    }
+                        if let Some(ty) = var_types.get(name) {
+                            if matches!(ty, ValueKind::Thunk(_)) {
+                                modifiers |= SemanticModifiers::THUNK;
+                            }
+                        }
+                        SemanticItem::variable(span).with_modifiers(modifiers)
+                    };
                     items.push(item);
                     *current_pos = span.end;
                 }
             }
             Expression::FunctionCall { callee, arguments, .. } => {
-                walk_expr(callee, source, items, current_pos, var_types);
+                walk_expr(callee, source, items, current_pos, var_types, function_names, constant_names);
                 for arg in arguments {
-                    walk_expr(arg, source, items, current_pos, var_types);
+                    walk_expr(arg, source, items, current_pos, var_types, function_names, constant_names);
                 }
             }
             Expression::PartialCall { func, args, .. } => {
-                walk_expr(func, source, items, current_pos, var_types);
+                walk_expr(func, source, items, current_pos, var_types, function_names, constant_names);
                 for arg in args {
                     if let crate::core::ast::CallArgument::Expr(e) = arg {
-                        walk_expr(e, source, items, current_pos, var_types);
+                        walk_expr(e, source, items, current_pos, var_types, function_names, constant_names);
                     }
                 }
             }
             Expression::MemberAccess { object, member: _, .. } => {
-                walk_expr(object, source, items, current_pos, var_types);
+                walk_expr(object, source, items, current_pos, var_types, function_names, constant_names);
                 if let Some(span) = find_op_span_in_expr(".", source, *current_pos) {
                     items.push(SemanticItem::operator(span));
                     *current_pos = span.end;
                 }
                 // Member name would be an identifier, but we handle identifiers separately
+            }
+            Expression::ArrayIndex { array, .. } => {
+                // Recurse into array expression
+                walk_expr(array, source, items, current_pos, var_types, function_names, constant_names);
+                // TODO: Handle index expressions for semantic highlighting
             }
             _ => {}
         }
@@ -523,31 +646,31 @@ fn collect_expression_operators(
         Statement::AssignDecrement { expression, .. } |
         Statement::Return { expression, .. } |
         Statement::Expression(expression) => {
-            walk_expr(expression, source, items, current_pos, var_types);
+            walk_expr(expression, source, items, current_pos, var_types, function_names, constant_names);
         }
         Statement::If { arms, else_block, .. } => {
             for (expr, _) in arms {
-                walk_expr(expr, source, items, current_pos, var_types);
+                walk_expr(expr, source, items, current_pos, var_types, function_names, constant_names);
             }
             if let Some(block) = else_block {
                 for stmt in &block.statements {
-                    collect_expression_operators(stmt, source, items, current_pos, var_types);
+                    collect_expression_operators(stmt, source, items, current_pos, var_types, function_names, constant_names);
                 }
             }
         }
         Statement::Match { expression, cases, .. } => {
-            walk_expr(expression, source, items, current_pos, var_types);
+            walk_expr(expression, source, items, current_pos, var_types, function_names, constant_names);
             for (opt_expr, block) in cases {
                 if let Some(expr) = opt_expr {
-                    walk_expr(expr, source, items, current_pos, var_types);
+                    walk_expr(expr, source, items, current_pos, var_types, function_names, constant_names);
                 }
                 for stmt in &block.statements {
-                    collect_expression_operators(stmt, source, items, current_pos, var_types);
+                    collect_expression_operators(stmt, source, items, current_pos, var_types, function_names, constant_names);
                 }
             }
         }
         Statement::While { condition, .. } => {
-            walk_expr(condition, source, items, current_pos, var_types);
+            walk_expr(condition, source, items, current_pos, var_types, function_names, constant_names);
         }
         _ => {}
     }

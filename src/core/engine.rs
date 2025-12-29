@@ -4,8 +4,9 @@ use std::sync::Arc;
 use crate::core::{
     bytecode::{ByteCodeEmitter, OpCode},
     parser::parse_program,
-    hir_lowering::{CompilerState, FunctionSignature, HirBuilder, HirError, ValueKind},
+    hir_lowering::{CompilerState, FunctionSignature, HirBuilder, HirError, ValueKind, ConstantValue},
     vm::{VM, Value, ValueHeap},
+    ast::{Expression, Literal},
 };
 
 /// Melon project descriptor.
@@ -211,6 +212,10 @@ impl Engine {
             ValueKind::Function(ty) => ty.clone(),
             ValueKind::Thunk(ty) => ty.clone(),
             ValueKind::Void => "Void".to_string(),
+            ValueKind::Array(inner) => {
+                let inner_str = Self::format_value_kind_for_error(inner);
+                format!("Array<{}>", inner_str)
+            }
         }
     }
 
@@ -269,8 +274,27 @@ impl Engine {
         self.functions.insert(id, NativeFunction { arity, func });
         
         // Register the built-in function in the HIR builder's function registry
+        // This makes it globally available by name
         self.hir_builder.register_builtin_function(name, signature, id);
         
+        id
+    }
+    
+    /// Add a native function without registering it globally by name.
+    /// Used for module functions that should only be accessible via their full path or imports.
+    fn add_native_function_no_register(
+        &mut self,
+        signature: FunctionSignature,
+        arity: Arity,
+        func: Box<dyn Fn(Vec<Value>, &mut ValueHeap) -> Value + Send + Sync>,
+    ) -> u32 {
+        // Create a function ID - note: this should match the function registry
+        // For built-in functions, we'll use a special ID range (e.g., starting from 10000)
+        let id = 10000 + self.functions.len() as u32;
+
+        self.functions.insert(id, NativeFunction { arity, func });
+        
+        // DO NOT register globally - only register with full path in load_stdlib
         id
     }
 
@@ -369,12 +393,10 @@ impl Engine {
         // Register all functions in this module
         let mut module_functions = HashMap::new();
         for func in &module.functions {
-            // Register the function with the engine (using the base name)
-            // This allows the function to be resolved by its simple name if imported
+            // Register the function with the engine WITHOUT global registration
             // Clone the Arc to move it into the closure (Arc clone is cheap - just increments ref count)
             let func_impl = func.impl_fn.clone();
-            let func_id = self.add_native_function(
-                func.name,
+            let func_id = self.add_native_function_no_register(
                 func.signature.clone(),
                 func.arity.clone(),
                 Box::new(move |args: Vec<Value>, heap: &mut ValueHeap| -> Value {
@@ -386,10 +408,14 @@ impl Engine {
             // Add to module's function map
             module_functions.insert(func.name.to_string(), func_id);
             
-            // Also register the function with its full path in the HIR builder
-            // This allows both "math.round" and just "round" (if imported) to work
+            // Register the function with its full path in the HIR builder
+            // This allows "math.add" to work, but NOT just "add" (must be imported)
             let full_func_name = format!("{}.{}", module_path, func.name);
             self.hir_builder.register_builtin_function(&full_func_name, func.signature.clone(), func_id);
+            
+            // DO NOT register with base name - functions should only be available via:
+            // 1. Full path (e.g., math.add)
+            // 2. Import (which adds to import_table)
         }
 
         // Register this module with the HIR builder
@@ -413,7 +439,10 @@ impl Engine {
     /// 
     /// If `project_root` is provided, loads all modules from the project's src/ directory
     /// before compiling, allowing imports to resolve correctly.
-    pub fn compile_for_lsp(&self, src: &str, project_root: Option<&Path>) -> Result<CompilerState, pest::error::Error<crate::core::parser::Rule>> {
+    /// 
+    /// If `current_file` is provided, that file will be skipped when loading modules
+    /// to avoid duplicate declarations.
+    pub fn compile_for_lsp(&self, src: &str, project_root: Option<&Path>, current_file: Option<&Path>) -> Result<CompilerState, pest::error::Error<crate::core::parser::Rule>> {
         // Parse the source code twice - once to keep AST, once for HIR building
         // (This is acceptable for LSP where we need both AST and HIR)
         let ast = parse_program(src)?;
@@ -436,7 +465,7 @@ impl Engine {
         
         // If project_root is provided, load all project modules
         if let Some(project_root) = project_root {
-            Self::load_project_modules_for_lsp(&mut hir_builder, &self.hir_builder, project_root);
+            Self::load_project_modules_for_lsp(&mut hir_builder, &self.hir_builder, project_root, current_file);
         }
         
         // Build HIR and collect errors
@@ -458,10 +487,13 @@ impl Engine {
     
     /// Load project modules for LSP compilation (non-mutating version).
     /// This loads modules into a HirBuilder without mutating the engine.
+    /// 
+    /// If `current_file` is provided, that file will be skipped to avoid duplicate declarations.
     fn load_project_modules_for_lsp(
         hir_builder: &mut HirBuilder,
         source_hir_builder: &HirBuilder,
         project_root: &Path,
+        current_file: Option<&Path>,
     ) {
         let src_dir = project_root.join("src");
         
@@ -486,6 +518,13 @@ impl Engine {
                 // Skip the main file (it's not a module)
                 if path.file_name().and_then(|n| n.to_str()) == Some("main.mln") {
                     continue;
+                }
+                
+                // Skip the current file being compiled to avoid duplicate declarations
+                if let Some(current) = current_file {
+                    if path == current {
+                        continue;
+                    }
                 }
                 
                 // Try to load this file as a module
@@ -571,25 +610,71 @@ impl Engine {
             }
         }
         
-        // Register the module with placeholder function IDs (0) and constant IDs (0)
-        // The actual IDs will be resolved when the module is actually compiled
+        // Register public functions from module into main hir_builder
+        // This allows imported functions to be found in hir.functions for symbol table building
         let mut module_functions = HashMap::new();
-        for func_name in pub_function_names {
-            module_functions.insert(func_name, 0); // Placeholder
+        for func_name in &pub_function_names {
+            // Find the function in the module's HIR
+            if let Some((func_id, func)) = module_hir_builder.ast.functions.iter()
+                .find(|(_, f)| f.name == *func_name) {
+                // Register the function in the main hir_builder with the same ID
+                // This makes it available for symbol table lookups
+                hir_builder.ast.functions.insert(*func_id, func.clone());
+                module_functions.insert(func_name.clone(), *func_id);
+            }
         }
         
+        // Register public constants from module into main hir_builder
+        // Constants are stored as variables in scopes, so we need to find the variable ID
         let mut module_constants = HashMap::new();
-        for const_name in pub_constant_names {
-            module_constants.insert(const_name, 0); // Placeholder
+        for const_name in &pub_constant_names {
+            // Find the variable ID for this constant in the module's scopes
+            if let Some(var_id) = module_hir_builder.resolve_var_from_root(const_name) {
+                // Also copy the variable to the main hir_builder so it can be resolved
+                if let Some(var) = module_hir_builder.ast.scopes.scopes.iter()
+                    .find_map(|scope| scope.vars.iter().find(|v| v.id == var_id)) {
+                    // Find the root scope (scope 0) in the main hir_builder
+                    if let Some(root_scope) = hir_builder.ast.scopes.scopes.get_mut(0) {
+                        // Check if variable already exists
+                        if !root_scope.vars.iter().any(|v| v.id == var_id) {
+                            root_scope.vars.push(var.clone());
+                        }
+                    }
+                    module_constants.insert(const_name.clone(), var_id);
+                    
+                    // Store constant value for hover
+                    // Find the constant value from the module's compiled HIR
+                    // Constants are stored in ast.constants after compilation
+                    if let Some(constant) = module_hir_builder.ast.constants.iter()
+                        .find(|c| c.name == *const_name) {
+                        hir_builder.ast.imported_constant_values.insert(const_name.clone(), constant.value.clone());
+                    }
+                }
+            }
         }
         
-        // Register the module (even with placeholder IDs, so member access can find the module)
+        // Register the module with actual function IDs
         if !module_functions.is_empty() || !module_constants.is_empty() {
             hir_builder.register_module(&module_name, module_functions, module_constants);
         }
         
         Ok(module_name)
-    }   
+    }
+    
+    /// Extract constant value from an expression if it's a literal.
+    /// Returns None for complex expressions.
+    fn extract_constant_value_from_expr(expr: &Expression) -> Option<ConstantValue> {
+        match expr {
+            Expression::Literal(lit) => {
+                Some(match lit {
+                    Literal::Number(n) => ConstantValue::Number(*n),
+                    Literal::String(s) => ConstantValue::String(s.clone()),
+                    Literal::Boolean(b) => ConstantValue::Boolean(*b),
+                })
+            }
+            _ => None, // Complex expressions - can't extract value statically
+        }
+    }
 
     pub fn get_constant(&self, id: u32, heap: &mut crate::core::vm::ValueHeap) -> crate::core::vm::Value {
         use crate::core::hir_lowering::ConstantValue;
@@ -616,6 +701,7 @@ impl Engine {
             (ValueKind::Function(_), _) => panic!("Constant should not have Function kind"),
             (ValueKind::Thunk(_), _) => panic!("Constant should not have Thunk kind"),
             (ValueKind::Void, _) => panic!("Constant should not have Void kind"),
+            (ValueKind::Array(_), _) => panic!("Constant should not have Array kind"),
         }
     }
     

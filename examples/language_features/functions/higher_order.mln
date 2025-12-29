@@ -1,4 +1,4 @@
-use std.print;
+use print from std;
 
 // Higher-order functions: functions that operate on other functions/thunks
 

@@ -1,4 +1,4 @@
-use utils;
+use * from utils;
 
 // TODO: implement test framework
 fn test_add() {

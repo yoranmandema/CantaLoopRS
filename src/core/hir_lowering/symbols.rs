@@ -9,7 +9,7 @@ use super::{HirAst, ValueKind, Span, ScopeId, FunctionSignature};
 
 /// Format a function signature as a type string for display.
 fn format_function_type_string(sig: &FunctionSignature) -> String {
-    let format_kind = |kind: &ValueKind| -> String {
+    fn format_kind_recursive(kind: &ValueKind) -> String {
         match kind {
             ValueKind::Number => "num".to_string(),
             ValueKind::String => "string".to_string(),
@@ -18,7 +18,14 @@ fn format_function_type_string(sig: &FunctionSignature) -> String {
             ValueKind::Function(ty) => ty.clone(),
             ValueKind::Thunk(ty) => ty.clone(),
             ValueKind::Void => "void".to_string(),
+            ValueKind::Array(inner) => {
+                let inner_str = format_kind_recursive(inner);
+                format!("{}[]", inner_str)
+            }
         }
+    }
+    let format_kind = |kind: &ValueKind| -> String {
+        format_kind_recursive(kind)
     };
     
     let params: Vec<String> = sig.params.iter()
@@ -150,8 +157,37 @@ pub fn build_symbol_table(hir: &HirAst, ast: &crate::core::ast::Program, source:
 
     // Add imported functions (they're not in hir.functions, but in import_table)
     for (name, func_id) in &hir.import_table {
-        // Look up the function to get its signature
-        if let Some(func) = hir.functions.get(func_id) {
+        // Check if this is a constant (variable ID) or a function
+        let is_constant = hir.scopes.scopes.iter().any(|scope| {
+            scope.vars.iter().any(|v| v.id == *func_id)
+        });
+        
+        if is_constant {
+            // It's a constant - add as a variable
+            if let Some(var) = hir.scopes.scopes.iter()
+                .find_map(|scope| scope.vars.iter().find(|v| v.id == *func_id)) {
+                let symbol_id = SymbolId(next_symbol_id);
+                next_symbol_id += 1;
+                let scope = ScopeId(0);
+                table.symbols.push(Symbol {
+                    id: symbol_id,
+                    name: name.clone(),
+                    kind: SymbolKind::Variable,
+                    ty: var.kind.clone(),
+                    defined_at: get_span(name),
+                    scope,
+                });
+            }
+        } else {
+            // It's a function - try to get signature from hir.functions, or use generic type
+            let func_type = if let Some(func) = hir.functions.get(func_id) {
+                ValueKind::Function(format_function_type_string(&func.signature))
+            } else {
+                // Function from another module - use generic function type
+                // This happens when importing from other modules
+                ValueKind::Function("unknown -> unknown".to_string())
+            };
+            
             let symbol_id = SymbolId(next_symbol_id);
             next_symbol_id += 1;
             // Imported symbols are in root scope
@@ -160,9 +196,7 @@ pub fn build_symbol_table(hir: &HirAst, ast: &crate::core::ast::Program, source:
                 id: symbol_id,
                 name: name.clone(),
                 kind: SymbolKind::Function,
-                ty: ValueKind::Function(
-                    format_function_type_string(&func.signature),
-                ),
+                ty: func_type,
                 defined_at: get_span(name),
                 scope,
             });
@@ -220,16 +254,42 @@ pub fn build_symbol_table_without_spans(hir: &HirAst) -> SymbolTable {
 
     // Add imported functions
     for (name, func_id) in &hir.import_table {
-        if let Some(func) = hir.functions.get(func_id) {
+        // Check if this is a constant (variable ID) or a function
+        let is_constant = hir.scopes.scopes.iter().any(|scope| {
+            scope.vars.iter().any(|v| v.id == *func_id)
+        });
+        
+        if is_constant {
+            // It's a constant - add as a variable
+            if let Some(var) = hir.scopes.scopes.iter()
+                .find_map(|scope| scope.vars.iter().find(|v| v.id == *func_id)) {
+                let symbol_id = SymbolId(next_symbol_id);
+                next_symbol_id += 1;
+                table.symbols.push(Symbol {
+                    id: symbol_id,
+                    name: name.clone(),
+                    kind: SymbolKind::Variable,
+                    ty: var.kind.clone(),
+                    defined_at: None,
+                    scope: ScopeId(0),
+                });
+            }
+        } else {
+            // It's a function - try to get signature from hir.functions, or use generic type
+            let func_type = if let Some(func) = hir.functions.get(func_id) {
+                ValueKind::Function(format_function_type_string(&func.signature))
+            } else {
+                // Function from another module - use generic function type
+                ValueKind::Function("unknown -> unknown".to_string())
+            };
+            
             let symbol_id = SymbolId(next_symbol_id);
             next_symbol_id += 1;
             table.symbols.push(Symbol {
                 id: symbol_id,
                 name: name.clone(),
                 kind: SymbolKind::Function,
-                ty: ValueKind::Function(
-                    format_function_type_string(&func.signature),
-                ),
+                ty: func_type,
                 defined_at: None,
                 scope: ScopeId(0),
             });
@@ -442,6 +502,11 @@ fn walk_expression_for_spans(
                         *current_pos = span.end;
                     }
                 }
+            }
+            Expression::ArrayIndex { array, .. } => {
+                // Recurse into array expression to find identifiers
+                walk_expr(array, source, span_map, current_pos, find_identifier_span);
+                // TODO: Handle index expressions to find identifiers in indices
             }
             _ => {}
         }

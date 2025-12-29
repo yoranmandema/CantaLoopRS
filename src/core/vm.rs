@@ -56,6 +56,11 @@ static DISPATCH: [OpHandler; OPCODE_COUNT] = [
     VM::op_compose_thunk, // 34: ComposeThunk
     VM::op_mod,           // 35: Mod
     VM::op_make_partial,  // 36: MakePartial
+        VM::op_make_array,    // 37: MakeArray
+        VM::op_array_iter,    // 38: ArrayIter
+        VM::op_array_next,    // 39: ArrayNext
+        VM::op_array_index,   // 40: ArrayIndex
+        VM::op_array_slice,   // 41: ArraySlice
 ];
 
 // Tagged union Value using NaN boxing
@@ -81,14 +86,24 @@ const TAG_BOOLEAN: u64 = 0x2;
 const TAG_FUNCTION: u64 = 0x3;
 const TAG_THUNK: u64 = 0x4;
 const TAG_NONE: u64 = 0x5;
+const TAG_ARRAY: u64 = 0x6;
+const TAG_ARRAY_ITER: u64 = 0x7;
 
 /// Heap storage for VM-managed data structures.
 /// 
-/// Stores strings and thunks that cannot fit in the 64-bit Value representation.
+/// Stores strings, thunks, arrays, and iterators that cannot fit in the 64-bit Value representation.
 /// Managed per VM instance to avoid global state.
 pub struct ValueHeap {
     pub(crate) strings: Vec<String>,
     pub(crate) thunks: Vec<ThunkData>,
+    pub(crate) arrays: Vec<Vec<Value>>,
+    pub(crate) array_iters: Vec<ArrayIterator>,
+}
+
+/// Array iterator state
+pub(crate) struct ArrayIterator {
+    pub array_idx: usize,
+    pub current_idx: usize,
 }
 
 pub(crate) enum ThunkData {
@@ -107,6 +122,8 @@ impl ValueHeap {
         Self {
             strings: Vec::new(),
             thunks: Vec::new(),
+            arrays: Vec::new(),
+            array_iters: Vec::new(),
         }
     }
 }
@@ -165,6 +182,47 @@ impl Value {
     pub fn none() -> Self {
         Self {
             raw: (QNAN_BASE & TAG_CLEAR_MASK) | (TAG_NONE << 48) | QNAN_BIT_51,
+        }
+    }
+
+    #[inline(always)]
+    pub fn array_with_heap(elements: Vec<Value>, heap: &mut ValueHeap) -> Self {
+        let idx = heap.arrays.len();
+        heap.arrays.push(elements);
+        Self {
+            raw: (QNAN_BASE & TAG_CLEAR_MASK) | (TAG_ARRAY << 48) | QNAN_BIT_51 | (idx as u64),
+        }
+    }
+
+    #[inline(always)]
+    pub fn array_iter_with_heap(array_idx: usize, heap: &mut ValueHeap) -> Self {
+        let idx = heap.array_iters.len();
+        heap.array_iters.push(ArrayIterator {
+            array_idx,
+            current_idx: 0,
+        });
+        Self {
+            raw: (QNAN_BASE & TAG_CLEAR_MASK) | (TAG_ARRAY_ITER << 48) | QNAN_BIT_51 | (idx as u64),
+        }
+    }
+
+    #[inline(always)]
+    pub fn as_array<'a>(&self, heap: &'a ValueHeap) -> Option<&'a Vec<Value>> {
+        if self.tag() == TAG_ARRAY {
+            let idx = (self.raw & PAYLOAD_MASK) as usize;
+            heap.arrays.get(idx)
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    pub fn as_array_iter_mut<'a>(&self, heap: &'a mut ValueHeap) -> Option<&'a mut ArrayIterator> {
+        if self.tag() == TAG_ARRAY_ITER {
+            let idx = (self.raw & PAYLOAD_MASK) as usize;
+            heap.array_iters.get_mut(idx)
+        } else {
+            None
         }
     }
 
@@ -265,6 +323,9 @@ impl Value {
             "<prepared_call>".to_string()
         } else if self.is_none() {
             "None".to_string()
+        } else if let Some(arr) = self.as_array(heap) {
+            let elements: Vec<String> = arr.iter().map(|v| v.value_to_string(heap)).collect();
+            format!("[{}]", elements.join(","))
         } else {
             "Unknown".to_string()
         }
@@ -716,7 +777,7 @@ impl<'a> VM<'a> {
 
     #[inline(always)]
     fn op_make_partial(_vm: &mut VM, _frame_idx: usize, opcode: &OpCode) -> StepResult {
-        if let OpCode::MakePartial { func_id, bound_mask, hole_count } = opcode {
+        if let OpCode::MakePartial { func_id, bound_mask, hole_count: _ } = opcode {
             // Get function signature to know total parameter count
             let total_params = if let Some(func) = _vm.engine.bytecode_functions.get(func_id) {
                 func.param_var_ids.len()
@@ -812,6 +873,194 @@ impl<'a> VM<'a> {
         _vm.execute_ret_invoke(frame_idx);
         // After tail-call, we've reused the frame, restart loop to continue execution
         StepResult::Continue
+    }
+
+    fn op_make_array(_vm: &mut VM, _frame_idx: usize, opcode: &OpCode) -> StepResult {
+        if let OpCode::MakeArray(count) = opcode {
+            let mut elements = Vec::new();
+            for _ in 0..*count {
+                elements.push(_vm.stack.pop().expect("Stack underflow in MakeArray"));
+            }
+            elements.reverse(); // Stack is LIFO, so reverse to get correct order
+            let array = Value::array_with_heap(elements, &mut _vm.heap);
+            _vm.stack.push(array);
+        }
+        StepResult::Normal
+    }
+
+    fn op_array_iter(_vm: &mut VM, _frame_idx: usize, _opcode: &OpCode) -> StepResult {
+        let array_val = _vm.stack.pop().expect("Stack underflow in ArrayIter");
+        if array_val.as_array(&_vm.heap).is_some() {
+            // Get the array index from the value
+            let array_idx = (array_val.raw & PAYLOAD_MASK) as usize;
+            let iter = Value::array_iter_with_heap(array_idx, &mut _vm.heap);
+            _vm.stack.push(iter);
+        } else {
+            panic!("ArrayIter expects array value");
+        }
+        StepResult::Normal
+    }
+
+    fn op_array_index(_vm: &mut VM, _frame_idx: usize, _opcode: &OpCode) -> StepResult {
+        let index_val = _vm.stack.pop().expect("Stack underflow in ArrayIndex");
+        let array_val = _vm.stack.pop().expect("Stack underflow in ArrayIndex");
+        
+        if let Some(array) = array_val.as_array(&_vm.heap) {
+            // Convert index to usize
+            let index = if let Some(index_num) = index_val.as_number() {
+                let idx = index_num as i64;
+                let array_len = array.len() as i64;
+                
+                // Handle negative indexing: -1 means last element, -2 means second-to-last, etc.
+                let adjusted_idx = if idx < 0 {
+                    array_len + idx
+                } else {
+                    idx
+                };
+                
+                // Bounds check
+                if adjusted_idx < 0 || adjusted_idx >= array_len {
+                    panic!("Array index out of bounds: {} (array length: {})", idx, array_len);
+                }
+                
+                adjusted_idx as usize
+            } else {
+                panic!("Array index must be a number, got: {:?}", index_val);
+            };
+            
+            // Get element at index
+            let element = array[index];
+            _vm.stack.push(element);
+        } else {
+            panic!("ArrayIndex expects array value, got: {:?}", array_val);
+        }
+        
+        StepResult::Normal
+    }
+
+    fn op_array_slice(_vm: &mut VM, _frame_idx: usize, _opcode: &OpCode) -> StepResult {
+        // Stack order (top to bottom): inclusive_flag, step, end, start, array
+        let inclusive_flag_val = _vm.stack.pop().expect("Stack underflow in ArraySlice");
+        let step_val = _vm.stack.pop().expect("Stack underflow in ArraySlice");
+        let end_val = _vm.stack.pop().expect("Stack underflow in ArraySlice");
+        let start_val = _vm.stack.pop().expect("Stack underflow in ArraySlice");
+        let array_val = _vm.stack.pop().expect("Stack underflow in ArraySlice");
+        
+        // Sentinel value for "not specified": -999999999.0
+        const SENTINEL_NONE: f64 = -999999999.0;
+        
+        if let Some(array) = array_val.as_array(&_vm.heap) {
+            let array = array.clone(); // Clone to avoid borrow issues
+            let array_len = array.len() as i64;
+            
+            // Extract inclusive_end flag
+            let inclusive_end = if let Some(flag_num) = inclusive_flag_val.as_number() {
+                flag_num != 0.0
+            } else {
+                false
+            };
+            
+            // Extract start index (None sentinel means from start = 0)
+            let start_idx = if let Some(start_num) = start_val.as_number() {
+                if start_num == SENTINEL_NONE {
+                    0
+                } else {
+                    let idx = start_num as i64;
+                    // Handle negative indexing
+                    let adjusted = if idx < 0 { array_len + idx } else { idx };
+                    adjusted.max(0).min(array_len) as usize
+                }
+            } else {
+                0
+            };
+            
+            // Extract end index (None sentinel means to end = array_len)
+            let end_idx = if let Some(end_num) = end_val.as_number() {
+                if end_num == SENTINEL_NONE {
+                    array_len as usize
+                } else {
+                    let idx = end_num as i64;
+                    // Handle negative indexing
+                    let adjusted = if idx < 0 { array_len + idx } else { idx };
+                    if inclusive_end {
+                        // Inclusive: include the end index, so add 1
+                        (adjusted + 1).max(0).min((array_len + 1) as i64) as usize
+                    } else {
+                        // Exclusive: don't include end index
+                        adjusted.max(0).min(array_len) as usize
+                    }
+                }
+            } else {
+                array_len as usize
+            };
+            
+            // Extract step (None sentinel means step = 1)
+            let step = if let Some(step_num) = step_val.as_number() {
+                if step_num == SENTINEL_NONE {
+                    1
+                } else {
+                    step_num as i64
+                }
+            } else {
+                1
+            };
+            
+            // Build sliced array
+            let mut result = Vec::new();
+            if step > 0 {
+                // Forward slice
+                let mut i = start_idx as i64;
+                while i < end_idx as i64 {
+                    result.push(array[i as usize]);
+                    i += step;
+                }
+            } else if step < 0 {
+                // Reverse slice (step is negative)
+                let mut i = (end_idx as i64).saturating_sub(1);
+                while i >= start_idx as i64 {
+                    result.push(array[i as usize]);
+                    i += step; // step is negative, so this decrements
+                    if i < start_idx as i64 {
+                        break;
+                    }
+                }
+            } else {
+                // Step of 0 is invalid
+                panic!("Array slice step cannot be zero");
+            }
+            
+            let sliced_array = Value::array_with_heap(result, &mut _vm.heap);
+            _vm.stack.push(sliced_array);
+        } else {
+            panic!("ArraySlice expects array value, got: {:?}", array_val);
+        }
+        
+        StepResult::Normal
+    }
+
+    fn op_array_next(_vm: &mut VM, _frame_idx: usize, _opcode: &OpCode) -> StepResult {
+        let iter_val = _vm.stack.pop().expect("Stack underflow in ArrayNext");
+        if iter_val.tag() == TAG_ARRAY_ITER {
+            let iter_idx = (iter_val.raw & PAYLOAD_MASK) as usize;
+            let array_idx = _vm.heap.array_iters[iter_idx].array_idx;
+            let current_idx = _vm.heap.array_iters[iter_idx].current_idx;
+            let array = &_vm.heap.arrays[array_idx];
+            if current_idx < array.len() {
+                let element = array[current_idx];
+                _vm.heap.array_iters[iter_idx].current_idx += 1;
+                let has_more = _vm.heap.array_iters[iter_idx].current_idx < array.len();
+                // Push element first, then has_more
+                _vm.stack.push(element);
+                _vm.stack.push(Value::boolean(has_more));
+            } else {
+                // No more elements
+                _vm.stack.push(Value::none()); // Use none as sentinel
+                _vm.stack.push(Value::boolean(false));
+            }
+        } else {
+            panic!("ArrayNext expects array iterator value");
+        }
+        StepResult::Normal
     }
 
     #[inline(always)]
@@ -1161,6 +1410,7 @@ impl<'a> VM<'a> {
         initial_frame_count
     }
 
+    #[allow(dead_code)]
     /// Fill a hole in a thunk with a value.
     /// Returns the updated bound args with the hole filled.
     fn fill_thunk_hole(
@@ -1185,6 +1435,7 @@ impl<'a> VM<'a> {
         filled
     }
 
+    #[allow(dead_code)]
     /// Apply an argument to a thunk or function, creating a new thunk.
     /// Handles regular thunks and functions.
     fn apply_arg_to_thunk(&mut self, thunk_or_func: Value, arg: Value) -> Value {
@@ -1276,7 +1527,6 @@ impl<'a> VM<'a> {
         // CRITICAL: The return value should be on top of the stack.
         // Pop return value (or use None if stack is empty)
         let mut return_value = self.stack.pop().unwrap_or(Value::none());
-        let return_str = return_value.value_to_string(&self.heap);
 
         // Auto-invoke thunks at function boundaries (thunks are lazy internally but strict at boundaries)
         if return_value.is_thunk() {
@@ -1408,10 +1658,6 @@ impl<'a> VM<'a> {
                     // Nested first is itself a composed thunk - use invoke_thunk_value_recursive to handle it
                     // This avoids the stack truncation issue in execute_prepare_call
                     // We need to apply first_result to nested_first_val, which is a composed thunk
-                    // So we recursively call invoke_thunk_value_recursive which will handle it correctly
-                    let nested_result = self.invoke_thunk_value_recursive(nested_first_val);
-                    // Now we have nested_result, but we need to apply first_result to nested_first_val
-                    // Actually, we need to create a thunk that applies first_result to nested_first_val
                     // Since nested_first_val is a composed thunk, we need to apply first_result to its first part
                     if let Some(ThunkData::Composed { first: deep_first, second: deep_second }) = nested_first_val.as_thunk_ref(&self.heap) {
                         let deep_first_val = *deep_first;
@@ -1445,15 +1691,8 @@ impl<'a> VM<'a> {
                             }
                             Value::thunk_with_heap(deep_func_id, bound, &mut self.heap)
                         } else {
-                            // Deep first is also a composed thunk - recurse
-                            let deep_prepared = self.invoke_thunk_value_recursive(deep_first_val);
-                            // But we need to apply first_result to deep_first_val, not get its result
-                            // This is getting too complex - let's use a simpler approach
-                            // Create a thunk that will apply first_result when invoked
-                            // Actually, the simplest is to just recurse on the whole thing
-                            // Skip the temp_composed approach - it's incorrect
-                            // No wait, that's wrong. Let me think...
-                            // We need: apply first_result to nested_first_val where nested_first_val is a composed thunk
+                            // Deep first is also a composed thunk
+                            // We need to apply first_result to deep_first_val, not get its result
                             // The correct way: apply first_result to the first part of nested_first_val
                             // Since we already have deep_first_val and deep_second_val, we can do:
                             let deep_first_prepared = if let Some((df_id, df_args)) = deep_first_val.as_thunk(&self.heap) {
@@ -1547,6 +1786,7 @@ impl<'a> VM<'a> {
 
     /// Invoke a thunk with additional arguments, filling holes left-to-right.
     /// Returns a new thunk if not all holes are filled, otherwise invokes the function.
+    #[allow(dead_code)]
     fn invoke_thunk(&mut self, thunk_val: Value, args: Vec<Value>) -> Value {
         if !thunk_val.is_thunk() {
             panic!("invoke_thunk called on non-thunk value");
@@ -1633,6 +1873,7 @@ impl<'a> VM<'a> {
         }
     }
 
+    #[allow(dead_code)]
     fn invoke_thunk_sync(&mut self, func_id: u32, args: Vec<Value>) -> Value {
         // CRITICAL: Capture stack depth before thunk execution
         // This ensures we restore the stack to its pre-thunk state after execution
@@ -1733,7 +1974,6 @@ impl<'a> VM<'a> {
                     // not just to nested_first. The nested composition should be treated as a single unit.
                     // We'll create a thunk that applies the argument to the nested composition,
                     // then recompose with the outer second function.
-                    let nested_composed = first_val; // The nested composition itself
                     // Apply new_args to the nested composition by creating a thunk that applies the args
                     // to nested_first, then we'll recompose properly
                     let nested_first_val = *nested_first;

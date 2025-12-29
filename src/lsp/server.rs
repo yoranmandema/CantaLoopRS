@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::path::Path;
 use std::sync::Arc;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
@@ -71,8 +70,11 @@ impl CantaLoopLSPServer {
         // Find project root if this file is part of a project
         let project_root = Self::find_project_root(uri);
         
+        // Get the current file path to skip it when loading modules
+        let current_file = uri.to_file_path().ok();
+        
         // Use the compiler to build state - single source of truth
-        match self.engine.compile_for_lsp(text, project_root.as_deref()) {
+        match self.engine.compile_for_lsp(text, project_root.as_deref(), current_file.as_deref()) {
             Ok(state) => {
                 let mut cache = self.compiler_state_cache.write().await;
                 cache.insert(uri.clone(), state);
@@ -104,8 +106,11 @@ impl CantaLoopLSPServer {
         // Find project root if this file is part of a project
         let project_root = Self::find_project_root(&uri);
         
+        // Get the current file path to skip it when loading modules
+        let current_file = uri.to_file_path().ok();
+        
         // Use compiler state - single source of truth
-        match self.engine.compile_for_lsp(&text, project_root.as_deref()) {
+        match self.engine.compile_for_lsp(&text, project_root.as_deref(), current_file.as_deref()) {
             Ok(state) => {
                 // Add diagnostics from compiler state
                 for error in &state.diagnostics {
@@ -218,6 +223,7 @@ impl LanguageServer for CantaLoopLSPServer {
                     },
                 )),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
+                definition_provider: Some(OneOf::Left(true)),
                 completion_provider: Some(CompletionOptions {
                     trigger_characters: Some(vec![".", "(", "p", "r", "i", "n", "t"].iter().map(|s| s.to_string()).collect()),
                     resolve_provider: Some(false),
@@ -369,6 +375,14 @@ impl LanguageServer for CantaLoopLSPServer {
                             format!("```cantaloop\n{}\n```\nType: `{}`", identifier, type_str)
                         }
                     }
+                    crate::core::hir_lowering::SymbolKind::Variable => {
+                        // Check if this is a constant and show its value
+                        if let Some(const_value) = hover::find_constant_value(&state.ast, &state.hir, &identifier) {
+                            format!("```cantaloop\nconst {} = {}\n```\nType: `{}`", identifier, const_value, type_str)
+                        } else {
+                            format!("```cantaloop\n{}\n```\nType: `{}`", identifier, type_str)
+                        }
+                    }
                     _ => {
                         format!("```cantaloop\n{}\n```\nType: `{}`", identifier, type_str)
                     }
@@ -380,6 +394,106 @@ impl LanguageServer for CantaLoopLSPServer {
             self.client
                 .log_message(MessageType::INFO, format!("Identifier '{}' not found in symbol table", identifier))
                 .await;
+        } else {
+            self.client
+                .log_message(MessageType::WARNING, format!("No compiler state found for URI: {}", uri))
+                .await;
+        }
+
+        Ok(None)
+    }
+
+    async fn goto_definition(
+        &self,
+        params: GotoDefinitionParams,
+    ) -> Result<Option<GotoDefinitionResponse>> {
+        self.client
+            .log_message(MessageType::INFO, "Goto definition requested")
+            .await;
+        
+        let uri = params.text_document_position_params.text_document.uri;
+        let pos = params.text_document_position_params.position;
+
+        let documents = self.documents.read().await;
+        let text = match documents.get(&uri) {
+            Some(text) => text,
+            None => return Ok(None),
+        };
+
+        // Extract identifier at position
+        let identifier_info = match text_utils::extract_identifier_at_position(text, pos.line as usize, pos.character as usize) {
+            Some((id, _, _)) => id,
+            None => return Ok(None),
+        };
+        drop(documents);
+
+        // Log for debugging
+        self.client
+            .log_message(MessageType::INFO, format!("Goto definition requested for identifier: '{}'", identifier_info))
+            .await;
+
+        // Use compiler state - single source of truth
+        let cache = self.compiler_state_cache.read().await;
+        let has_state = cache.contains_key(&uri);
+        drop(cache);
+        
+        if !has_state {
+            // Compiler state not found, try to rebuild it
+            self.client
+                .log_message(MessageType::INFO, format!("Compiler state not found for URI, attempting to rebuild: {}", uri))
+                .await;
+            let documents = self.documents.read().await;
+            if let Some(text) = documents.get(&uri) {
+                let text_clone = text.clone();
+                drop(documents);
+                self.rebuild_compiler_state(&uri, &text_clone).await;
+            }
+        }
+        
+        let cache = self.compiler_state_cache.read().await;
+        if let Some(state) = cache.get(&uri) {
+            // Use symbol table to find symbol definition
+            let symbols = state.symbols.find_by_name(&identifier_info);
+            if let Some(symbol) = symbols.first() {
+                // Get the definition location from the symbol
+                if let Some(span) = symbol.defined_at {
+                    // Convert span to LSP Location
+                    let line_index = state.line_index.as_ref().ok_or_else(|| {
+                        tower_lsp::jsonrpc::Error::internal_error()
+                    })?;
+                    
+                    let (line, col) = line_index.lookup(span.start);
+                    let (end_line, end_col) = line_index.lookup(span.end);
+                    
+                    let location = Location {
+                        uri: uri.clone(),
+                        range: Range {
+                            start: Position {
+                                line,
+                                character: col,
+                            },
+                            end: Position {
+                                line: end_line,
+                                character: end_col,
+                            },
+                        },
+                    };
+                    
+                    self.client
+                        .log_message(MessageType::INFO, format!("Found definition for '{}' at line {}", identifier_info, line))
+                        .await;
+                    
+                    return Ok(Some(GotoDefinitionResponse::Scalar(location)));
+                } else {
+                    self.client
+                        .log_message(MessageType::INFO, format!("Symbol '{}' found but has no definition location", identifier_info))
+                        .await;
+                }
+            } else {
+                self.client
+                    .log_message(MessageType::INFO, format!("Identifier '{}' not found in symbol table", identifier_info))
+                    .await;
+            }
         } else {
             self.client
                 .log_message(MessageType::WARNING, format!("No compiler state found for URI: {}", uri))

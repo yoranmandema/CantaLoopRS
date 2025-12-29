@@ -1,10 +1,10 @@
 mod common;
 
 use CantaLoopRS::{
-    engine::Engine,
-    parser::parse_program,
-    bytecode::OpCode,
-    hir_lowering::{FunctionSignature, ValueKind},
+    parse_program,
+    OpCode,
+    FunctionSignature,
+    ValueKind,
 };
 
 #[test]
@@ -52,11 +52,11 @@ if (true) {
 fn test_bytecode_emit_function_call() {
     let mut engine = common::helpers::create_test_engine();
     let program = parse_program(r#"
-fn add(a, b) {
+fn add(a: num, b: num) -> num {
     return a + b;
 }
 
-add(1, 2);
+add(1, 2)!;
 "#).unwrap();
     
     // Test bytecode emission for function calls
@@ -96,18 +96,18 @@ fn test_bytecode_emit_complex_expression() {
 #[test]
 fn test_bytecode_emit_logical_operations() {
     let mut engine = common::helpers::create_test_engine();
-    let program = parse_program("true and false or not true;").unwrap();
+    let program = parse_program("true && false || !true;").unwrap();
     
     // Test bytecode emission for logical operations
 }
 
 #[test]
 fn test_thunk_collapse_full_args() {
-    use CantaLoopRS::{bytecode::ByteCodeEmitter, hir_lowering::HirBuilder};
+    use CantaLoopRS::{ByteCodeEmitter, HirBuilder};
     
     let mut engine = common::helpers::create_test_engine();
     let program = parse_program(r#"
-fn add(a, b) {
+fn add(a: num, b: num) -> num {
     return a + b;
 }
 
@@ -153,11 +153,11 @@ add(5, 10)!;
 
 #[test]
 fn test_thunk_created_partial_application() {
-    use CantaLoopRS::{bytecode::ByteCodeEmitter, hir_lowering::HirBuilder};
+    use CantaLoopRS::{ByteCodeEmitter, HirBuilder};
     
     let mut engine = common::helpers::create_test_engine();
     let program = parse_program(r#"
-fn add(a, b) {
+fn add(a: num, b: num) -> num {
     return a + b;
 }
 

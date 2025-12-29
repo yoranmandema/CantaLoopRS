@@ -1,5 +1,5 @@
-use math.*;
-use std.print;
+use * from math;
+use print from std;
 
 let s = sum(1, 2, 3, 4, 5)!;
 

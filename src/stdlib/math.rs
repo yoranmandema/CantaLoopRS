@@ -100,6 +100,75 @@ lazy_static::lazy_static! {
                     .sum();
                 Value::number(sum)
             }),
+        },
+        StdFunction {
+            name: "fold",
+            signature: FunctionSignature {
+                params: vec![ValueKind::Unknown, ValueKind::Function("(num, num) -> num".to_string())],
+                return_type: Box::new(ValueKind::Unknown),
+            },
+            arity: Arity::Fixed(2),
+            impl_fn: Arc::new(|_args, _heap| {
+                // fold is only used as a reducer in pipelines, not as a direct function call
+                // This implementation should never be called directly
+                panic!("fold should only be used as a reducer in pipelines (e.g., xs |> fold(init, fn))");
+            }),
+        },
+        StdFunction {
+            name: "add",
+            signature: FunctionSignature {
+                params: vec![ValueKind::Number, ValueKind::Number],
+                return_type: Box::new(ValueKind::Number),
+            },
+            arity: Arity::Fixed(2),
+            impl_fn: Arc::new(|args, _heap| {
+                let a = args[0].as_number().expect("expected number");
+                let b = args[1].as_number().expect("expected number");
+                Value::number(a + b)
+            }),
+        },
+        StdFunction {
+            name: "mul",
+            signature: FunctionSignature {
+                params: vec![ValueKind::Number, ValueKind::Number],
+                return_type: Box::new(ValueKind::Number),
+            },
+            arity: Arity::Fixed(2),
+            impl_fn: Arc::new(|args, _heap| {
+                let a = args[0].as_number().expect("expected number");
+                let b = args[1].as_number().expect("expected number");
+                Value::number(a * b)
+            }),
+        },
+        StdFunction {
+            name: "min",
+            signature: FunctionSignature {
+                params: vec![ValueKind::Number, ValueKind::Number],
+                return_type: Box::new(ValueKind::Number),
+            },
+            arity: Arity::Variadic { min: 2 },
+            impl_fn: Arc::new(|args, _heap| {
+                let min_val = args
+                    .iter()
+                    .map(|v| v.as_number().expect("expected number"))
+                    .fold(f64::INFINITY, |acc, x| if x < acc { x } else { acc });
+                Value::number(min_val)
+            }),
+        },
+        StdFunction {
+            name: "max",
+            signature: FunctionSignature {
+                params: vec![ValueKind::Number, ValueKind::Number],
+                return_type: Box::new(ValueKind::Number),
+            },
+            arity: Arity::Variadic { min: 2 },
+            impl_fn: Arc::new(|args, _heap| {
+                let max_val = args
+                    .iter()
+                    .map(|v| v.as_number().expect("expected number"))
+                    .fold(f64::NEG_INFINITY, |acc, x| if x > acc { x } else { acc });
+                Value::number(max_val)
+            }),
         }]
     },
     submodules: vec![],

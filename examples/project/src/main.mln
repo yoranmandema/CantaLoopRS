@@ -1,10 +1,9 @@
-use std.print;
-use utils.{add, addMagicNumber, PI};
+use print from std;
+use fold, add from math;
 
-let result = add(1, 2)!;
+let xs = [1, 2, 3, 4];
 
-let magicResult = addMagicNumber(10)!;
+print(add(1, 2)!)!;
 
-print(result)!;
-print(PI)!;
-print(magicResult)!;
+print(xs |> fold(1, add))!; // Works - incorrect! its not imported!
+// print(xs |> fold(1, mul))!; // Doesn't work - correct! its not imported!

@@ -1,10 +1,12 @@
 mod common;
 
 use CantaLoopRS::{
-    engine::Engine,
-    vm::{VM, Value},
-    bytecode::OpCode,
-    hir_lowering::{FunctionSignature, ValueKind},
+    Engine,
+    VM,
+    Value,
+    OpCode,
+    FunctionSignature,
+    ValueKind,
 };
 
 #[test]

@@ -1,0 +1,29 @@
+mod test;
+
+use array_length from std;
+
+fn calculate_weighted_average(grades: [num], weights: [num]) -> num {
+    let total_weight = 0;
+    let weighted_sum = 0;
+    let len = array_length(grades)!;
+    let i = 0;
+    
+    loop i = 0 {
+        if i >= len {
+            break;
+        }
+        weighted_sum = weighted_sum + (grades[i] * weights[i]);
+        total_weight = total_weight + weights[i];
+        i = i + 1;
+    }
+    
+    if total_weight == 0 {
+        return 0;
+    }
+    return weighted_sum / total_weight;
+}
+
+fn letter_grade(grade: num) -> string {
+    return "A";
+}
+

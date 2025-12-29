@@ -1,0 +1,10 @@
+{
+    "name": "grade_manager",
+    "version": "1.0.0",
+    "description": "Student Grade Management System - A real-world example demonstrating array processing, functions, and data aggregation",
+    "main": "main.mln",
+    "compiler_options": {
+        "optimize": true
+    }
+}
+

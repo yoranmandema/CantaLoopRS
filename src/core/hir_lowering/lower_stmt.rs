@@ -13,6 +13,7 @@ use super::{
     HirAst, HirExpression, ValueKind, Variable, Constant, ConstantValue,
     Function, FunctionDefinition, FunctionSignature, HirError, ImportTable, Module,
     scopes::{ScopeId, ScopeArena, HirBlockContext},
+    ReducerType,
 };
 
 // Hashable key for constant deduplication
@@ -113,6 +114,7 @@ impl HirBuilder {
                 scopes,
                 functions: std::collections::HashMap::new(),
                 import_table: HashMap::new(),
+                imported_constant_values: HashMap::new(),
             },
             current_scope: root,
             next_var_id: 0,
@@ -193,6 +195,10 @@ impl HirBuilder {
             ValueKind::Function(ty) => ty.clone(),
             ValueKind::Thunk(ty) => ty.clone(),
             ValueKind::Void => "void".to_string(),
+            ValueKind::Array(inner) => {
+                let inner_str = Self::format_value_kind_for_type(inner);
+                format!("{}[]", inner_str)
+            }
         }
     }
 
@@ -245,6 +251,10 @@ impl HirBuilder {
             ValueKind::Function(ty) => ty.clone(),
             ValueKind::Thunk(ty) => ty.clone(),
             ValueKind::Void => "void".to_string(),
+            ValueKind::Array(inner) => {
+                let inner_str = Self::format_value_kind(inner);
+                format!("Array<{}>", inner_str)
+            }
         }
     }
 
@@ -261,6 +271,10 @@ impl HirBuilder {
             (ValueKind::Thunk(expected_ty), ValueKind::Thunk(actual_ty)) => {
                 // Use structural comparison for thunk types
                 Self::check_callable_type_compatibility(expected_ty, actual_ty)
+            }
+            (ValueKind::Array(expected_inner), ValueKind::Array(actual_inner)) => {
+                // Arrays are compatible if their inner types are compatible
+                Self::check_type_compatibility(expected_inner, actual_inner)
             }
             (ValueKind::Unknown, _) => true, // Unknown (any) accepts any type
             _ => false,
@@ -517,6 +531,48 @@ impl HirBuilder {
                     ValueKind::Unknown
                 }
             }
+            HirExpression::Array(elements) => {
+                // Infer array type from first element (if any)
+                if let Some(first) = elements.first() {
+                    let inner_type = self.infer_variable_kind(first);
+                    ValueKind::Array(Box::new(inner_type))
+                } else {
+                    // Empty array - use Unknown for inner type
+                    ValueKind::Array(Box::new(ValueKind::Unknown))
+                }
+            }
+            HirExpression::ArrayIndex { array, .. } => {
+                // Array index returns the element type of the array
+                let array_type = self.infer_variable_kind(array);
+                match array_type {
+                    ValueKind::Array(inner_type) => *inner_type,
+                    ValueKind::Unknown => ValueKind::Unknown, // If array type is unknown, index type is unknown
+                    _ => ValueKind::Unknown, // Should not happen, but handle gracefully
+                }
+            }
+            HirExpression::ArraySlice { array, .. } => {
+                // Array slice returns an array of the same element type
+                let array_type = self.infer_variable_kind(array);
+                match array_type {
+                    ValueKind::Array(inner_type) => ValueKind::Array(inner_type),
+                    ValueKind::Unknown => ValueKind::Array(Box::new(ValueKind::Unknown)),
+                    _ => ValueKind::Array(Box::new(ValueKind::Unknown)),
+                }
+            }
+            HirExpression::Reducer { reducer_type, reducer_args, .. } => {
+                // Reducer returns the accumulator type
+                match reducer_type {
+                    ReducerType::Sum => ValueKind::Number, // sum always returns number
+                    ReducerType::Fold => {
+                        // fold(init, fn) returns the type of init
+                        if let Some(init) = reducer_args.first() {
+                            self.infer_variable_kind(init)
+                        } else {
+                            ValueKind::Unknown
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -533,11 +589,41 @@ impl HirBuilder {
 
     pub fn resolve_function(&self, name: &str) -> Option<u32> {
         // Look up function by name in the functions registry
-        self.ast
+        // But if the function belongs to a module, only allow resolution if it's imported
+        if let Some(func_id) = self.ast
             .functions
             .iter()
             .find(|(_, func)| func.name == name)
-            .map(|(&id, _)| id)
+            .map(|(&id, _)| id) {
+            // Check if this function belongs to a module by checking if it's in any module's function map
+            // Also find which module it belongs to
+            let mut belongs_to_module: Option<&str> = None;
+            for (module_path, module) in &self.modules {
+                if module.functions.values().any(|&id| id == func_id) {
+                    belongs_to_module = Some(module_path);
+                    break;
+                }
+            }
+            
+            if belongs_to_module.is_some() {
+                // This is a module function - only allow resolution if it's imported
+                // (Functions must be explicitly imported to be accessible from outside the module)
+                if self.import_table.contains_key(name) {
+                    Some(func_id)
+                } else {
+                    // Check if this function was just declared (within-module access)
+                    // We can detect this by checking if the function was recently added
+                    // For now, we'll be conservative and require import
+                    // TODO: Track module context to allow within-module access
+                    None
+                }
+            } else {
+                // Not a module function (e.g., built-in or local function) - allow resolution
+                Some(func_id)
+            }
+        } else {
+            None
+        }
     }
 
     pub fn register_builtin_function(&mut self, name: &str, signature: FunctionSignature, id: u32) {
@@ -560,6 +646,12 @@ impl HirBuilder {
         };
 
         self.ast.functions.insert(id, function);
+    }
+    
+    /// Add a symbol to the import table (for within-module access)
+    pub fn add_to_import_table(&mut self, name: String, id: u32) {
+        self.import_table.insert(name.clone(), id);
+        self.ast.import_table.insert(name, id);
     }
 
     /// Register a module that can be imported.
@@ -634,9 +726,18 @@ impl HirBuilder {
     }
 
     /// Parse a type string into a structured ValueKind
-    /// Supports: simple types (num, str, bool), function types (num -> num), and thunk types (num ~> num)
+    /// Supports: simple types (num, str, bool), array types ([num], [string]), 
+    /// function types (num -> num), and thunk types (num ~> num)
     fn parse_type_string(&self, type_str: &str) -> ValueKind {
         let trimmed = type_str.trim();
+
+        // Check for array type (starts with "[")
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            // Extract inner type: [num] -> num
+            let inner = &trimmed[1..trimmed.len() - 1].trim();
+            let inner_kind = self.parse_type_string(inner);
+            return ValueKind::Array(Box::new(inner_kind));
+        }
 
         // Check for thunk type (contains "~>") - check this first since it's more specific
         if trimmed.contains("~>") {
@@ -844,8 +945,8 @@ impl HirBuilder {
                     || !matches!(rhs_type, ValueKind::Boolean | ValueKind::Unknown)
                 {
                     let op_str = match op {
-                        BinaryOp::And => "and",
-                        BinaryOp::Or => "or",
+                        BinaryOp::And => "&&",
+                        BinaryOp::Or => "||",
                         _ => unreachable!(),
                     };
                     return Err(HirError::BinaryOpTypeError {
@@ -934,6 +1035,14 @@ impl HirBuilder {
     fn parse_type_string_static(type_str: &str) -> ValueKind {
         let trimmed = type_str.trim();
 
+        // Check for array type (starts with "[")
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            // Extract inner type: [num] -> num
+            let inner = &trimmed[1..trimmed.len() - 1].trim();
+            let inner_kind = Self::parse_type_string_static(inner);
+            return ValueKind::Array(Box::new(inner_kind));
+        }
+
         if trimmed.contains("~>") {
             let normalized = Self::normalize_type_string(trimmed);
             return ValueKind::Thunk(normalized);
@@ -972,6 +1081,11 @@ impl HirBuilder {
             Literal::Boolean(n) => ConstantValue::Boolean(*n),
         };
 
+        self.intern_constant_value(value)
+    }
+    
+    /// Intern a constant value (for constant folding and constant declarations).
+    fn intern_constant_value(&mut self, value: ConstantValue) -> u32 {
         // Create hashable key for deduplication
         let key = ConstantKey::from_constant_value(&value);
 
@@ -990,7 +1104,7 @@ impl HirBuilder {
         };
         self.ast.constants.push(Constant {
             id,
-            name: literal.to_string() + "_literal",
+            name: format!("const_{}", id), // Generic name for folded constants
             kind,
             value: value.clone(),
         });
@@ -1104,14 +1218,329 @@ impl HirBuilder {
         Ok((slot, expr))
     }
 
+    /// Process a const statement - must be compile-time evaluable
+    fn process_const_statement(
+        &mut self,
+        identifier: String,
+        expression: Expression,
+    ) -> Result<HirStmt, HirError> {
+        // Evaluate the expression at compile time
+        let constant_value = self.compile_time_evaluate(&expression)?;
+        
+        // Determine the kind from the value
+        let kind = match &constant_value {
+            ConstantValue::Number(_) => ValueKind::Number,
+            ConstantValue::String(_) => ValueKind::String,
+            ConstantValue::Boolean(_) => ValueKind::Boolean,
+            ConstantValue::None => return Err(HirError::TypeError(
+                "Constant must have a compile-time evaluable value".to_string()
+            )),
+        };
+        
+        // Variable must not already exist in current scope
+        if self.var_exists_in_current_scope(&identifier) {
+            return Err(HirError::VariableAlreadyDeclared(format!(
+                "Constant '{}' is already declared",
+                identifier
+            )));
+        }
+        
+        // Create a constant entry
+        let const_id = self.ast.constants.len() as u32;
+        let key = ConstantKey::from_constant_value(&constant_value);
+        
+        // Check if constant already exists (deduplication)
+        let const_id = if let Some(&existing_id) = self.constant_map.get(&key) {
+            existing_id
+        } else {
+            self.ast.constants.push(Constant {
+                id: const_id,
+                name: identifier.clone(),
+                kind: kind.clone(),
+                value: constant_value,
+            });
+            self.constant_map.insert(key, const_id);
+            const_id
+        };
+        
+        // Create a variable for the constant (so it can be referenced)
+        let slot = self.init_var(&identifier, kind);
+        
+        // Store the constant ID in the variable name for lookup
+        // Actually, we need to track which variables are constants
+        // For now, we'll use the constant directly in the HIR expression
+        Ok(HirStmt::Assign { 
+            slot, 
+            value: HirExpression::Constant(const_id) 
+        })
+    }
+
+    /// Compile-time evaluate an expression.
+    /// Returns the constant value if the expression can be evaluated at compile time.
+    /// Returns an error if the expression cannot be evaluated at compile time.
+    fn compile_time_evaluate(&self, expr: &Expression) -> Result<ConstantValue, HirError> {
+        match expr {
+            Expression::Literal(lit) => {
+                Ok(match lit {
+                    Literal::Number(n) => ConstantValue::Number(*n),
+                    Literal::String(s) => ConstantValue::String(s.clone()),
+                    Literal::Boolean(b) => ConstantValue::Boolean(*b),
+                })
+            }
+            Expression::Identifier(name) => {
+                // Look up constant by name
+                if let Some(const_id) = self.resolve_const(name) {
+                    // Find the constant value
+                    if let Some(constant) = self.ast.constants.iter().find(|c| c.id == const_id) {
+                        Ok(constant.value.clone())
+                    } else {
+                        Err(HirError::TypeError(format!(
+                            "Constant '{}' not found",
+                            name
+                        )))
+                    }
+                } else {
+                    Err(HirError::TypeError(format!(
+                        "Constant expression cannot reference variable '{}'. Only constants can be referenced in constant expressions.",
+                        name
+                    )))
+                }
+            }
+            Expression::Infix { lhs, op, rhs } => {
+                let lhs_val = self.compile_time_evaluate(lhs)?;
+                let rhs_val = self.compile_time_evaluate(rhs)?;
+                self.evaluate_binary_op(op, &lhs_val, &rhs_val)
+            }
+            Expression::Prefix { op, rhs } => {
+                let rhs_val = self.compile_time_evaluate(rhs)?;
+                self.evaluate_unary_op(op, &rhs_val)
+            }
+            Expression::Group(inner) => {
+                self.compile_time_evaluate(inner)
+            }
+            _ => {
+                Err(HirError::TypeError(format!(
+                    "Constant expression must be compile-time evaluable. Expressions like function calls, loops, and member access are not allowed in constant declarations."
+                )))
+            }
+        }
+    }
+    
+    /// Evaluate a binary operation on constant values.
+    fn evaluate_binary_op(
+        &self,
+        op: &BinaryOp,
+        lhs: &ConstantValue,
+        rhs: &ConstantValue,
+    ) -> Result<ConstantValue, HirError> {
+        match op {
+            BinaryOp::Add => {
+                match (lhs, rhs) {
+                    (ConstantValue::Number(a), ConstantValue::Number(b)) => {
+                        Ok(ConstantValue::Number(a + b))
+                    }
+                    (ConstantValue::String(a), ConstantValue::String(b)) => {
+                        Ok(ConstantValue::String(format!("{}{}", a, b)))
+                    }
+                    (ConstantValue::String(a), ConstantValue::Number(b)) => {
+                        Ok(ConstantValue::String(format!("{}{}", a, b)))
+                    }
+                    (ConstantValue::Number(a), ConstantValue::String(b)) => {
+                        Ok(ConstantValue::String(format!("{}{}", a, b)))
+                    }
+                    _ => Err(HirError::TypeError(format!(
+                        "Invalid operands for addition: {:?} and {:?}",
+                        lhs, rhs
+                    ))),
+                }
+            }
+            BinaryOp::Sub => {
+                match (lhs, rhs) {
+                    (ConstantValue::Number(a), ConstantValue::Number(b)) => {
+                        Ok(ConstantValue::Number(a - b))
+                    }
+                    _ => Err(HirError::TypeError(format!(
+                        "Subtraction requires number operands, got {:?} and {:?}",
+                        lhs, rhs
+                    ))),
+                }
+            }
+            BinaryOp::Mul => {
+                match (lhs, rhs) {
+                    (ConstantValue::Number(a), ConstantValue::Number(b)) => {
+                        Ok(ConstantValue::Number(a * b))
+                    }
+                    _ => Err(HirError::TypeError(format!(
+                        "Multiplication requires number operands, got {:?} and {:?}",
+                        lhs, rhs
+                    ))),
+                }
+            }
+            BinaryOp::Div => {
+                match (lhs, rhs) {
+                    (ConstantValue::Number(a), ConstantValue::Number(b)) => {
+                        if *b == 0.0 {
+                            return Err(HirError::TypeError("Division by zero in constant expression".to_string()));
+                        }
+                        Ok(ConstantValue::Number(a / b))
+                    }
+                    _ => Err(HirError::TypeError(format!(
+                        "Division requires number operands, got {:?} and {:?}",
+                        lhs, rhs
+                    ))),
+                }
+            }
+            BinaryOp::Mod => {
+                match (lhs, rhs) {
+                    (ConstantValue::Number(a), ConstantValue::Number(b)) => {
+                        if *b == 0.0 {
+                            return Err(HirError::TypeError("Modulo by zero in constant expression".to_string()));
+                        }
+                        Ok(ConstantValue::Number(a % b))
+                    }
+                    _ => Err(HirError::TypeError(format!(
+                        "Modulo requires number operands, got {:?} and {:?}",
+                        lhs, rhs
+                    ))),
+                }
+            }
+            BinaryOp::Pow => {
+                match (lhs, rhs) {
+                    (ConstantValue::Number(a), ConstantValue::Number(b)) => {
+                        Ok(ConstantValue::Number(a.powf(*b)))
+                    }
+                    _ => Err(HirError::TypeError(format!(
+                        "Power requires number operands, got {:?} and {:?}",
+                        lhs, rhs
+                    ))),
+                }
+            }
+            BinaryOp::Eq => {
+                Ok(ConstantValue::Boolean(lhs == rhs))
+            }
+            BinaryOp::Ne => {
+                Ok(ConstantValue::Boolean(lhs != rhs))
+            }
+            BinaryOp::Gt => {
+                match (lhs, rhs) {
+                    (ConstantValue::Number(a), ConstantValue::Number(b)) => {
+                        Ok(ConstantValue::Boolean(a > b))
+                    }
+                    _ => Err(HirError::TypeError(format!(
+                        "Comparison requires number operands, got {:?} and {:?}",
+                        lhs, rhs
+                    ))),
+                }
+            }
+            BinaryOp::Lt => {
+                match (lhs, rhs) {
+                    (ConstantValue::Number(a), ConstantValue::Number(b)) => {
+                        Ok(ConstantValue::Boolean(a < b))
+                    }
+                    _ => Err(HirError::TypeError(format!(
+                        "Comparison requires number operands, got {:?} and {:?}",
+                        lhs, rhs
+                    ))),
+                }
+            }
+            BinaryOp::Ge => {
+                match (lhs, rhs) {
+                    (ConstantValue::Number(a), ConstantValue::Number(b)) => {
+                        Ok(ConstantValue::Boolean(a >= b))
+                    }
+                    _ => Err(HirError::TypeError(format!(
+                        "Comparison requires number operands, got {:?} and {:?}",
+                        lhs, rhs
+                    ))),
+                }
+            }
+            BinaryOp::Le => {
+                match (lhs, rhs) {
+                    (ConstantValue::Number(a), ConstantValue::Number(b)) => {
+                        Ok(ConstantValue::Boolean(a <= b))
+                    }
+                    _ => Err(HirError::TypeError(format!(
+                        "Comparison requires number operands, got {:?} and {:?}",
+                        lhs, rhs
+                    ))),
+                }
+            }
+            BinaryOp::And => {
+                match (lhs, rhs) {
+                    (ConstantValue::Boolean(a), ConstantValue::Boolean(b)) => {
+                        Ok(ConstantValue::Boolean(*a && *b))
+                    }
+                    _ => Err(HirError::TypeError(format!(
+                        "Logical AND requires boolean operands, got {:?} and {:?}",
+                        lhs, rhs
+                    ))),
+                }
+            }
+            BinaryOp::Or => {
+                match (lhs, rhs) {
+                    (ConstantValue::Boolean(a), ConstantValue::Boolean(b)) => {
+                        Ok(ConstantValue::Boolean(*a || *b))
+                    }
+                    _ => Err(HirError::TypeError(format!(
+                        "Logical OR requires boolean operands, got {:?} and {:?}",
+                        lhs, rhs
+                    ))),
+                }
+            }
+        }
+    }
+    
+    /// Evaluate a unary operation on a constant value.
+    fn evaluate_unary_op(
+        &self,
+        op: &UnaryOp,
+        rhs: &ConstantValue,
+    ) -> Result<ConstantValue, HirError> {
+        match op {
+            UnaryOp::Neg => {
+                match rhs {
+                    ConstantValue::Number(n) => Ok(ConstantValue::Number(-n)),
+                    _ => Err(HirError::TypeError(format!(
+                        "Negation requires number operand, got {:?}",
+                        rhs
+                    ))),
+                }
+            }
+            UnaryOp::Not => {
+                match rhs {
+                    ConstantValue::Boolean(b) => Ok(ConstantValue::Boolean(!b)),
+                    _ => Err(HirError::TypeError(format!(
+                        "Logical NOT requires boolean operand, got {:?}",
+                        rhs
+                    ))),
+                }
+            }
+            UnaryOp::Increment | UnaryOp::Decrement => {
+                Err(HirError::TypeError(format!(
+                    "Increment/decrement operations are not allowed in constant expressions"
+                )))
+            }
+        }
+    }
+
     /// Process a let statement with optional type annotation
+    /// Also performs constant folding for compile-time evaluable expressions
     fn process_let_statement(
         &mut self,
         identifier: String,
         type_annotation: Option<String>,
         expression: Expression,
     ) -> Result<HirStmt, HirError> {
-        let expr = self.process_expression(expression)?;
+        // Try to evaluate the expression at compile time (constant folding)
+        let expr = if let Ok(constant_value) = self.compile_time_evaluate(&expression) {
+            // Expression can be evaluated at compile time - fold it
+            let const_id = self.intern_constant_value(constant_value);
+            HirExpression::Constant(const_id)
+        } else {
+            // Expression cannot be evaluated at compile time - process normally
+            self.process_expression(expression)?
+        };
+        
         let actual_kind = self.infer_variable_kind(&expr);
 
         // If type annotation is provided, use it and check compatibility
@@ -1541,9 +1970,8 @@ impl HirBuilder {
                 expression,
                 pub_visibility: _,
             } => {
-                // Constants are similar to let statements but are compile-time constants
-                // For now, treat them like let statements
-                self.process_let_statement(identifier, None, expression)
+                // Constants must be compile-time evaluable
+                self.process_const_statement(identifier, expression)
             }
             Statement::Assign {
                 identifier,
@@ -2097,30 +2525,216 @@ impl HirBuilder {
         self.process_expression(expr)
     }
 
+    /// Process an array expression
+    fn process_array_expression(
+        &mut self,
+        elements: Vec<Expression>,
+    ) -> Result<HirExpression, HirError> {
+        let mut hir_elements = Vec::new();
+        for elem in elements {
+            hir_elements.push(self.process_expression(elem)?);
+        }
+        Ok(HirExpression::Array(hir_elements))
+    }
+    
+    /// Process an array index expression
+    /// Supports single index (arr[3]) and ranges/slices (arr[1..5], arr[1..=5], etc.)
+    /// Multi-dimensional indexing not yet supported
+    fn process_array_index_expression(
+        &mut self,
+        array: Expression,
+        indices: Vec<crate::core::ast::IndexSpec>,
+    ) -> Result<HirExpression, HirError> {
+        // For now, only support single dimension (one IndexSpec)
+        if indices.len() != 1 {
+            return Err(HirError::TypeError(
+                format!("Multi-dimensional indexing not yet supported (got {} indices)", indices.len())
+            ));
+        }
+        
+        let index_spec = &indices[0];
+        let array_expr = self.process_expression(array)?;
+        
+        match index_spec {
+            crate::core::ast::IndexSpec::Single(index_expr) => {
+                // Single index: arr[3]
+                let index_hir_expr = self.process_expression(index_expr.clone())?;
+                Ok(HirExpression::ArrayIndex {
+                    array: Box::new(array_expr),
+                    index: Box::new(index_hir_expr),
+                })
+            }
+            crate::core::ast::IndexSpec::Range { start, end, step } => {
+                // Range: arr[1..5] or arr[1..5..2] or arr[..5] or arr[5..]
+                let start_hir = if let Some(start_expr) = start {
+                    Some(Box::new(self.process_expression(start_expr.clone())?))
+                } else {
+                    None
+                };
+                let end_hir = if let Some(end_expr) = end {
+                    Some(Box::new(self.process_expression(end_expr.clone())?))
+                } else {
+                    None
+                };
+                let step_hir = if let Some(step_expr) = step {
+                    Some(Box::new(self.process_expression(step_expr.clone())?))
+                } else {
+                    None
+                };
+                Ok(HirExpression::ArraySlice {
+                    array: Box::new(array_expr),
+                    start: start_hir,
+                    end: end_hir,
+                    step: step_hir,
+                    inclusive_end: false, // Range is exclusive end
+                })
+            }
+            crate::core::ast::IndexSpec::InclusiveRange { start, end } => {
+                // Inclusive range: arr[1..=5]
+                let start_hir = if let Some(start_expr) = start {
+                    Some(Box::new(self.process_expression(start_expr.clone())?))
+                } else {
+                    None
+                };
+                let end_hir = if let Some(end_expr) = end {
+                    Some(Box::new(self.process_expression(end_expr.clone())?))
+                } else {
+                    None
+                };
+                Ok(HirExpression::ArraySlice {
+                    array: Box::new(array_expr),
+                    start: start_hir,
+                    end: end_hir,
+                    step: None, // Inclusive range doesn't support step
+                    inclusive_end: true, // Inclusive range has inclusive end
+                })
+            }
+        }
+    }
+
     /// Process a compose expression
+    /// Detects reducer patterns: array |> reducer (e.g., xs |> sum, xs |> fold(...))
     fn process_compose_expression(
         &mut self,
         lhs: Expression,
         rhs: Expression,
         reverse: bool,
     ) -> Result<HirExpression, HirError> {
-        // Process both sides
-        let first_expr = self.process_expression(lhs)?;
-        let second_expr = self.process_expression(rhs)?;
+        // Check if this is a reducer pattern BEFORE processing expressions
+        // This allows us to detect array literals directly from the AST
+        // Only for forward pipe (|>), not reverse (<|)
+        if !reverse {
+            // Check if LHS is an array literal in the AST
+            let is_array_literal = matches!(lhs, Expression::Array(_));
+            
+            // Process both sides
+            let first_expr = self.process_expression(lhs)?;
+            let second_expr = self.process_expression(rhs)?;
 
-        // For reverse composition (<|), swap the operands
-        // f <| g means f(g(x)), so we want to process g first, then f
-        if reverse {
-            Ok(HirExpression::ComposeThunk {
-                first: Box::new(second_expr),
-                second: Box::new(first_expr),
-            })
-        } else {
+            // Check if LHS is an array (either array literal or array variable)
+            let is_array = is_array_literal || match &first_expr {
+                HirExpression::Array(_) => true,
+                HirExpression::Identifier(var_id) => {
+                    // Check if variable is of array type
+                    if let Some(var_kind) = self.get_var_kind_from_id(*var_id) {
+                        matches!(var_kind, ValueKind::Array(_))
+                    } else {
+                        // If we can't get the type, infer it from the expression
+                        // This handles cases where the variable type hasn't been set yet
+                        let inferred = self.infer_variable_kind(&first_expr);
+                        matches!(inferred, ValueKind::Array(_))
+                    }
+                }
+                _ => {
+                    // For other expressions, infer the type
+                    let inferred = self.infer_variable_kind(&first_expr);
+                    matches!(inferred, ValueKind::Array(_))
+                }
+            };
+            
+            if is_array {
+                // Check if RHS is a reducer function (sum or fold)
+                let reducer_info = self.detect_reducer(&second_expr)?;
+                
+                if let Some((reducer_type, reducer_args)) = reducer_info {
+                    // This is a reducer pattern - return a special reducer expression
+                    // We'll lower this to bytecode that emits an internal loop
+                    return Ok(HirExpression::Reducer {
+                        array: Box::new(first_expr),
+                        reducer_type,
+                        reducer_args,
+                    });
+                }
+            }
+            
+            // If not a reducer, treat as normal composition
             // f |> g means g(f(x)), so process f first, then g
             Ok(HirExpression::ComposeThunk {
                 first: Box::new(first_expr),
                 second: Box::new(second_expr),
             })
+        } else {
+            // For reverse composition, process both sides normally
+            let first_expr = self.process_expression(lhs)?;
+            let second_expr = self.process_expression(rhs)?;
+
+            // For reverse composition (<|), swap the operands
+            // f <| g means f(g(x)), so we want to process g first, then f
+            Ok(HirExpression::ComposeThunk {
+                first: Box::new(second_expr),
+                second: Box::new(first_expr),
+            })
+        }
+    }
+
+    /// Detect if an expression is a reducer function (sum or fold)
+    /// Returns (reducer_type, args) if it's a reducer, None otherwise
+    fn detect_reducer(&self, expr: &HirExpression) -> Result<Option<(ReducerType, Vec<HirExpression>)>, HirError> {
+        match expr {
+            HirExpression::FunctionCall { function_id, args, .. } => {
+                // Check if this is a reducer function by name
+                // First try to get the function by ID
+                let func_name = if let Some(func) = self.ast.functions.get(function_id) {
+                    Some(func.name.as_str())
+                } else {
+                    // Fallback 1: search all functions to find one with this ID
+                    // This handles cases where the function might be registered differently
+                    if let Some(name) = self.ast.functions.iter()
+                        .find(|(id, _)| *id == function_id)
+                        .map(|(_, func)| func.name.as_str()) {
+                        Some(name)
+                    } else {
+                        // Fallback 2: look up the function name from import_table
+                        // This handles cases where the function is imported but not in ast.functions
+                        self.import_table.iter()
+                            .find(|(_, &imported_id)| imported_id == *function_id)
+                            .map(|(name, _)| name.as_str())
+                    }
+                };
+                
+                if let Some(name) = func_name {
+                    // Check if the name is a reducer (strip module prefix if present)
+                    let base_name = name.split('.').last().unwrap_or(name);
+                    match base_name {
+                        "sum" => {
+                            // sum is a reducer with no args (or any number of args when used as identifier)
+                            Ok(Some((ReducerType::Sum, Vec::new())))
+                        }
+                        "fold" => {
+                            // fold(init, fn) is a reducer with 2 args
+                            if args.len() == 2 {
+                                Ok(Some((ReducerType::Fold, args.clone())))
+                            } else {
+                                Ok(None)
+                            }
+                        }
+                        _ => Ok(None),
+                    }
+                } else {
+                    Ok(None)
+                }
+            }
+            _ => Ok(None),
         }
     }
 
@@ -2165,6 +2779,10 @@ impl HirBuilder {
     fn process_expression(&mut self, expression: Expression) -> Result<HirExpression, HirError> {
         match expression {
             Expression::Literal(lit) => self.process_literal_expression(lit),
+            Expression::Array(elements) => self.process_array_expression(elements),
+            Expression::ArrayIndex { array, indices } => {
+                self.process_array_index_expression(*array, indices)
+            }
             Expression::Identifier(identifier) => {
                 self.process_identifier_expression(identifier)
             }

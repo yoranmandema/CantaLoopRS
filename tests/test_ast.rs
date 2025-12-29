@@ -1,8 +1,8 @@
 mod common;
 
 use CantaLoopRS::{
-    ast::{Expression, Statement, Literal, BinaryOp, UnaryOp},
-    parser::parse_program,
+    core::ast::{Expression, Statement, Literal, BinaryOp, UnaryOp},
+    parse_program,
 };
 
 #[test]
@@ -32,7 +32,7 @@ fn test_ast_binary_expression() {
 #[test]
 fn test_ast_function_declaration() {
     let program = parse_program(r#"
-fn test() {
+fn test() -> void {
     let x = 1;
 }
 "#).unwrap();
@@ -70,7 +70,7 @@ fn test_ast_boolean_literal() {
 #[test]
 fn test_ast_function_with_parameters() {
     let program = parse_program(r#"
-fn add(a, b) {
+fn add(a: num, b: num) -> num {
     return a + b;
 }
 "#).unwrap();
@@ -83,11 +83,11 @@ fn test_ast_complex_program() {
 let x = 10;
 let y = 20;
 
-fn add(a, b) {
+fn add(a: num, b: num) -> num {
     return a + b;
 }
 
-let result = add(x, y);
+let result = add(x, y)!;
 "#).unwrap();
     
     // Verify complex program structure

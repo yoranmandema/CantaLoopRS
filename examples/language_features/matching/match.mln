@@ -1,4 +1,4 @@
-use std.print;
+use print from std;
 
 let a = 1;
 

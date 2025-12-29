@@ -1,4 +1,4 @@
-use std.print;
+use print from std;
 
 // Continue statement - skip to next iteration of loop
 

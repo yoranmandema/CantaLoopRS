@@ -6,14 +6,15 @@
 //!
 //! # Example
 //!
-//! ```rust
+//! ```rust,no_run
 //! use CantaLoopRS::{Engine, FunctionSignature, ValueKind};
+//! use CantaLoopRS::core::engine::Arity;
 //!
 //! let mut engine = Engine::new();
-//! engine.add_function("print", FunctionSignature {
+//! engine.add_string_function("print", FunctionSignature {
 //!     params: vec![ValueKind::String],
 //!     return_type: Box::new(ValueKind::String),
-//! }, |args| {
+//! }, Arity::Fixed(1), |args| {
 //!     println!("{}", args[0]);
 //!     "".to_string()
 //! });

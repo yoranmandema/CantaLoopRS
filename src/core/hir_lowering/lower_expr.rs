@@ -47,6 +47,30 @@ pub enum HirExpression {
         func_id: u32,                      // Function ID from functions registry
         bound: Vec<Option<HirExpression>>, // None = hole, Some(expr) = bound argument
     },
+    Array(Vec<HirExpression>), // Array literal: [expr, expr, ...]
+    ArrayIndex {
+        array: Box<HirExpression>, // The array being indexed
+        index: Box<HirExpression>, // Single index expression
+    },
+    ArraySlice {
+        array: Box<HirExpression>, // The array being sliced
+        start: Option<Box<HirExpression>>, // None means from start
+        end: Option<Box<HirExpression>>,   // None means to end
+        step: Option<Box<HirExpression>>,  // None means step of 1
+        inclusive_end: bool, // true for ..=, false for ..
+    },
+    Reducer {
+        array: Box<HirExpression>, // Array to reduce
+        reducer_type: ReducerType,
+        reducer_args: Vec<HirExpression>, // Arguments for reducer (empty for sum, [init, fn] for fold)
+    },
+}
+
+/// Type of reducer function
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReducerType {
+    Sum,  // sum: equivalent to fold(0, add)
+    Fold, // fold(init, fn): custom reducer
 }
 
 // Type inference and expression processing will be moved here from the main file

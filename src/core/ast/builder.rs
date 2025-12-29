@@ -2,7 +2,7 @@ use pest::iterators::Pair;
 
 use crate::core::parser::{Rule, PRATT_PARSER, CantaLoopParser};
 use pest::Parser;
-use crate::core::ast::{Expression, Statement, Program, Block, Literal, UnaryOp, BinaryOp, PostfixOp, CallArgument, ImportSelector};
+use crate::core::ast::{Expression, Statement, Program, Block, Literal, UnaryOp, BinaryOp, PostfixOp, CallArgument, ImportSelector, IndexSpec};
 
 // ============================================================================
 // Error Helpers
@@ -384,7 +384,7 @@ fn parse_function_arguments(
 fn build_identifier_expr(pair: Pair<Rule>) -> Result<Expression, pest::error::Error<Rule>> {
     let identifier = pair.as_str().to_string();
     // Keywords are prevented by grammar, but check here as a safety measure
-    const KEYWORDS: &[&str] = &["fn", "if", "else", "elseif", "match", "return", "let", "true", "false", "and", "or"];
+    const KEYWORDS: &[&str] = &["fn", "if", "else", "elseif", "match", "return", "let", "true", "false"];
     if KEYWORDS.contains(&identifier.as_str()) {
         return Err(pest::error::Error::new_from_span(
             pest::error::ErrorVariant::CustomError { 
@@ -425,6 +425,30 @@ fn build_boolean(pair: Pair<Rule>) -> Result<Expression, pest::error::Error<Rule
     Ok(Expression::Literal(Literal::Boolean(value)))
 }
 
+fn build_array_literal(pair: Pair<Rule>) -> Result<Expression, pest::error::Error<Rule>> {
+    let span = pair.as_span();
+    let text = pair.as_str();
+    
+    // Find opening bracket
+    let bracket_start = text.find('[')
+        .ok_or_else(|| error_at_span(span, "Array literal missing opening bracket".to_string()))?;
+    
+    // Find closing bracket
+    let bracket_end = text.rfind(']')
+        .ok_or_else(|| error_at_span(span, "Array literal missing closing bracket".to_string()))?;
+    
+    // Extract and parse elements
+    let elements_text = text[bracket_start + 1..bracket_end].trim();
+    let elements = if elements_text.is_empty() {
+        Vec::new()
+    } else {
+        // Parse expression list
+        parse_expression_list_from_text(elements_text, span)?
+    };
+    
+    Ok(Expression::Array(elements))
+}
+
 fn build_value(pair: Pair<Rule>) -> Result<Expression, pest::error::Error<Rule>> {
     let mut inner = pair.into_inner();
     let inner_pair = inner.next().unwrap();
@@ -432,6 +456,7 @@ fn build_value(pair: Pair<Rule>) -> Result<Expression, pest::error::Error<Rule>>
         Rule::number => build_number(inner_pair),
         Rule::string => build_string(inner_pair),
         Rule::boolean => build_boolean(inner_pair),
+        Rule::array_literal => build_array_literal(inner_pair),
         _ => unreachable!(),
     }
 }
@@ -578,6 +603,159 @@ fn parse_expression_list_from_text(text: &str, span: pest::Span) -> Result<Vec<E
     Ok(expressions)
 }
 
+// Helper function to parse an index spec list from text (supports multi-dimensional indexing)
+fn parse_index_spec_list_from_text(text: &str, span: pest::Span) -> Result<Vec<IndexSpec>, pest::error::Error<Rule>> {
+    if text.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    
+    // Split by commas, being careful about commas inside nested structures (parens, brackets, braces, strings)
+    let mut specs = Vec::new();
+    let mut current_start = 0;
+    let mut depth = 0; // Track depth of nested structures
+    let mut in_string = false;
+    let mut escape_next = false;
+    let chars: Vec<char> = text.chars().collect();
+    
+    for (i, &ch) in chars.iter().enumerate() {
+        if escape_next {
+            escape_next = false;
+            continue;
+        }
+        
+        match ch {
+            '\\' if in_string => escape_next = true,
+            '"' => in_string = !in_string,
+            '(' | '[' | '{' if !in_string => depth += 1,
+            ')' | ']' | '}' if !in_string => depth -= 1,
+            ',' if depth == 0 && !in_string => {
+                let spec_text = text[current_start..i].trim();
+                if !spec_text.is_empty() {
+                    specs.push(parse_index_spec_from_text(spec_text, span)?);
+                }
+                current_start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    
+    // Parse the last spec
+    let spec_text = text[current_start..].trim();
+    if !spec_text.is_empty() {
+        specs.push(parse_index_spec_from_text(spec_text, span)?);
+    }
+    
+    Ok(specs)
+}
+
+// Helper function to parse a single index spec from text
+fn parse_index_spec_from_text(text: &str, span: pest::Span) -> Result<IndexSpec, pest::error::Error<Rule>> {
+    let trimmed = text.trim();
+    
+    // Handle full range: ..
+    if trimmed == ".." {
+        return Ok(IndexSpec::Range {
+            start: None,
+            end: None,
+            step: None,
+        });
+    }
+    
+    // Handle partial ranges: ..expr or expr..
+    if trimmed.starts_with("..") && trimmed != ".." {
+        // From start: ..expr
+        let expr_text = trimmed[2..].trim();
+        if expr_text.is_empty() {
+            return Err(error_at_span(span, "Invalid index spec: .. with no expression".to_string()));
+        }
+        let end_expr = parse_expression_from_text(expr_text, span)?;
+        return Ok(IndexSpec::Range {
+            start: None,
+            end: Some(end_expr),
+            step: None,
+        });
+    }
+    
+    if trimmed.ends_with("..") && trimmed != ".." {
+        // To end: expr..
+        let expr_text = trimmed[..trimmed.len()-2].trim();
+        if expr_text.is_empty() {
+            return Err(error_at_span(span, "Invalid index spec: .. with no expression".to_string()));
+        }
+        let start_expr = parse_expression_from_text(expr_text, span)?;
+        return Ok(IndexSpec::Range {
+            start: Some(start_expr),
+            end: None,
+            step: None,
+        });
+    }
+    
+    // Handle inclusive range: expr..=expr
+    if let Some(pos) = trimmed.find("..=") {
+        let start_text = trimmed[..pos].trim();
+        let end_text = trimmed[pos+3..].trim();
+        if start_text.is_empty() || end_text.is_empty() {
+            return Err(error_at_span(span, "Invalid inclusive range: missing start or end".to_string()));
+        }
+        let start_expr = parse_expression_from_text(start_text, span)?;
+        let end_expr = parse_expression_from_text(end_text, span)?;
+        return Ok(IndexSpec::InclusiveRange {
+            start: Some(start_expr),
+            end: Some(end_expr),
+        });
+    }
+    
+    // Handle range with step: expr..expr..expr
+    // Check for two ".." separators
+    let mut dot_dot_positions = Vec::new();
+    let chars: Vec<char> = trimmed.chars().collect();
+    let mut i = 0;
+    while i < chars.len().saturating_sub(1) {
+        if chars[i] == '.' && chars[i+1] == '.' {
+            dot_dot_positions.push(i);
+            i += 2; // Skip both dots
+        } else {
+            i += 1;
+        }
+    }
+    
+    if dot_dot_positions.len() == 2 {
+        // Range with step: start..end..step
+        let start_text = trimmed[..dot_dot_positions[0]].trim();
+        let end_text = trimmed[dot_dot_positions[0]+2..dot_dot_positions[1]].trim();
+        let step_text = trimmed[dot_dot_positions[1]+2..].trim();
+        if start_text.is_empty() || end_text.is_empty() || step_text.is_empty() {
+            return Err(error_at_span(span, "Invalid range with step: missing start, end, or step".to_string()));
+        }
+        let start_expr = parse_expression_from_text(start_text, span)?;
+        let end_expr = parse_expression_from_text(end_text, span)?;
+        let step_expr = parse_expression_from_text(step_text, span)?;
+        return Ok(IndexSpec::Range {
+            start: Some(start_expr),
+            end: Some(end_expr),
+            step: Some(step_expr),
+        });
+    } else if dot_dot_positions.len() == 1 {
+        // Regular range: expr..expr
+        let start_text = trimmed[..dot_dot_positions[0]].trim();
+        let end_text = trimmed[dot_dot_positions[0]+2..].trim();
+        if start_text.is_empty() || end_text.is_empty() {
+            return Err(error_at_span(span, "Invalid range: missing start or end".to_string()));
+        }
+        let start_expr = parse_expression_from_text(start_text, span)?;
+        let end_expr = parse_expression_from_text(end_text, span)?;
+        return Ok(IndexSpec::Range {
+            start: Some(start_expr),
+            end: Some(end_expr),
+            step: None,
+        });
+    }
+    
+    // Single index: just an expression
+    let expr = parse_expression_from_text(trimmed, span)?;
+    Ok(IndexSpec::Single(expr))
+}
+
 // Helper function to parse a loop expression from text
 // This is used when loop expressions need to be parsed from text directly
 #[allow(dead_code)]
@@ -646,6 +824,7 @@ fn build_primary(primary_pair: Pair<Rule>) -> Result<Expression, pest::error::Er
             
             match base_pair.as_rule() {
                 Rule::value => build_value(base_pair),
+                Rule::array_literal => build_array_literal(base_pair),
                 Rule::expression => Ok(Expression::Group(Box::new(build_expression(base_pair)?))),
                 Rule::identifier => build_identifier_expr(base_pair),
                 Rule::call_expression => build_call_expression(base_pair),
@@ -688,6 +867,7 @@ fn build_primary(primary_pair: Pair<Rule>) -> Result<Expression, pest::error::Er
         }
         // Pratt parser might pass us the inner rule directly
         Rule::value => build_value(primary_pair),
+        Rule::array_literal => build_array_literal(primary_pair),
         Rule::expression => Ok(Expression::Group(Box::new(build_expression(primary_pair)?))),
         Rule::identifier => build_identifier_expr(primary_pair),
         Rule::call_expression => build_call_expression(primary_pair),
@@ -784,6 +964,32 @@ fn build_atom(atom_pair: Pair<Rule>) -> Result<Expression, pest::error::Error<Ru
                             return Err(pest::error::Error::new_from_span(
                                 pest::error::ErrorVariant::CustomError {
                                     message: "Call syntax missing parentheses".to_string()
+                                },
+                                postfix_op_pair.as_span()
+                            ));
+                        }
+                    }
+                    Rule::array_index => {
+                        // Array indexing syntax: [index_specs]
+                        let index_text = postfix_op_pair.as_str();
+                        // Remove the surrounding brackets
+                        let index_content = index_text.trim();
+                        if index_content.len() >= 2 && index_content.starts_with('[') && index_content.ends_with(']') {
+                            let inner_text = index_content[1..index_content.len()-1].trim();
+                            let indices = if inner_text.is_empty() {
+                                Vec::new()
+                            } else {
+                                parse_index_spec_list_from_text(inner_text, postfix_op_pair.as_span())?
+                            };
+                            
+                            expr = Expression::ArrayIndex {
+                                array: Box::new(expr),
+                                indices,
+                            };
+                        } else {
+                            return Err(pest::error::Error::new_from_span(
+                                pest::error::ErrorVariant::CustomError {
+                                    message: "Array index syntax missing brackets".to_string()
                                 },
                                 postfix_op_pair.as_span()
                             ));
@@ -1559,14 +1765,15 @@ fn build_mod_statement(pair: Pair<Rule>) -> Result<Statement, pest::error::Error
 }
 
 fn build_use_statement(pair: Pair<Rule>) -> Result<Statement, pest::error::Error<Rule>> {
-    use crate::core::ast::ImportSelector;
-    
     let span = pair.as_span();
     let mut path = Vec::new();
     let mut selector = None;
     
     for inner in pair.into_inner() {
         match inner.as_rule() {
+            Rule::import_items => {
+                selector = Some(build_import_items(inner)?);
+            }
             Rule::import_path => {
                 // Parse dot-separated identifiers
                 for part in inner.into_inner() {
@@ -1574,9 +1781,6 @@ fn build_use_statement(pair: Pair<Rule>) -> Result<Statement, pest::error::Error
                         path.push(part.as_str().to_string());
                     }
                 }
-            }
-            Rule::import_selector => {
-                selector = Some(build_import_selector(inner)?);
             }
             _ => {}
         }
@@ -1586,72 +1790,55 @@ fn build_use_statement(pair: Pair<Rule>) -> Result<Statement, pest::error::Error
         return Err(error_at_span(span, "Use statement missing import path".to_string()));
     }
     
-    // If no explicit selector, treat the last component of the path as the selector
-    let (final_path, final_selector) = if selector.is_none() && path.len() > 1 {
-        let selector_name = path.last().unwrap().clone();
-        let mut final_path = path.clone();
-        final_path.pop();
-        (final_path, ImportSelector::Single(selector_name))
-    } else {
-        let path_clone = path.clone();
-        let final_selector = selector.unwrap_or_else(|| {
-            // If path has only one component and no selector, use that as both path and selector
-            // This handles cases like "use math;" which would import "math" from root
-            ImportSelector::Single(path_clone.last().unwrap().clone())
-        });
-        (path, final_selector)
-    };
+    if selector.is_none() {
+        return Err(error_at_span(span, "Use statement missing import items".to_string()));
+    }
     
     Ok(Statement::Use {
-        path: final_path,
-        selector: final_selector,
+        path,
+        selector: selector.unwrap(),
     })
 }
 
-fn build_import_selector(pair: Pair<Rule>) -> Result<ImportSelector, pest::error::Error<Rule>> {
+fn build_import_items(pair: Pair<Rule>) -> Result<ImportSelector, pest::error::Error<Rule>> {
     use crate::core::ast::ImportSelector;
     
+    let span = pair.as_span();
     let text = pair.as_str().trim();
     
-    // Check for wildcard: .* or *
-    if text == ".*" || text == "*" {
+    // Check for wildcard: *
+    if text == "*" {
         return Ok(ImportSelector::Wildcard);
     }
     
-    // Check for single identifier with dot: .identifier
-    if text.starts_with('.') && !text.starts_with(".{") {
-        let identifier = text[1..].trim();
-        return Ok(ImportSelector::Single(identifier.to_string()));
-    }
-    
-    // Check for brace list: .{id1, id2, ...} or {id1, id2, ...}
-    let brace_content = if text.starts_with(".{") && text.ends_with('}') {
-        // Remove both the dot and braces
-        &text[2..text.len() - 1]
-    } else if text.starts_with('{') && text.ends_with('}') {
-        // Remove just the braces
-        &text[1..text.len() - 1]
-    } else {
-        // Not a brace list
-        return Ok(ImportSelector::Single(text.to_string()));
-    };
-    
-    let content = brace_content.trim();
-    if content.is_empty() {
-        return Err(error_at_span(pair.as_span(), "Import list cannot be empty".to_string()));
-    }
-    
+    // Parse comma-separated identifiers
     let mut identifiers = Vec::new();
-    for part in content.split(',') {
-        let trimmed = part.trim();
-        if !trimmed.is_empty() {
-            identifiers.push(trimmed.to_string());
+    for inner in pair.into_inner() {
+        if inner.as_rule() == Rule::identifier {
+            identifiers.push(inner.as_str().to_string());
         }
     }
     
-    if identifiers.is_empty() {
-        return Err(error_at_span(pair.as_span(), "Import list cannot be empty".to_string()));
+    // If we found identifiers, return them
+    if !identifiers.is_empty() {
+        if identifiers.len() == 1 {
+            return Ok(ImportSelector::Single(identifiers[0].clone()));
+        } else {
+            return Ok(ImportSelector::Multiple(identifiers));
+        }
     }
     
-    Ok(ImportSelector::Multiple(identifiers))
+    // Fallback: try to parse as a single identifier from the text
+    // This handles cases where the grammar might not have matched identifiers properly
+    if !text.is_empty() && text != "*" {
+        // Try splitting by comma
+        let parts: Vec<&str> = text.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+        if parts.len() == 1 {
+            return Ok(ImportSelector::Single(parts[0].to_string()));
+        } else if parts.len() > 1 {
+            return Ok(ImportSelector::Multiple(parts.iter().map(|s| s.to_string()).collect()));
+        }
+    }
+    
+    Err(error_at_span(span, "Invalid import items".to_string()))
 }
