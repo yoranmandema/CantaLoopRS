@@ -39,6 +39,12 @@ pub struct ScopeArena {
     pub scopes: Vec<HirBlockContext>,
 }
 
+impl Default for ScopeArena {
+    fn default() -> Self {
+        Self { scopes: Vec::new() }
+    }
+}
+
 /// Context for a HIR block, containing variables and parent scope.
 #[derive(Debug, Clone, Serialize)]
 pub struct HirBlockContext {

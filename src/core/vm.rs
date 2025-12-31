@@ -1,5 +1,8 @@
+use std::collections::HashMap;
+
 use crate::core::bytecode::{OpCode, OPCODE_COUNT};
-use crate::core::engine::{Arity, Engine};
+use crate::core::engine::{Arity, BytecodeFunction, Engine};
+use crate::core::hir_lowering::HirAst;
 
 /// Special function ID for composition.
 /// When a thunk has this func_id, it represents a composition of two functions.
@@ -60,7 +63,7 @@ static DISPATCH: [OpHandler; OPCODE_COUNT] = [
     VM::op_make_array,    // 38: MakeArray
     VM::op_array_iter,    // 39: ArrayIter
     VM::op_array_next,    // 40: ArrayNext
-    VM::op_array_index,   // 41: ArrayIndex
+    VM::op_index,   // 41: ArrayIndex
     VM::op_array_slice,   // 42: ArraySlice
 ];
 
@@ -368,7 +371,9 @@ struct CallFrame {
 }
 
 pub struct VM<'a> {
-    engine: &'a Engine,
+    engine: &'a Engine,                                 // For native functions only
+    bytecode_functions: HashMap<u32, BytecodeFunction>, // Compiled bytecode functions
+    hir: HirAst,            // For constant lookups (cloned, but constants are small)
     ops: &'static [OpCode], // Top-level bytecode - cached, not cloned
     stack: Vec<Value>,
     call_stack: Vec<CallFrame>,
@@ -376,7 +381,12 @@ pub struct VM<'a> {
 }
 
 impl<'a> VM<'a> {
-    pub fn new(engine: &'a Engine, ops: Vec<OpCode>) -> Self {
+    pub fn new(
+        engine: &'a Engine,
+        bytecode_functions: HashMap<u32, BytecodeFunction>,
+        hir: HirAst,
+        ops: Vec<OpCode>,
+    ) -> Self {
         // Leak the bytecode to get a 'static reference - this is acceptable since
         // bytecode is created once and lives for the entire program lifetime
         let ops_box = Box::new(ops);
@@ -384,6 +394,8 @@ impl<'a> VM<'a> {
 
         Self {
             engine,
+            bytecode_functions,
+            hir,
             ops: ops_slice,
             stack: Vec::new(),
             call_stack: Vec::new(),
@@ -560,7 +572,8 @@ impl<'a> VM<'a> {
     #[inline(always)]
     fn op_ld_const(_vm: &mut VM, _frame_idx: usize, opcode: &OpCode) -> StepResult {
         if let OpCode::LdConst(id) = opcode {
-            let const_val = _vm.engine.get_constant(*id, &mut _vm.heap);
+            use crate::core::compileSession::CompileSession;
+            let const_val = CompileSession::get_constant_from_hir(&_vm.hir, *id, &mut _vm.heap);
             _vm.stack.push(const_val);
         }
         StepResult::Normal
@@ -796,7 +809,7 @@ impl<'a> VM<'a> {
         } = opcode
         {
             // Get function signature to know total parameter count
-            let total_params = if let Some(func) = _vm.engine.bytecode_functions.get(func_id) {
+            let total_params = if let Some(func) = _vm.bytecode_functions.get(func_id) {
                 func.param_var_ids.len()
             } else if let Some(native_func) = _vm.engine.functions.get(func_id) {
                 Self::min_arity(&native_func.arity)
@@ -918,41 +931,59 @@ impl<'a> VM<'a> {
         StepResult::Normal
     }
 
-    fn op_array_index(_vm: &mut VM, _frame_idx: usize, _opcode: &OpCode) -> StepResult {
-        let index_val = _vm.stack.pop().expect("Stack underflow in ArrayIndex");
-        let array_val = _vm.stack.pop().expect("Stack underflow in ArrayIndex");
+    fn op_index(vm: &mut VM, _frame_idx: usize, _opcode: &OpCode) -> StepResult {
+        let index_val = vm
+            .stack
+            .pop()
+            .expect("Stack underflow in op_index (index)");
+        let value = vm
+            .stack
+            .pop()
+            .expect("Stack underflow in op_index (value)");
+    
+        fn compute_index(index_val: &Value, len: usize, kind: &str) -> usize {
+            let idx = index_val
+                .as_number()
+                .unwrap_or_else(|| {
+                    panic!("{} index must be a number, got: {:?}", kind, index_val)
+                }) as i64;
+    
+            let len_i64 = len as i64;
+            let adjusted = if idx < 0 { len_i64 + idx } else { idx };
+    
+            if adjusted < 0 || adjusted >= len_i64 {
+                panic!(
+                    "{} index out of bounds: {} (length: {})",
+                    kind, idx, len
+                );
+            }
+    
+            adjusted as usize
+        }
+    
+        if let Some(string) = value.as_string(&vm.heap) {
+            let index = compute_index(&index_val, string.chars().count(), "String");
 
-        if let Some(array) = array_val.as_array(&_vm.heap) {
-            // Convert index to usize
-            let index = if let Some(index_num) = index_val.as_number() {
-                let idx = index_num as i64;
-                let array_len = array.len() as i64;
-
-                // Handle negative indexing: -1 means last element, -2 means second-to-last, etc.
-                let adjusted_idx = if idx < 0 { array_len + idx } else { idx };
-
-                // Bounds check
-                if adjusted_idx < 0 || adjusted_idx >= array_len {
-                    panic!(
-                        "Array index out of bounds: {} (array length: {})",
-                        idx, array_len
-                    );
-                }
-
-                adjusted_idx as usize
-            } else {
-                panic!("Array index must be a number, got: {:?}", index_val);
-            };
-
-            // Get element at index
-            let element = array[index];
-            _vm.stack.push(element);
+            let ch = string
+                .chars()
+                .nth(index)
+                .expect("String index out of bounds");
+            
+            let ch_string = ch.to_string();
+            vm.stack.push(Value::string_with_heap(ch_string, &mut vm.heap));
+        } else if let Some(array) = value.as_array(&vm.heap) {
+            let index = compute_index(&index_val, array.len(), "Array");
+            vm.stack.push(array[index]);
         } else {
-            panic!("ArrayIndex expects array value, got: {:?}", array_val);
+            panic!(
+                "Index operation expects an indexable value (array or string), got: {:?}",
+                value
+            );
         }
 
         StepResult::Normal
     }
+
 
     fn op_array_slice(_vm: &mut VM, _frame_idx: usize, _opcode: &OpCode) -> StepResult {
         // Stack order (top to bottom): inclusive_flag, step, end, start, array
@@ -1529,7 +1560,7 @@ impl<'a> VM<'a> {
             // Get function arity to create proper holes
             let arity = if let Some(native_func) = self.engine.functions.get(&func_id) {
                 Self::min_arity(&native_func.arity)
-            } else if let Some(bytecode_func) = self.engine.bytecode_functions.get(&func_id) {
+            } else if let Some(bytecode_func) = self.bytecode_functions.get(&func_id) {
                 bytecode_func.param_var_ids.len()
             } else {
                 1 // Unknown - assume unary
@@ -1694,16 +1725,16 @@ impl<'a> VM<'a> {
                     }
                     Value::thunk_with_heap(nested_func_id, nested_final_args, &mut self.heap)
                 } else if let Some(nested_func_id) = nested_first_val.as_function() {
-                    let arity =
-                        if let Some(native_func) = self.engine.functions.get(&nested_func_id) {
-                            Self::min_arity(&native_func.arity)
-                        } else if let Some(bytecode_func) =
-                            self.engine.bytecode_functions.get(&nested_func_id)
-                        {
-                            bytecode_func.param_var_ids.len()
-                        } else {
-                            1
-                        };
+                    let arity = if let Some(native_func) =
+                        self.engine.functions.get(&nested_func_id)
+                    {
+                        Self::min_arity(&native_func.arity)
+                    } else if let Some(bytecode_func) = self.bytecode_functions.get(&nested_func_id)
+                    {
+                        bytecode_func.param_var_ids.len()
+                    } else {
+                        1
+                    };
                     let mut bound = vec![Some(first_result)];
                     while bound.len() < arity {
                         bound.push(None);
@@ -1743,7 +1774,7 @@ impl<'a> VM<'a> {
                             {
                                 Self::min_arity(&native_func.arity)
                             } else if let Some(bytecode_func) =
-                                self.engine.bytecode_functions.get(&deep_func_id)
+                                self.bytecode_functions.get(&deep_func_id)
                             {
                                 bytecode_func.param_var_ids.len()
                             } else {
@@ -1780,7 +1811,7 @@ impl<'a> VM<'a> {
                                     if let Some(native_func) = self.engine.functions.get(&df_id) {
                                         Self::min_arity(&native_func.arity)
                                     } else if let Some(bytecode_func) =
-                                        self.engine.bytecode_functions.get(&df_id)
+                                        self.bytecode_functions.get(&df_id)
                                     {
                                         bytecode_func.param_var_ids.len()
                                     } else {
@@ -1816,7 +1847,7 @@ impl<'a> VM<'a> {
                 // It's a function - create thunk with first_result as arg (and holes for remaining args)
                 let arity = if let Some(native_func) = self.engine.functions.get(&func_id) {
                     Self::min_arity(&native_func.arity)
-                } else if let Some(bytecode_func) = self.engine.bytecode_functions.get(&func_id) {
+                } else if let Some(bytecode_func) = self.bytecode_functions.get(&func_id) {
                     bytecode_func.param_var_ids.len()
                 } else {
                     1
@@ -1922,13 +1953,22 @@ impl<'a> VM<'a> {
         if self.engine.functions.contains_key(&func_id) {
             // Native function: invoke and get result directly
             self.call_native_function(func_id, args)
-        } else if let Some(bytecode_func) = self.engine.bytecode_functions.get(&func_id) {
+        } else {
             // Bytecode function: create a frame and execute until it returns
+            // Extract clone in separate scope to ensure borrow is dropped
+            let (bytecode_func, required_params) = {
+                let func = self
+                    .bytecode_functions
+                    .get(&func_id)
+                    .expect(&format!("Function {} not found", func_id));
+                (func.clone(), func.param_var_ids.len())
+            };
+
             // Safety check: ensure we have enough arguments
-            let required_params = bytecode_func.param_var_ids.len();
             if args.len() < required_params {
+                // Extract debug info in separate scope to ensure all borrows are dropped
                 let args_debug: Vec<String> =
-                    args.iter().map(|v| v.value_to_string(&self.heap)).collect();
+                    { args.iter().map(|v| v.value_to_string(&self.heap)).collect() };
                 panic!(
                     "Attempted to invoke function {} with {} args but it requires {}. Args: {:?}",
                     func_id,
@@ -1938,8 +1978,8 @@ impl<'a> VM<'a> {
                 );
             }
 
-            // Push new frame with function bytecode
-            let initial_frame_count = self.create_bytecode_frame(bytecode_func, args);
+            // Push new frame with function bytecode - borrow is definitely dropped now
+            let initial_frame_count = self.create_bytecode_frame(&bytecode_func, args);
 
             // Execute until the function we just pushed returns
             // Use the shared execution method to avoid nested loops
@@ -1958,11 +1998,6 @@ impl<'a> VM<'a> {
             // HARD RESET: Truncate stack to pre-thunk depth (removes all intermediate stack junk)
             self.stack.truncate(stack_base);
             result
-        } else {
-            panic!(
-                "Function {} not found (neither native nor bytecode)",
-                func_id
-            );
         }
     }
 
@@ -1984,13 +2019,22 @@ impl<'a> VM<'a> {
         if self.engine.functions.contains_key(&func_id) {
             // Native function: invoke and get result directly
             self.call_native_function(func_id, args)
-        } else if let Some(bytecode_func) = self.engine.bytecode_functions.get(&func_id) {
+        } else {
             // Bytecode function: create a frame and execute until it returns
+            // Extract clone in separate scope to ensure borrow is dropped
+            let (bytecode_func, required_params) = {
+                let func = self
+                    .bytecode_functions
+                    .get(&func_id)
+                    .expect(&format!("Function {} not found", func_id));
+                (func.clone(), func.param_var_ids.len())
+            };
+
             // Safety check: ensure we have enough arguments
-            let required_params = bytecode_func.param_var_ids.len();
             if args.len() < required_params {
+                // Extract debug info in separate scope to ensure all borrows are dropped
                 let args_debug: Vec<String> =
-                    args.iter().map(|v| v.value_to_string(&self.heap)).collect();
+                    { args.iter().map(|v| v.value_to_string(&self.heap)).collect() };
                 panic!(
                     "Attempted to invoke function {} with {} args but it requires {}. Args: {:?}",
                     func_id,
@@ -2000,8 +2044,8 @@ impl<'a> VM<'a> {
                 );
             }
 
-            // Push new frame with function bytecode
-            let initial_frame_count = self.create_bytecode_frame(bytecode_func, args);
+            // Push new frame with function bytecode - borrow is definitely dropped now
+            let initial_frame_count = self.create_bytecode_frame(&bytecode_func, args);
 
             // Execute until the function we just pushed returns
             // Use the shared execution method to avoid nested loops
@@ -2019,11 +2063,6 @@ impl<'a> VM<'a> {
             // HARD RESET: Truncate stack to pre-thunk depth (removes all intermediate stack junk)
             self.stack.truncate(stack_base);
             result
-        } else {
-            panic!(
-                "Function {} not found (neither native nor bytecode)",
-                func_id
-            );
         }
     }
 
@@ -2129,8 +2168,7 @@ impl<'a> VM<'a> {
                             let arity = if let Some(native_func) = self.engine.functions.get(&nf_id)
                             {
                                 Self::min_arity(&native_func.arity)
-                            } else if let Some(bytecode_func) =
-                                self.engine.bytecode_functions.get(&nf_id)
+                            } else if let Some(bytecode_func) = self.bytecode_functions.get(&nf_id)
                             {
                                 bytecode_func.param_var_ids.len()
                             } else {
@@ -2187,7 +2225,7 @@ impl<'a> VM<'a> {
                                     if let Some(native_func) = self.engine.functions.get(&df_id) {
                                         Self::min_arity(&native_func.arity)
                                     } else if let Some(bytecode_func) =
-                                        self.engine.bytecode_functions.get(&df_id)
+                                        self.bytecode_functions.get(&df_id)
                                     {
                                         bytecode_func.param_var_ids.len()
                                     } else {
@@ -2307,7 +2345,7 @@ impl<'a> VM<'a> {
                             if let Some(native_func) = self.engine.functions.get(&second_func_id) {
                                 Self::min_arity(&native_func.arity)
                             } else if let Some(bytecode_func) =
-                                self.engine.bytecode_functions.get(&second_func_id)
+                                self.bytecode_functions.get(&second_func_id)
                             {
                                 bytecode_func.param_var_ids.len()
                             } else {
@@ -2411,7 +2449,7 @@ impl<'a> VM<'a> {
             // Get the function's arity to create thunk with proper holes
             let arity = if let Some(native_func) = self.engine.functions.get(&func_id) {
                 Self::min_arity(&native_func.arity)
-            } else if let Some(bytecode_func) = self.engine.bytecode_functions.get(&func_id) {
+            } else if let Some(bytecode_func) = self.bytecode_functions.get(&func_id) {
                 bytecode_func.param_var_ids.len()
             } else {
                 // Unknown function - assume all args are provided (no holes)
@@ -2455,7 +2493,7 @@ impl<'a> VM<'a> {
         let required_params = if self.engine.functions.contains_key(&func_id) {
             // For native functions, use the arity
             Self::min_arity(&self.engine.functions.get(&func_id).unwrap().arity)
-        } else if let Some(bytecode_func) = self.engine.bytecode_functions.get(&func_id) {
+        } else if let Some(bytecode_func) = self.bytecode_functions.get(&func_id) {
             bytecode_func.param_var_ids.len()
         } else {
             panic!(
@@ -2531,7 +2569,6 @@ impl<'a> VM<'a> {
         } else {
             // Bytecode functions: reuse current frame
             let bytecode_func = self
-                .engine
                 .bytecode_functions
                 .get(&func_id)
                 .expect("Bytecode function should exist");
@@ -2659,16 +2696,16 @@ impl<'a> VM<'a> {
                     }
                     Value::thunk_with_heap(nested_func_id, nested_final_args, &mut self.heap)
                 } else if let Some(nested_func_id) = nested_first_val.as_function() {
-                    let arity =
-                        if let Some(native_func) = self.engine.functions.get(&nested_func_id) {
-                            Self::min_arity(&native_func.arity)
-                        } else if let Some(bytecode_func) =
-                            self.engine.bytecode_functions.get(&nested_func_id)
-                        {
-                            bytecode_func.param_var_ids.len()
-                        } else {
-                            1
-                        };
+                    let arity = if let Some(native_func) =
+                        self.engine.functions.get(&nested_func_id)
+                    {
+                        Self::min_arity(&native_func.arity)
+                    } else if let Some(bytecode_func) = self.bytecode_functions.get(&nested_func_id)
+                    {
+                        bytecode_func.param_var_ids.len()
+                    } else {
+                        1
+                    };
                     let mut bound = vec![Some(first_result)];
                     while bound.len() < arity {
                         bound.push(None);
@@ -2689,7 +2726,7 @@ impl<'a> VM<'a> {
                 // It's a function - create thunk with first_result as arg
                 let arity = if let Some(native_func) = self.engine.functions.get(&func_id) {
                     Self::min_arity(&native_func.arity)
-                } else if let Some(bytecode_func) = self.engine.bytecode_functions.get(&func_id) {
+                } else if let Some(bytecode_func) = self.bytecode_functions.get(&func_id) {
                     bytecode_func.param_var_ids.len()
                 } else {
                     1
@@ -2713,22 +2750,25 @@ impl<'a> VM<'a> {
             .expect("Invoke expects regular Thunk value");
 
         // Get the required number of parameters for this function
-        let required_params = if self.engine.functions.contains_key(&func_id) {
-            // For native functions, use the arity
-            Self::min_arity(&self.engine.functions.get(&func_id).unwrap().arity)
-        } else if let Some(bytecode_func) = self.engine.bytecode_functions.get(&func_id) {
-            bytecode_func.param_var_ids.len()
-        } else {
-            panic!(
-                "Function {} not found (neither native nor bytecode)",
-                func_id
-            );
+        // Extract in separate scope to drop borrow before mutable operations
+        let (required_params, is_native) = {
+            if self.engine.functions.contains_key(&func_id) {
+                // For native functions, use the arity
+                let arity = &self.engine.functions.get(&func_id).unwrap().arity;
+                (Self::min_arity(arity), true)
+            } else if let Some(bytecode_func) = self.bytecode_functions.get(&func_id) {
+                (bytecode_func.param_var_ids.len(), false)
+            } else {
+                panic!(
+                    "Function {} not found (neither native nor bytecode)",
+                    func_id
+                );
+            }
         };
 
         // Check if we need more arguments and pop them from the stack
         // This handles additional currying beyond what Thunk(n_args) already handled.
         let mut extra_args = Vec::new();
-        let is_native = self.engine.functions.contains_key(&func_id);
         let filled_count = args.iter().filter(|opt| opt.is_some()).count();
         if !is_native {
             // Only bytecode functions support currying (extra arguments)
@@ -2791,12 +2831,16 @@ impl<'a> VM<'a> {
             self.stack.push(result);
         } else {
             // Bytecode functions: push frame and let VM loop handle execution (trampoline)
-            let bytecode_func = self
-                .engine
-                .bytecode_functions
-                .get(&func_id)
-                .expect("Bytecode function should exist");
-            self.create_bytecode_frame(bytecode_func, final_args);
+            // Extract clone in separate scope to ensure borrow is dropped
+            let bytecode_func = {
+                let func = self
+                    .bytecode_functions
+                    .get(&func_id)
+                    .expect("Bytecode function should exist");
+                func.clone()
+            };
+            // Now borrow is dropped, safe to mutate self
+            self.create_bytecode_frame(&bytecode_func, final_args);
             // Execution continues in the VM loop - no recursion!
         }
     }
@@ -2809,10 +2853,18 @@ impl<'a> VM<'a> {
             // Native function: convert args to strings and call
             let result = self.call_native_function(func_id, args);
             self.stack.push(result);
-        } else if let Some(bytecode_func) = self.engine.bytecode_functions.get(&func_id) {
+        } else {
             // Bytecode function: push new call frame
+            // Extract clone in separate scope to ensure borrow is dropped
+            let (bytecode_func, required_params) = {
+                let func = self
+                    .bytecode_functions
+                    .get(&func_id)
+                    .expect(&format!("Function {} not found", func_id));
+                (func.clone(), func.param_var_ids.len())
+            };
+
             // Safety check: ensure we have enough arguments
-            let required_params = bytecode_func.param_var_ids.len();
             if args.len() < required_params {
                 panic!(
                     "Attempted to invoke function {} with {} args but it requires {}",
@@ -2821,13 +2873,9 @@ impl<'a> VM<'a> {
                     required_params
                 );
             }
-            self.create_bytecode_frame(bytecode_func, args);
+            // Now borrow is dropped, safe to mutate self
+            self.create_bytecode_frame(&bytecode_func, args);
             // Execution will continue in the main loop with the new frame
-        } else {
-            panic!(
-                "Function {} not found (neither native nor bytecode)",
-                func_id
-            );
         }
     }
 }

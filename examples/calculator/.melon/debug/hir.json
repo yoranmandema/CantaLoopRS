@@ -1,0 +1,790 @@
+{
+  "constants": [],
+  "blocks": [
+    {
+      "scope": 0,
+      "statements": [
+        "Nop",
+        {
+          "Expression": {
+            "Constant": 0
+          }
+        },
+        {
+          "Expression": {
+            "Constant": 0
+          }
+        }
+      ]
+    },
+    {
+      "scope": 0,
+      "statements": [
+        "Nop",
+        "Nop",
+        "Nop",
+        {
+          "Assign": {
+            "slot": 2,
+            "value": {
+              "String": "1 + 2"
+            }
+          }
+        },
+        {
+          "Loop": {
+            "init_vars": [
+              [
+                3,
+                {
+                  "Number": 0.0
+                }
+              ]
+            ],
+            "body": {
+              "scope": 15,
+              "statements": [
+                {
+                  "If": {
+                    "arms": [
+                      [
+                        {
+                          "Binary": {
+                            "lhs": {
+                              "Identifier": 3
+                            },
+                            "rhs": {
+                              "FunctionCall": {
+                                "function_id": 10016,
+                                "args": [
+                                  {
+                                    "Identifier": 2
+                                  }
+                                ],
+                                "invoke": true
+                              }
+                            },
+                            "operator": "Ge"
+                          }
+                        },
+                        {
+                          "scope": 15,
+                          "statements": [
+                            {
+                              "Break": {
+                                "value": null
+                              }
+                            }
+                          ]
+                        }
+                      ]
+                    ],
+                    "else_block": {
+                      "scope": 15,
+                      "statements": []
+                    }
+                  }
+                },
+                {
+                  "Assign": {
+                    "slot": 4,
+                    "value": {
+                      "ArrayIndex": {
+                        "array": {
+                          "Identifier": 2
+                        },
+                        "index": {
+                          "Identifier": 3
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "Assign": {
+                    "slot": 5,
+                    "value": {
+                      "FunctionCall": {
+                        "function_id": 0,
+                        "args": [
+                          {
+                            "Identifier": 4
+                          }
+                        ],
+                        "invoke": true
+                      }
+                    }
+                  }
+                },
+                {
+                  "If": {
+                    "arms": [
+                      [
+                        {
+                          "Identifier": 5
+                        },
+                        {
+                          "scope": 17,
+                          "statements": [
+                            "Continue"
+                          ]
+                        }
+                      ]
+                    ],
+                    "else_block": {
+                      "scope": 16,
+                      "statements": []
+                    }
+                  }
+                },
+                {
+                  "Assign": {
+                    "slot": 6,
+                    "value": {
+                      "FunctionCall": {
+                        "function_id": 1,
+                        "args": [
+                          {
+                            "Identifier": 4
+                          }
+                        ],
+                        "invoke": true
+                      }
+                    }
+                  }
+                },
+                {
+                  "Expression": {
+                    "FunctionCall": {
+                      "function_id": 10013,
+                      "args": [
+                        {
+                          "FunctionCall": {
+                            "function_id": 1,
+                            "args": [
+                              {
+                                "Identifier": 4
+                              }
+                            ],
+                            "invoke": true
+                          }
+                        }
+                      ],
+                      "invoke": true
+                    }
+                  }
+                },
+                {
+                  "Assign": {
+                    "slot": 3,
+                    "value": {
+                      "Binary": {
+                        "lhs": {
+                          "Identifier": 3
+                        },
+                        "rhs": {
+                          "Number": 1.0
+                        },
+                        "operator": "Add"
+                      }
+                    }
+                  }
+                }
+              ]
+            },
+            "break_slot": null
+          }
+        }
+      ]
+    }
+  ],
+  "scopes": {
+    "scopes": [
+      {
+        "vars": [
+          {
+            "id": 2,
+            "name": "expr",
+            "kind": "String"
+          }
+        ],
+        "parent": null
+      },
+      {
+        "vars": [
+          {
+            "id": 0,
+            "name": "s",
+            "kind": "String"
+          }
+        ],
+        "parent": 0
+      },
+      {
+        "vars": [],
+        "parent": 1
+      },
+      {
+        "vars": [
+          {
+            "id": 1,
+            "name": "s",
+            "kind": "String"
+          }
+        ],
+        "parent": 0
+      },
+      {
+        "vars": [],
+        "parent": 3
+      },
+      {
+        "vars": [],
+        "parent": 4
+      },
+      {
+        "vars": [],
+        "parent": 4
+      },
+      {
+        "vars": [],
+        "parent": 4
+      },
+      {
+        "vars": [],
+        "parent": 4
+      },
+      {
+        "vars": [],
+        "parent": 4
+      },
+      {
+        "vars": [],
+        "parent": 4
+      },
+      {
+        "vars": [],
+        "parent": 4
+      },
+      {
+        "vars": [],
+        "parent": 4
+      },
+      {
+        "vars": [],
+        "parent": 4
+      },
+      {
+        "vars": [],
+        "parent": 4
+      },
+      {
+        "vars": [
+          {
+            "id": 3,
+            "name": "i",
+            "kind": "Number"
+          }
+        ],
+        "parent": 0
+      },
+      {
+        "vars": [
+          {
+            "id": 4,
+            "name": "c",
+            "kind": "Unknown"
+          },
+          {
+            "id": 5,
+            "name": "ws",
+            "kind": "Boolean"
+          },
+          {
+            "id": 6,
+            "name": "digit",
+            "kind": "Boolean"
+          }
+        ],
+        "parent": 15
+      },
+      {
+        "vars": [],
+        "parent": 16
+      }
+    ]
+  },
+  "functions": {
+    "0": {
+      "id": 0,
+      "name": "is_ws",
+      "signature": {
+        "params": [
+          "String"
+        ],
+        "return_type": "Boolean"
+      },
+      "definition": {
+        "body": {
+          "scope": 2,
+          "statements": [
+            {
+              "Return": {
+                "value": {
+                  "Binary": {
+                    "lhs": {
+                      "Binary": {
+                        "lhs": {
+                          "Binary": {
+                            "lhs": {
+                              "Binary": {
+                                "lhs": {
+                                  "Identifier": 0
+                                },
+                                "rhs": {
+                                  "String": " "
+                                },
+                                "operator": "Eq"
+                              }
+                            },
+                            "rhs": {
+                              "Binary": {
+                                "lhs": {
+                                  "Identifier": 0
+                                },
+                                "rhs": {
+                                  "String": "\\t"
+                                },
+                                "operator": "Eq"
+                              }
+                            },
+                            "operator": "Or"
+                          }
+                        },
+                        "rhs": {
+                          "Binary": {
+                            "lhs": {
+                              "Identifier": 0
+                            },
+                            "rhs": {
+                              "String": "\\n"
+                            },
+                            "operator": "Eq"
+                          }
+                        },
+                        "operator": "Or"
+                      }
+                    },
+                    "rhs": {
+                      "Binary": {
+                        "lhs": {
+                          "Identifier": 0
+                        },
+                        "rhs": {
+                          "String": "\\r"
+                        },
+                        "operator": "Eq"
+                      }
+                    },
+                    "operator": "Or"
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "param_var_ids": [
+          0
+        ],
+        "scope_id": 1
+      }
+    },
+    "1": {
+      "id": 1,
+      "name": "is_digit",
+      "signature": {
+        "params": [
+          "String"
+        ],
+        "return_type": "Boolean"
+      },
+      "definition": {
+        "body": {
+          "scope": 4,
+          "statements": [
+            {
+              "If": {
+                "arms": [
+                  [
+                    {
+                      "Binary": {
+                        "lhs": {
+                          "Identifier": 1
+                        },
+                        "rhs": {
+                          "String": "0"
+                        },
+                        "operator": "Eq"
+                      }
+                    },
+                    {
+                      "scope": 5,
+                      "statements": [
+                        {
+                          "Return": {
+                            "value": {
+                              "Boolean": true
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                ],
+                "else_block": {
+                  "scope": 4,
+                  "statements": []
+                }
+              }
+            },
+            {
+              "If": {
+                "arms": [
+                  [
+                    {
+                      "Binary": {
+                        "lhs": {
+                          "Identifier": 1
+                        },
+                        "rhs": {
+                          "String": "1"
+                        },
+                        "operator": "Eq"
+                      }
+                    },
+                    {
+                      "scope": 6,
+                      "statements": [
+                        {
+                          "Return": {
+                            "value": {
+                              "Boolean": true
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                ],
+                "else_block": {
+                  "scope": 4,
+                  "statements": []
+                }
+              }
+            },
+            {
+              "If": {
+                "arms": [
+                  [
+                    {
+                      "Binary": {
+                        "lhs": {
+                          "Identifier": 1
+                        },
+                        "rhs": {
+                          "String": "2"
+                        },
+                        "operator": "Eq"
+                      }
+                    },
+                    {
+                      "scope": 7,
+                      "statements": [
+                        {
+                          "Return": {
+                            "value": {
+                              "Boolean": true
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                ],
+                "else_block": {
+                  "scope": 4,
+                  "statements": []
+                }
+              }
+            },
+            {
+              "If": {
+                "arms": [
+                  [
+                    {
+                      "Binary": {
+                        "lhs": {
+                          "Identifier": 1
+                        },
+                        "rhs": {
+                          "String": "3"
+                        },
+                        "operator": "Eq"
+                      }
+                    },
+                    {
+                      "scope": 8,
+                      "statements": [
+                        {
+                          "Return": {
+                            "value": {
+                              "Boolean": true
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                ],
+                "else_block": {
+                  "scope": 4,
+                  "statements": []
+                }
+              }
+            },
+            {
+              "If": {
+                "arms": [
+                  [
+                    {
+                      "Binary": {
+                        "lhs": {
+                          "Identifier": 1
+                        },
+                        "rhs": {
+                          "String": "4"
+                        },
+                        "operator": "Eq"
+                      }
+                    },
+                    {
+                      "scope": 9,
+                      "statements": [
+                        {
+                          "Return": {
+                            "value": {
+                              "Boolean": true
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                ],
+                "else_block": {
+                  "scope": 4,
+                  "statements": []
+                }
+              }
+            },
+            {
+              "If": {
+                "arms": [
+                  [
+                    {
+                      "Binary": {
+                        "lhs": {
+                          "Identifier": 1
+                        },
+                        "rhs": {
+                          "String": "5"
+                        },
+                        "operator": "Eq"
+                      }
+                    },
+                    {
+                      "scope": 10,
+                      "statements": [
+                        {
+                          "Return": {
+                            "value": {
+                              "Boolean": true
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                ],
+                "else_block": {
+                  "scope": 4,
+                  "statements": []
+                }
+              }
+            },
+            {
+              "If": {
+                "arms": [
+                  [
+                    {
+                      "Binary": {
+                        "lhs": {
+                          "Identifier": 1
+                        },
+                        "rhs": {
+                          "String": "6"
+                        },
+                        "operator": "Eq"
+                      }
+                    },
+                    {
+                      "scope": 11,
+                      "statements": [
+                        {
+                          "Return": {
+                            "value": {
+                              "Boolean": true
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                ],
+                "else_block": {
+                  "scope": 4,
+                  "statements": []
+                }
+              }
+            },
+            {
+              "If": {
+                "arms": [
+                  [
+                    {
+                      "Binary": {
+                        "lhs": {
+                          "Identifier": 1
+                        },
+                        "rhs": {
+                          "String": "7"
+                        },
+                        "operator": "Eq"
+                      }
+                    },
+                    {
+                      "scope": 12,
+                      "statements": [
+                        {
+                          "Return": {
+                            "value": {
+                              "Boolean": true
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                ],
+                "else_block": {
+                  "scope": 4,
+                  "statements": []
+                }
+              }
+            },
+            {
+              "If": {
+                "arms": [
+                  [
+                    {
+                      "Binary": {
+                        "lhs": {
+                          "Identifier": 1
+                        },
+                        "rhs": {
+                          "String": "8"
+                        },
+                        "operator": "Eq"
+                      }
+                    },
+                    {
+                      "scope": 13,
+                      "statements": [
+                        {
+                          "Return": {
+                            "value": {
+                              "Boolean": true
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                ],
+                "else_block": {
+                  "scope": 4,
+                  "statements": []
+                }
+              }
+            },
+            {
+              "If": {
+                "arms": [
+                  [
+                    {
+                      "Binary": {
+                        "lhs": {
+                          "Identifier": 1
+                        },
+                        "rhs": {
+                          "String": "9"
+                        },
+                        "operator": "Eq"
+                      }
+                    },
+                    {
+                      "scope": 14,
+                      "statements": [
+                        {
+                          "Return": {
+                            "value": {
+                              "Boolean": true
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                ],
+                "else_block": {
+                  "scope": 4,
+                  "statements": []
+                }
+              }
+            },
+            {
+              "Return": {
+                "value": {
+                  "Boolean": false
+                }
+              }
+            }
+          ]
+        },
+        "param_var_ids": [
+          1
+        ],
+        "scope_id": 3
+      }
+    }
+  },
+  "module_imports": {
+    "__main__": {
+      "print": 10013,
+      "is_digit": 1,
+      "is_ws": 0,
+      "str_len": 10016
+    }
+  },
+  "imported_constant_values": {}
+}

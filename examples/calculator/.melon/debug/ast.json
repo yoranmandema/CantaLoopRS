@@ -1,0 +1,208 @@
+{
+  "blocks": [
+    {
+      "statements": [
+        {
+          "Use": {
+            "path": [
+              "std"
+            ],
+            "selector": {
+              "Single": "print"
+            }
+          }
+        },
+        {
+          "Use": {
+            "path": [
+              "string"
+            ],
+            "selector": {
+              "Single": "str_len"
+            }
+          }
+        },
+        {
+          "Use": {
+            "path": [
+              "utils"
+            ],
+            "selector": {
+              "Multiple": [
+                "is_ws",
+                "is_digit"
+              ]
+            }
+          }
+        },
+        {
+          "Let": {
+            "identifier": "expr",
+            "type_annotation": null,
+            "expression": {
+              "Literal": {
+                "String": "1 + 2"
+              }
+            },
+            "pub_visibility": false
+          }
+        },
+        {
+          "For": {
+            "var_name": "i",
+            "start": {
+              "Literal": {
+                "Number": 0.0
+              }
+            },
+            "end": {
+              "Postfix": {
+                "lhs": {
+                  "FunctionCall": {
+                    "callee": {
+                      "Identifier": "str_len"
+                    },
+                    "arguments": [
+                      {
+                        "Identifier": "expr"
+                      }
+                    ]
+                  }
+                },
+                "op": "Invoke",
+                "args": null
+              }
+            },
+            "body": {
+              "statements": [
+                {
+                  "Let": {
+                    "identifier": "c",
+                    "type_annotation": null,
+                    "expression": {
+                      "ArrayIndex": {
+                        "array": {
+                          "Identifier": "expr"
+                        },
+                        "indices": [
+                          {
+                            "Single": {
+                              "Identifier": "i"
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    "pub_visibility": false
+                  }
+                },
+                {
+                  "Let": {
+                    "identifier": "ws",
+                    "type_annotation": null,
+                    "expression": {
+                      "Postfix": {
+                        "lhs": {
+                          "FunctionCall": {
+                            "callee": {
+                              "Identifier": "is_ws"
+                            },
+                            "arguments": [
+                              {
+                                "Identifier": "c"
+                              }
+                            ]
+                          }
+                        },
+                        "op": "Invoke",
+                        "args": null
+                      }
+                    },
+                    "pub_visibility": false
+                  }
+                },
+                {
+                  "If": {
+                    "arms": [
+                      [
+                        {
+                          "Identifier": "ws"
+                        },
+                        {
+                          "statements": [
+                            "Continue"
+                          ]
+                        }
+                      ]
+                    ],
+                    "else_block": null
+                  }
+                },
+                {
+                  "Let": {
+                    "identifier": "digit",
+                    "type_annotation": null,
+                    "expression": {
+                      "Postfix": {
+                        "lhs": {
+                          "FunctionCall": {
+                            "callee": {
+                              "Identifier": "is_digit"
+                            },
+                            "arguments": [
+                              {
+                                "Identifier": "c"
+                              }
+                            ]
+                          }
+                        },
+                        "op": "Invoke",
+                        "args": null
+                      }
+                    },
+                    "pub_visibility": false
+                  }
+                },
+                {
+                  "Expression": {
+                    "Postfix": {
+                      "lhs": {
+                        "FunctionCall": {
+                          "callee": {
+                            "Identifier": "print"
+                          },
+                          "arguments": [
+                            {
+                              "Postfix": {
+                                "lhs": {
+                                  "FunctionCall": {
+                                    "callee": {
+                                      "Identifier": "is_digit"
+                                    },
+                                    "arguments": [
+                                      {
+                                        "Identifier": "c"
+                                      }
+                                    ]
+                                  }
+                                },
+                                "op": "Invoke",
+                                "args": null
+                              }
+                            }
+                          ]
+                        }
+                      },
+                      "op": "Invoke",
+                      "args": null
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

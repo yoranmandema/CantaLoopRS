@@ -77,7 +77,7 @@ print(result)!;
 "#);
     
     let mut engine = Engine::new();
-    CantaLoopRS::stdlib::load_all_stdlib(&mut engine);
+    CantaLoopRS::stdlib::load_stdlib_runtime(&mut engine);
     
     // Load project modules
     engine.load_project_modules(&project_root).expect("Failed to load modules");
@@ -108,7 +108,7 @@ print(PI)!;
 "#);
     
     let mut engine = Engine::new();
-    CantaLoopRS::stdlib::load_all_stdlib(&mut engine);
+    CantaLoopRS::stdlib::load_stdlib_runtime(&mut engine);
     
     engine.load_project_modules(&project_root).expect("Failed to load modules");
 }
@@ -136,7 +136,7 @@ let result = add(10, 20)!!;
 "#);
     
     let mut engine = Engine::new();
-    CantaLoopRS::stdlib::load_all_stdlib(&mut engine);
+    CantaLoopRS::stdlib::load_stdlib_runtime(&mut engine);
     
     engine.load_project_modules(&project_root).expect("Failed to load modules");
 }
@@ -169,7 +169,7 @@ let product = multiply(5, 3)!!;
 "#);
     
     let mut engine = Engine::new();
-    CantaLoopRS::stdlib::load_all_stdlib(&mut engine);
+    CantaLoopRS::stdlib::load_stdlib_runtime(&mut engine);
     
     engine.load_project_modules(&project_root).expect("Failed to load modules");
 }
@@ -198,7 +198,7 @@ let diff = subtract(10, 5)!!;
 "#);
     
     let mut engine = Engine::new();
-    CantaLoopRS::stdlib::load_all_stdlib(&mut engine);
+    CantaLoopRS::stdlib::load_stdlib_runtime(&mut engine);
     
     engine.load_project_modules(&project_root).expect("Failed to load modules");
 }
@@ -223,7 +223,7 @@ print(result)!;
 "#);
     
     let mut engine = Engine::new();
-    CantaLoopRS::stdlib::load_all_stdlib(&mut engine);
+    CantaLoopRS::stdlib::load_stdlib_runtime(&mut engine);
     
     engine.load_project_modules(&project_root).expect("Failed to load modules");
 }
@@ -249,7 +249,7 @@ use utils.private_helper; // This should fail - function is not public
 "#);
     
     let mut engine = Engine::new();
-    CantaLoopRS::stdlib::load_all_stdlib(&mut engine);
+    CantaLoopRS::stdlib::load_stdlib_runtime(&mut engine);
     
     // Loading modules should succeed (syntax is valid)
     engine.load_project_modules(&project_root).expect("Failed to load modules");
@@ -281,7 +281,7 @@ print(DAY_IN_SECONDS)!;
 "#);
     
     let mut engine = Engine::new();
-    CantaLoopRS::stdlib::load_all_stdlib(&mut engine);
+    CantaLoopRS::stdlib::load_stdlib_runtime(&mut engine);
     
     engine.load_project_modules(&project_root).expect("Failed to load modules");
 }
@@ -308,7 +308,7 @@ wrapped_print("Hello from wrapped function")!;
 "#);
     
     let mut engine = Engine::new();
-    CantaLoopRS::stdlib::load_all_stdlib(&mut engine);
+    CantaLoopRS::stdlib::load_stdlib_runtime(&mut engine);
     
     engine.load_project_modules(&project_root).expect("Failed to load modules");
 }
@@ -331,7 +331,7 @@ use utils.add; // This should cause an error - duplicate import
 "#);
     
     let mut engine = Engine::new();
-    CantaLoopRS::stdlib::load_all_stdlib(&mut engine);
+    CantaLoopRS::stdlib::load_stdlib_runtime(&mut engine);
     
     engine.load_project_modules(&project_root).expect("Failed to load modules");
     
@@ -364,7 +364,7 @@ print(result)!;
 "#);
     
     let mut engine = Engine::new();
-    CantaLoopRS::stdlib::load_all_stdlib(&mut engine);
+    CantaLoopRS::stdlib::load_stdlib_runtime(&mut engine);
     
     engine.load_project_modules(&project_root).expect("Failed to load modules");
 }
@@ -385,7 +385,7 @@ print(product)!;
 "#);
     
     let mut engine = Engine::new();
-    CantaLoopRS::stdlib::load_all_stdlib(&mut engine);
+    CantaLoopRS::stdlib::load_stdlib_runtime(&mut engine);
     
     // Should be able to import from stdlib modules
     engine.load_project_modules(&project_root).expect("Failed to load modules");
@@ -401,7 +401,7 @@ let x = 42;
 "#);
     
     let mut engine = Engine::new();
-    CantaLoopRS::stdlib::load_all_stdlib(&mut engine);
+    CantaLoopRS::stdlib::load_stdlib_runtime(&mut engine);
     
     // Should skip this file (not load as module)
     engine.load_project_modules(&project_root).expect("Failed to load modules");
@@ -420,7 +420,7 @@ pub fn greet(name: string) -> string {
 "#);
     
     let mut engine = Engine::new();
-    CantaLoopRS::stdlib::load_all_stdlib(&mut engine);
+    CantaLoopRS::stdlib::load_stdlib_runtime(&mut engine);
     
     let module_path = project_root.join("src").join("utils.mln");
     let result = engine.load_module_from_file(&module_path, &project_root);
@@ -455,7 +455,7 @@ use std.print;
 "#);
     
     let mut engine = Engine::new();
-    CantaLoopRS::stdlib::load_all_stdlib(&mut engine);
+    CantaLoopRS::stdlib::load_stdlib_runtime(&mut engine);
     
     let result = engine.load_project_modules(&project_root);
     assert!(result.is_ok(), "Failed to load project modules: {:?}", result);
@@ -478,7 +478,7 @@ use utils.nonexistent; // This function doesn't exist
 "#);
     
     let mut engine = Engine::new();
-    CantaLoopRS::stdlib::load_all_stdlib(&mut engine);
+    CantaLoopRS::stdlib::load_stdlib_runtime(&mut engine);
     
     // Module loading should succeed, but compilation should fail
     engine.load_project_modules(&project_root).expect("Failed to load modules");
@@ -496,7 +496,7 @@ use nonexistent.function;
 "#);
     
     let mut engine = Engine::new();
-    CantaLoopRS::stdlib::load_all_stdlib(&mut engine);
+    CantaLoopRS::stdlib::load_stdlib_runtime(&mut engine);
     
     engine.load_project_modules(&project_root).expect("Failed to load modules");
     
@@ -527,7 +527,7 @@ let num_result = process_number(10)!!;
 "#);
     
     let mut engine = Engine::new();
-    CantaLoopRS::stdlib::load_all_stdlib(&mut engine);
+    CantaLoopRS::stdlib::load_stdlib_runtime(&mut engine);
     
     engine.load_project_modules(&project_root).expect("Failed to load modules");
 }
@@ -551,7 +551,7 @@ let result = calculate(1, 2, 3)!!;
 "#);
     
     let mut engine = Engine::new();
-    CantaLoopRS::stdlib::load_all_stdlib(&mut engine);
+    CantaLoopRS::stdlib::load_stdlib_runtime(&mut engine);
     
     engine.load_project_modules(&project_root).expect("Failed to load modules");
 }
@@ -575,7 +575,7 @@ use constants.{ZERO, ONE, TWO, TEN, TWENTY};
 "#);
     
     let mut engine = Engine::new();
-    CantaLoopRS::stdlib::load_all_stdlib(&mut engine);
+    CantaLoopRS::stdlib::load_stdlib_runtime(&mut engine);
     
     engine.load_project_modules(&project_root).expect("Failed to load modules");
 }

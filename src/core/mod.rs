@@ -15,6 +15,9 @@ pub mod hir_lowering;
 /// Stack-based virtual machine for bytecode execution.
 pub mod vm;
 
+pub mod compileSession;
+pub mod projectLoader;
+
 // Re-export commonly used types
 pub use engine::Engine;
 pub use parser::parse_program;

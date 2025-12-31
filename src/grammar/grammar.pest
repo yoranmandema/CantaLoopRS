@@ -158,8 +158,6 @@ false = { "false" }
 alpha = { 'a'..'z' | 'A'..'Z' }
 digit = { '0'..'9' }
 
-operator = { "+" | "-" | "*" | "/" | "%" | "=" | "!=" | ">" | "<" | ">=" | "<=" }
-
 // Comments
 line_comment = _{ "//" ~ (!"\n" ~ ANY)* }
 block_comment = _{ "/*" ~ (!"*/" ~ ANY)* ~ "*/" }

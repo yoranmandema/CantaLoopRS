@@ -13,6 +13,8 @@ struct LoopInfo {
     end: usize,
     break_positions: Vec<usize>, // Positions of break jumps to patch
     break_slot: Option<u32>, // Variable slot for break value (None for statement loops, Some(slot) for expression loops)
+    continue_target: usize, // Position to jump to on continue (usually start, but for for loops it's the increment)
+    continue_positions: Vec<usize>, // Positions of continue jumps to patch (for for loops)
 }
 
 impl ByteCodeEmitter {
@@ -352,11 +354,27 @@ impl ByteCodeEmitter {
 
         let loop_start = ops.len();
 
+        // Detect if this is a for loop pattern: condition check at start, increment at end
+        let is_for_loop = if let Some(first_stmt) = body.statements.first() {
+            if let HirStmt::If { arms, else_block } = first_stmt {
+                arms.len() == 1
+                    && else_block.statements.is_empty()
+                    && arms[0].1.statements.len() == 1
+                    && matches!(&arms[0].1.statements[0], HirStmt::Break { .. })
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
         self.loop_stack.push(LoopInfo {
             start: loop_start,
             end: 0, // Will be patched later
             break_positions: Vec::new(),
             break_slot,
+            continue_target: loop_start, // Default to start, will be updated for for loops
+            continue_positions: Vec::new(), // Positions of continue jumps to patch
         });
 
         // OPTIMIZATION: Detect pattern "if (condition) { break [value]; }" at start of loop
@@ -388,13 +406,50 @@ impl ByteCodeEmitter {
         };
 
         if let Some(condition) = condition_opt {
-            // Optimized pattern
+            // Optimized pattern (for loops)
             self.emit_expression(ops, &condition, program);
             let jmp_if_true_pos = ops.len();
             ops.push(OpCode::JmpIfTrue(0)); // Placeholder
 
-            for stmt in &remaining_body {
-                self.emit_statement(ops, stmt, program);
+            // For for loops (optimized pattern), the last statement in remaining_body is always the increment
+            // Continue should jump to the increment to skip the rest of the body
+            if !remaining_body.is_empty() {
+                // Check if last statement is an increment (Assign statement)
+                let last_is_increment = matches!(remaining_body.last(), Some(HirStmt::Assign { .. }));
+                
+                if last_is_increment {
+                    // This is a for loop - emit all statements except the last one (the increment)
+                    let (body_stmts, increment_stmt) = remaining_body.split_at(remaining_body.len() - 1);
+                    for stmt in body_stmts {
+                        self.emit_statement(ops, stmt, program);
+                    }
+                    
+                    // Track the position where the increment starts
+                    let increment_start = ops.len();
+                    
+                    // Emit the increment (last statement)
+                    if let Some(increment) = increment_stmt.first() {
+                        self.emit_statement(ops, increment, program);
+                    }
+                    
+                    // Update continue_target and patch all continue statements
+                    if let Some(loop_info) = self.loop_stack.last_mut() {
+                        loop_info.continue_target = increment_start;
+                        // Patch all continue jumps to point to the increment
+                        for &continue_pos in &loop_info.continue_positions {
+                            ops[continue_pos] = OpCode::Jmp(increment_start);
+                        }
+                        loop_info.continue_positions.clear();
+                    }
+                } else {
+                    // Not a for loop, emit all statements normally
+                    for stmt in &remaining_body {
+                        self.emit_statement(ops, stmt, program);
+                    }
+                }
+            } else {
+                // Empty remaining body (shouldn't happen for for loops, but handle it)
+                // This case shouldn't occur for for loops since they always have an increment
             }
             ops.push(OpCode::Jmp(loop_start));
 
@@ -419,6 +474,16 @@ impl ByteCodeEmitter {
                 for &break_pos in &loop_info.break_positions {
                     ops[break_pos] = OpCode::Jmp(loop_end);
                 }
+                // Patch continue statements - if continue_target was set (for for loops), use it, otherwise use loop_start
+                let continue_target = if loop_info.continue_target != loop_info.start {
+                    loop_info.continue_target
+                } else {
+                    loop_info.start
+                };
+                for &continue_pos in &loop_info.continue_positions {
+                    ops[continue_pos] = OpCode::Jmp(continue_target);
+                }
+                loop_info.continue_positions.clear();
                 loop_info.break_slot
             } else {
                 None
@@ -429,7 +494,41 @@ impl ByteCodeEmitter {
             }
         } else {
             // Normal path
-            self.emit_block(ops, body, program);
+            // Check if last statement is an increment (for loop pattern in non-optimized form)
+            let last_is_increment = if let Some(last_stmt) = body.statements.last() {
+                matches!(last_stmt, HirStmt::Assign { .. })
+            } else {
+                false
+            };
+
+            if is_for_loop && last_is_increment {
+                // For for loops, emit everything except the increment first
+                let body_without_increment = &body.statements[..body.statements.len() - 1];
+                for stmt in body_without_increment {
+                    self.emit_statement(ops, stmt, program);
+                }
+                
+                // Track the position where the increment starts
+                let increment_start = ops.len();
+                
+                // Emit the increment
+                if let Some(last_stmt) = body.statements.last() {
+                    self.emit_statement(ops, last_stmt, program);
+                }
+                
+                // Update continue_target and patch all continue statements
+                if let Some(loop_info) = self.loop_stack.last_mut() {
+                    loop_info.continue_target = increment_start;
+                    // Patch all continue jumps to point to the increment
+                    for &continue_pos in &loop_info.continue_positions {
+                        ops[continue_pos] = OpCode::Jmp(increment_start);
+                    }
+                    loop_info.continue_positions.clear();
+                }
+            } else {
+                // Regular loop, emit all statements
+                self.emit_block(ops, body, program);
+            }
             ops.push(OpCode::Jmp(loop_start));
 
             let loop_end = ops.len();
@@ -438,6 +537,16 @@ impl ByteCodeEmitter {
                 for &break_pos in &loop_info.break_positions {
                     ops[break_pos] = OpCode::Jmp(loop_end);
                 }
+                // Patch continue statements - if continue_target was set (for for loops), use it, otherwise use loop_start
+                let continue_target = if loop_info.continue_target != loop_info.start {
+                    loop_info.continue_target
+                } else {
+                    loop_info.start
+                };
+                for &continue_pos in &loop_info.continue_positions {
+                    ops[continue_pos] = OpCode::Jmp(continue_target);
+                }
+                loop_info.continue_positions.clear();
                 loop_info.break_slot
             } else {
                 None
@@ -476,8 +585,11 @@ impl ByteCodeEmitter {
     }
 
     fn emit_stmt_continue(&mut self, ops: &mut Vec<OpCode>) {
-        if let Some(loop_info) = self.loop_stack.last() {
-            ops.push(OpCode::Jmp(loop_info.start));
+        if let Some(loop_info) = self.loop_stack.last_mut() {
+            // Always use placeholder - we'll patch it later when we know the continue target
+            let continue_pos = ops.len();
+            ops.push(OpCode::Jmp(0)); // Placeholder
+            loop_info.continue_positions.push(continue_pos);
         } else {
             panic!("continue statement outside of loop");
         }
@@ -745,6 +857,8 @@ impl ByteCodeEmitter {
             end: 0, // Will be patched later
             break_positions: Vec::new(),
             break_slot,
+            continue_target: loop_start, // For expression loops, continue goes to start
+            continue_positions: Vec::new(),
         });
 
         // Emit the loop body

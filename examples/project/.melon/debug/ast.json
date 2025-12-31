@@ -3,23 +3,107 @@
     {
       "statements": [
         {
+          "Use": {
+            "path": [
+              "math"
+            ],
+            "selector": {
+              "Multiple": [
+                "mul",
+                "fold"
+              ]
+            }
+          }
+        },
+        {
+          "Use": {
+            "path": [
+              "std"
+            ],
+            "selector": {
+              "Single": "print"
+            }
+          }
+        },
+        {
+          "Let": {
+            "identifier": "xs",
+            "type_annotation": null,
+            "expression": {
+              "Array": [
+                {
+                  "Literal": {
+                    "Number": 1.0
+                  }
+                },
+                {
+                  "Literal": {
+                    "Number": 2.0
+                  }
+                },
+                {
+                  "Literal": {
+                    "Number": 3.0
+                  }
+                },
+                {
+                  "Literal": {
+                    "Number": 4.0
+                  }
+                },
+                {
+                  "Literal": {
+                    "Number": 5.0
+                  }
+                }
+              ]
+            },
+            "pub_visibility": false
+          }
+        },
+        {
+          "Let": {
+            "identifier": "a",
+            "type_annotation": null,
+            "expression": {
+              "Compose": {
+                "lhs": {
+                  "Identifier": "xs"
+                },
+                "rhs": {
+                  "FunctionCall": {
+                    "callee": {
+                      "Identifier": "fold"
+                    },
+                    "arguments": [
+                      {
+                        "Literal": {
+                          "Number": 1.0
+                        }
+                      },
+                      {
+                        "Identifier": "mul"
+                      }
+                    ]
+                  }
+                },
+                "reverse": false
+              }
+            },
+            "pub_visibility": false
+          }
+        },
+        {
           "Expression": {
             "Postfix": {
               "lhs": {
                 "FunctionCall": {
                   "callee": {
-                    "MemberAccess": {
-                      "object": {
-                        "Identifier": "std"
-                      },
-                      "member": "print"
-                    }
+                    "Identifier": "print"
                   },
                   "arguments": [
                     {
-                      "Literal": {
-                        "String": "Hello, world!"
-                      }
+                      "Identifier": "a"
                     }
                   ]
                 }

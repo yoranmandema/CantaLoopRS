@@ -123,6 +123,38 @@ impl HirBuilder {
         }
     }
 
+    pub fn reset_hir_only(&mut self) {
+        // Reset HIR output
+        self.ast = HirAst {
+            constants: Vec::new(),
+            blocks: Vec::new(),
+            scopes: ScopeArena::default(),
+            functions: HashMap::new(),
+            module_imports: HashMap::new(),
+            imported_constant_values: HashMap::new(),
+        };
+
+        // Reset lowering state - ensure scopes are properly reset
+        // Recreate the root scope
+        self.ast.scopes.scopes.clear();
+        self.ast.scopes.scopes.push(HirBlockContext {
+            vars: Vec::new(),
+            parent: None,
+        });
+        self.current_scope = ScopeId(0);
+        self.next_var_id = 0;
+        self.next_function_id = 0;
+        self.constant_map.clear();
+        self.current_module = None;
+    }
+
+    /// Check if the HirBuilder has any active scopes beyond the root scope.
+    /// Used for debug assertions to catch reuse bugs.
+    pub fn has_active_scope(&self) -> bool {
+        // If we have more than just the root scope (index 0), we have active scopes
+        self.ast.scopes.scopes.len() > 1 || self.current_scope != ScopeId(0)
+    }
+
     pub fn take_ast(&mut self) -> HirAst {
         std::mem::take(&mut self.ast)
     }
@@ -640,18 +672,17 @@ impl HirBuilder {
             .map(|c| c.id)
     }
 
-    pub fn resolve_function(&self, name: &str) -> Option<u32> {
+    pub fn resolve_function(&self, ctx: &crate::core::compileSession::CompileContext, name: &str) -> Option<u32> {
         // 1. Imports first
         if let Some(imported_id) = self.resolve_import_in_current_module(name) {
-            if self.ast.functions.contains_key(&imported_id) {
+            if self.ast.functions.contains_key(&imported_id) || (ctx.is_native_function)(imported_id) {
                 return Some(imported_id);
             }
         }
-    
+
         // 2. Find function by name
-        let (func_id, _) = self.ast.functions.iter()
-            .find(|(_, f)| f.name == name)?;
-    
+        let (func_id, _) = self.ast.functions.iter().find(|(_, f)| f.name == name)?;
+
         // 3. Check module ownership
         if let Some(current_module) = &self.current_module {
             // If function belongs to current module → allowed
@@ -661,22 +692,23 @@ impl HirBuilder {
                 }
             }
         }
-    
+
         // 4. Otherwise, function must be imported
-        let belongs_to_some_module = self.modules.values().any(|module| {
-            module.functions.values().any(|&id| id == *func_id)
-        });
-    
+        let belongs_to_some_module = self
+            .modules
+            .values()
+            .any(|module| module.functions.values().any(|&id| id == *func_id));
+
         if belongs_to_some_module {
             return None;
         }
-    
+
         // 5. Local or built-in function
         Some(*func_id)
     }
 
     pub fn register_builtin_function(&mut self, name: &str, signature: FunctionSignature, id: u32) {
-        // Register a built-in function (from Engine) in the HIR function registry
+        // Register a built-in function (from CompileContext) in the HIR function registry
         // Create a dummy function definition since built-ins are handled in the VM
         let dummy_def = FunctionDefinition {
             body: HirBlock {
@@ -1153,14 +1185,14 @@ impl HirBuilder {
         self.ast
     }
 
-    pub fn build_append(&mut self, program: Program) -> Result<(), HirError> {
+    pub fn build_append(&mut self, ctx: &crate::core::compileSession::CompileContext, program: Program) -> Result<(), HirError> {
         debug_assert!(
             self.current_module.is_some(),
             "build_append called without current_module set"
         );
 
         for block in program.blocks {
-            let hir_block = self.process_block(block)?;
+            let hir_block = self.process_block(ctx, block)?;
             self.ast.blocks.push(hir_block);
         }
         Ok(())
@@ -1225,7 +1257,7 @@ impl HirBuilder {
         self.current_scope = parent_scope;
     }
 
-    fn process_block(&mut self, block: Block) -> Result<HirBlock, HirError> {
+    fn process_block(&mut self, ctx: &crate::core::compileSession::CompileContext, block: Block) -> Result<HirBlock, HirError> {
         let parent = self.current_scope;
 
         let is_top_level = self.current_scope == ScopeId(0);
@@ -1251,7 +1283,7 @@ impl HirBuilder {
         };
 
         for stmt in block.statements {
-            let hir = self.process_statement(stmt)?;
+            let hir = self.process_statement(ctx, stmt)?;
 
             hir_block.statements.push(hir);
         }
@@ -1263,11 +1295,12 @@ impl HirBuilder {
     /// Process an assignment expression and validate type compatibility
     fn process_assignment(
         &mut self,
+        ctx: &crate::core::compileSession::CompileContext,
         identifier: String,
         expression: Expression,
         require_exists: bool,
     ) -> Result<(u32, HirExpression), HirError> {
-        let expr = self.process_expression(expression)?;
+        let expr = self.process_expression(ctx, expression)?;
         let actual_kind = self.infer_variable_kind(&expr);
 
         let slot = if require_exists {
@@ -1617,6 +1650,7 @@ impl HirBuilder {
     /// Also performs constant folding for compile-time evaluable expressions
     fn process_let_statement(
         &mut self,
+        ctx: &crate::core::compileSession::CompileContext,
         identifier: String,
         type_annotation: Option<String>,
         expression: Expression,
@@ -1640,7 +1674,7 @@ impl HirBuilder {
             }
         } else {
             // Expression cannot be evaluated at compile time - process normally
-            self.process_expression(expression)?
+            self.process_expression(ctx, expression)?
         };
 
         let actual_kind = self.infer_variable_kind(&expr);
@@ -1675,36 +1709,40 @@ impl HirBuilder {
     /// Process an assign statement
     fn process_assign_statement(
         &mut self,
+        ctx: &crate::core::compileSession::CompileContext,
         identifier: String,
         expression: Expression,
     ) -> Result<HirStmt, HirError> {
-        let (slot, expr) = self.process_assignment(identifier, expression, true)?;
+        let (slot, expr) = self.process_assignment(ctx, identifier, expression, true)?;
         Ok(HirStmt::Assign { slot, value: expr })
     }
 
     /// Process an assign decrement statement
     fn process_assign_decrement_statement(
         &mut self,
+        ctx: &crate::core::compileSession::CompileContext,
         identifier: String,
         expression: Expression,
     ) -> Result<HirStmt, HirError> {
-        let (slot, expr) = self.process_assignment(identifier, expression, true)?;
+        let (slot, expr) = self.process_assignment(ctx, identifier, expression, true)?;
         Ok(HirStmt::AssignDecrement { slot, value: expr })
     }
 
     /// Process an assign increment statement
     fn process_assign_increment_statement(
         &mut self,
+        ctx: &crate::core::compileSession::CompileContext,
         identifier: String,
         expression: Expression,
     ) -> Result<HirStmt, HirError> {
-        let (slot, expr) = self.process_assignment(identifier, expression, true)?;
+        let (slot, expr) = self.process_assignment(ctx, identifier, expression, true)?;
         Ok(HirStmt::AssignIncrement { slot, value: expr })
     }
 
     /// Process an if statement
     fn process_if_statement(
         &mut self,
+        ctx: &crate::core::compileSession::CompileContext,
         arms: Vec<(Expression, Block)>,
         else_block: Option<Block>,
     ) -> Result<HirStmt, HirError> {
@@ -1712,15 +1750,15 @@ impl HirBuilder {
 
         for (expression, block) in arms {
             // Process expression in current scope (before processing the block)
-            let expr = self.process_expression(expression)?;
+            let expr = self.process_expression(ctx, expression)?;
             // Process block (creates new scope, processes statements, restores scope)
-            let bl = self.process_block(block)?;
+            let bl = self.process_block(ctx, block)?;
             hir_arms.push((expr, bl));
         }
 
         // For the else_block, we fill an empty block if None.
         let hir_else_block = match else_block {
-            Some(block) => Box::new(self.process_block(block)?),
+            Some(block) => Box::new(self.process_block(ctx, block)?),
             None => Box::new(HirBlock {
                 scope: self.current_scope,
                 statements: vec![],
@@ -1736,21 +1774,22 @@ impl HirBuilder {
     /// Process a match statement
     fn process_match_statement(
         &mut self,
+        ctx: &crate::core::compileSession::CompileContext,
         expression: Expression,
         cases: Vec<(Option<Expression>, Block)>,
     ) -> Result<HirStmt, HirError> {
         // Process the expression being matched
-        let match_expr = self.process_expression(expression)?;
+        let match_expr = self.process_expression(ctx, expression)?;
 
         // Process each case
         let mut hir_cases = Vec::new();
         for (pattern, block) in cases {
             let pattern_expr = if let Some(pat) = pattern {
-                Some(self.process_expression(pat)?)
+                Some(self.process_expression(ctx, pat)?)
             } else {
                 None // Wildcard case
             };
-            let hir_block = self.process_block(block)?;
+            let hir_block = self.process_block(ctx, block)?;
             hir_cases.push((pattern_expr, hir_block));
         }
 
@@ -1763,6 +1802,7 @@ impl HirBuilder {
     /// Process a function declaration statement
     fn process_function_declaration_statement(
         &mut self,
+        ctx: &crate::core::compileSession::CompileContext,
         identifier: String,
         arguments: Vec<Argument>,
         return_type: Option<String>,
@@ -1849,7 +1889,7 @@ impl HirBuilder {
         }
 
         // Process the function body (now that the function is registered, recursive calls will work)
-        let func_body = self.process_block(body)?;
+        let func_body = self.process_block(ctx, body)?;
 
         // Update the function with the actual body
         if let Some(func) = self.ast.functions.get_mut(&func_id) {
@@ -1864,14 +1904,15 @@ impl HirBuilder {
     }
 
     /// Process a return statement
-    fn process_return_statement(&mut self, expression: Expression) -> Result<HirStmt, HirError> {
-        let expr = self.process_expression(expression)?;
+    fn process_return_statement(&mut self, ctx: &crate::core::compileSession::CompileContext, expression: Expression) -> Result<HirStmt, HirError> {
+        let expr = self.process_expression(ctx, expression)?;
         Ok(HirStmt::Return { value: expr })
     }
 
     /// Process a while statement
     fn process_while_statement(
         &mut self,
+        ctx: &crate::core::compileSession::CompileContext,
         condition: Expression,
         body: Block,
     ) -> Result<HirStmt, HirError> {
@@ -1880,7 +1921,7 @@ impl HirBuilder {
         let loop_scope_id = self.create_loop_scope();
 
         // Process condition
-        let condition_expr = self.process_expression(condition)?;
+        let condition_expr = self.process_expression(ctx, condition)?;
 
         // Create a break statement wrapped in an if
         // if !condition { break; }
@@ -1902,7 +1943,7 @@ impl HirBuilder {
         };
 
         // Process the loop body
-        let hir_body = self.process_block(body)?;
+        let hir_body = self.process_block(ctx, body)?;
 
         // Combine the if statement with the body
         let combined_statements = {
@@ -1928,6 +1969,7 @@ impl HirBuilder {
     /// Process a for statement
     fn process_for_statement(
         &mut self,
+        ctx: &crate::core::compileSession::CompileContext,
         var_name: String,
         start: Expression,
         end: Expression,
@@ -1944,8 +1986,8 @@ impl HirBuilder {
         let loop_scope_id = self.create_loop_scope();
 
         // Process start and end expressions
-        let start_expr = self.process_expression(start)?;
-        let end_expr = self.process_expression(end)?;
+        let start_expr = self.process_expression(ctx, start)?;
+        let end_expr = self.process_expression(ctx, end)?;
 
         // Initialize the loop variable
         let var_kind = self.infer_variable_kind(&start_expr);
@@ -1972,7 +2014,7 @@ impl HirBuilder {
         };
 
         // Process the loop body
-        let hir_body = self.process_block(body)?;
+        let hir_body = self.process_block(ctx, body)?;
 
         // Create increment: var = var + 1
         let one = HirExpression::Number(1.0);
@@ -2011,6 +2053,7 @@ impl HirBuilder {
     /// Process a loop statement
     fn process_loop_statement(
         &mut self,
+        ctx: &crate::core::compileSession::CompileContext,
         init_vars: Vec<(String, Expression)>,
         body: Block,
     ) -> Result<HirStmt, HirError> {
@@ -2020,14 +2063,14 @@ impl HirBuilder {
         // Initialize loop variables in the loop scope
         let mut hir_init_vars = Vec::new();
         for (var_name, init_expr) in init_vars {
-            let expr = self.process_expression(init_expr)?;
+            let expr = self.process_expression(ctx, init_expr)?;
             let actual_kind = self.infer_variable_kind(&expr);
             let var_id = self.init_var(&var_name, actual_kind);
             hir_init_vars.push((var_id, expr));
         }
 
         // Process the loop body in the loop scope
-        let hir_body = self.process_block(body)?;
+        let hir_body = self.process_block(ctx, body)?;
 
         self.restore_scope(parent_scope);
 
@@ -2042,10 +2085,11 @@ impl HirBuilder {
     /// Process a break statement
     fn process_break_statement(
         &mut self,
+        ctx: &crate::core::compileSession::CompileContext,
         expression: Option<Expression>,
     ) -> Result<HirStmt, HirError> {
         let expr = if let Some(expr) = expression {
-            Some(self.process_expression(expr)?)
+            Some(self.process_expression(ctx, expr)?)
         } else {
             None
         };
@@ -2060,13 +2104,14 @@ impl HirBuilder {
     /// Process an expression statement
     fn process_expression_statement(
         &mut self,
+        ctx: &crate::core::compileSession::CompileContext,
         expression: Expression,
     ) -> Result<HirStmt, HirError> {
-        let expr = self.process_expression(expression)?;
+        let expr = self.process_expression(ctx, expression)?;
         Ok(HirStmt::Expression(expr))
     }
 
-    fn process_statement(&mut self, statement: Statement) -> Result<HirStmt, HirError> {
+    fn process_statement(&mut self, ctx: &crate::core::compileSession::CompileContext, statement: Statement) -> Result<HirStmt, HirError> {
         match statement {
             Statement::Mod { identifier: _ } => {
                 // Module context is already set by the engine before build_append()
@@ -2078,7 +2123,7 @@ impl HirBuilder {
                 type_annotation,
                 expression,
                 pub_visibility: _,
-            } => self.process_let_statement(identifier, type_annotation, expression),
+            } => self.process_let_statement(ctx, identifier, type_annotation, expression),
             Statement::Const {
                 identifier,
                 expression,
@@ -2090,18 +2135,18 @@ impl HirBuilder {
             Statement::Assign {
                 identifier,
                 expression,
-            } => self.process_assign_statement(identifier, expression),
+            } => self.process_assign_statement(ctx, identifier, expression),
             Statement::AssignDecrement {
                 identifier,
                 expression,
-            } => self.process_assign_decrement_statement(identifier, expression),
+            } => self.process_assign_decrement_statement(ctx, identifier, expression),
             Statement::AssignIncrement {
                 identifier,
                 expression,
-            } => self.process_assign_increment_statement(identifier, expression),
-            Statement::If { arms, else_block } => self.process_if_statement(arms, else_block),
+            } => self.process_assign_increment_statement(ctx, identifier, expression),
+            Statement::If { arms, else_block } => self.process_if_statement(ctx, arms, else_block),
             Statement::Match { expression, cases } => {
-                self.process_match_statement(expression, cases)
+                self.process_match_statement(ctx, expression, cases)
             }
             Statement::FunctionDeclaration {
                 identifier,
@@ -2110,24 +2155,25 @@ impl HirBuilder {
                 body,
                 pub_visibility,
             } => self.process_function_declaration_statement(
+                ctx,
                 identifier,
                 arguments,
                 return_type,
                 body,
                 pub_visibility,
             ),
-            Statement::Return { expression } => self.process_return_statement(expression),
-            Statement::While { condition, body } => self.process_while_statement(condition, body),
+            Statement::Return { expression } => self.process_return_statement(ctx, expression),
+            Statement::While { condition, body } => self.process_while_statement(ctx, condition, body),
             Statement::For {
                 var_name,
                 start,
                 end,
                 body,
-            } => self.process_for_statement(var_name, start, end, body),
-            Statement::Loop { init_vars, body } => self.process_loop_statement(init_vars, body),
-            Statement::Break { expression } => self.process_break_statement(expression),
+            } => self.process_for_statement(ctx, var_name, start, end, body),
+            Statement::Loop { init_vars, body } => self.process_loop_statement(ctx, init_vars, body),
+            Statement::Break { expression } => self.process_break_statement(ctx, expression),
             Statement::Continue => self.process_continue_statement(),
-            Statement::Expression(expression) => self.process_expression_statement(expression),
+            Statement::Expression(expression) => self.process_expression_statement(ctx, expression),
             Statement::Use { path, selector } => {
                 // Ensure we're inside a module
                 if self.current_module.is_none() {
@@ -2169,12 +2215,13 @@ impl HirBuilder {
     /// Process arguments list for PostfixInvoke
     fn process_invoke_args(
         &mut self,
+        ctx: &crate::core::compileSession::CompileContext,
         args: Option<Vec<Expression>>,
     ) -> Result<Vec<HirExpression>, HirError> {
         if let Some(arg_list) = args {
             let mut processed_args = Vec::new();
             for arg in arg_list {
-                processed_args.push(self.process_expression(arg)?);
+                processed_args.push(self.process_expression(ctx, arg)?);
             }
             Ok(processed_args)
         } else {
@@ -2185,6 +2232,7 @@ impl HirBuilder {
     /// Process PostfixInvoke when lhs is an Identifier
     fn process_identifier_invoke(
         &mut self,
+        ctx: &crate::core::compileSession::CompileContext,
         identifier: String,
         args: Option<Vec<Expression>>,
     ) -> Result<HirExpression, HirError> {
@@ -2198,7 +2246,7 @@ impl HirBuilder {
                 .iter()
                 .any(|scope| scope.vars.iter().any(|v| v.id == imported_id))
             {
-                let processed_args = self.process_invoke_args(args)?;
+                let processed_args = self.process_invoke_args(ctx, args)?;
                 return Ok(HirExpression::PostfixInvoke {
                     operand: Box::new(HirExpression::Identifier(imported_id)),
                     args: if processed_args.is_empty() {
@@ -2212,7 +2260,7 @@ impl HirBuilder {
 
         // Try to resolve as variable (for thunks stored in variables)
         if let Some(var_id) = self.resolve_var_aggressive(&identifier) {
-            let processed_args = self.process_invoke_args(args)?;
+            let processed_args = self.process_invoke_args(ctx, args)?;
             return Ok(HirExpression::PostfixInvoke {
                 operand: Box::new(HirExpression::Identifier(var_id)),
                 args: if processed_args.is_empty() {
@@ -2224,7 +2272,7 @@ impl HirBuilder {
         }
 
         // Check if it's a function (should error - can't use ! on functions)
-        if self.resolve_function(&identifier).is_some() {
+        if self.resolve_function(ctx, &identifier).is_some() {
             return Err(HirError::TypeError(format!(
                 "Cannot use thunk invocation syntax '{}!' on a function. Use '{}' with parentheses to call the function.",
                 identifier, identifier
@@ -2240,11 +2288,12 @@ impl HirBuilder {
     /// Process PostfixInvoke when lhs is a FunctionCall
     fn process_function_call_invoke(
         &mut self,
+        ctx: &crate::core::compileSession::CompileContext,
         callee: Box<Expression>,
         fc_args: Vec<Expression>,
         invoke_args: Option<Vec<Expression>>,
     ) -> Result<HirExpression, HirError> {
-        let func_expr = self.process_expression(Expression::FunctionCall {
+        let func_expr = self.process_expression(ctx, Expression::FunctionCall {
             callee,
             arguments: fc_args,
         })?;
@@ -2256,7 +2305,7 @@ impl HirBuilder {
                 ..
             } => {
                 let mut processed_args = existing_args;
-                processed_args.extend(self.process_invoke_args(invoke_args)?);
+                processed_args.extend(self.process_invoke_args(ctx, invoke_args)?);
                 Ok(HirExpression::FunctionCall {
                     function_id,
                     args: processed_args,
@@ -2271,7 +2320,7 @@ impl HirBuilder {
                 if let Some(arg_list) = existing_args {
                     processed_args.extend(arg_list);
                 }
-                processed_args.extend(self.process_invoke_args(invoke_args)?);
+                processed_args.extend(self.process_invoke_args(ctx, invoke_args)?);
                 Ok(HirExpression::PostfixInvoke {
                     operand,
                     args: if processed_args.is_empty() {
@@ -2282,7 +2331,7 @@ impl HirBuilder {
                 })
             }
             _ => {
-                let processed_args = self.process_invoke_args(invoke_args)?;
+                let processed_args = self.process_invoke_args(ctx, invoke_args)?;
                 Ok(HirExpression::PostfixInvoke {
                     operand: Box::new(func_expr),
                     args: if processed_args.is_empty() {
@@ -2298,6 +2347,7 @@ impl HirBuilder {
     /// Process PostfixInvoke when lhs is already a PostfixInvoke (nested invocation)
     fn process_nested_postfix_invoke(
         &mut self,
+        ctx: &crate::core::compileSession::CompileContext,
         operand: Box<HirExpression>,
         existing_args: Option<Vec<HirExpression>>,
         invoke_args: Option<Vec<Expression>>,
@@ -2315,7 +2365,7 @@ impl HirBuilder {
         if let Some(arg_list) = existing_args {
             processed_args.extend(arg_list);
         }
-        processed_args.extend(self.process_invoke_args(invoke_args)?);
+        processed_args.extend(self.process_invoke_args(ctx, invoke_args)?);
 
         Ok(HirExpression::PostfixInvoke {
             operand,
@@ -2361,16 +2411,10 @@ impl HirBuilder {
     /// Process a literal expression
     fn process_literal_expression(&mut self, lit: Literal) -> Result<HirExpression, HirError> {
         return match lit {
-            Literal::String(s) => {
-                Ok(HirExpression::String(s.clone()))
-            }
-            Literal::Number(n) => {
-                Ok(HirExpression::Number(n))
-            }
-            Literal::Boolean(b) => {
-                Ok(HirExpression::Boolean(b))
-            }
-        }
+            Literal::String(s) => Ok(HirExpression::String(s.clone())),
+            Literal::Number(n) => Ok(HirExpression::Number(n)),
+            Literal::Boolean(b) => Ok(HirExpression::Boolean(b)),
+        };
 
         // let cid = self.intern_constant(lit);
         // Ok(HirExpression::Constant(cid))
@@ -2423,6 +2467,7 @@ impl HirBuilder {
     /// Process an identifier expression
     fn process_identifier_expression(
         &mut self,
+        ctx: &crate::core::compileSession::CompileContext,
         identifier: String,
     ) -> Result<HirExpression, HirError> {
         // First check imported symbols (compile-time resolved)
@@ -2449,7 +2494,7 @@ impl HirBuilder {
             return Ok(HirExpression::Constant(const_id));
         }
 
-        if let Some(function_id) = self.resolve_function(&identifier) {
+        if let Some(function_id) = self.resolve_function(ctx, &identifier) {
             // Function name used as identifier - convert to thunk by calling with no args
             // This allows functions to be used in compositions like: square <| add10
             return Ok(HirExpression::FunctionCall {
@@ -2465,12 +2510,13 @@ impl HirBuilder {
     /// Process an infix (binary) expression
     fn process_infix_expression(
         &mut self,
+        ctx: &crate::core::compileSession::CompileContext,
         lhs: Expression,
         op: BinaryOp,
         rhs: Expression,
     ) -> Result<HirExpression, HirError> {
-        let lhs_expr = self.process_expression(lhs)?;
-        let rhs_expr = self.process_expression(rhs)?;
+        let lhs_expr = self.process_expression(ctx, lhs)?;
+        let rhs_expr = self.process_expression(ctx, rhs)?;
 
         // Type check binary operations
         let lhs_type = self.infer_variable_kind(&lhs_expr);
@@ -2487,10 +2533,11 @@ impl HirBuilder {
     /// Process a prefix (unary) expression
     fn process_prefix_expression(
         &mut self,
+        ctx: &crate::core::compileSession::CompileContext,
         op: UnaryOp,
         rhs: Expression,
     ) -> Result<HirExpression, HirError> {
-        let rhs_expr = self.process_expression(rhs)?;
+        let rhs_expr = self.process_expression(ctx, rhs)?;
 
         Ok(HirExpression::Unary {
             operand: Box::new(rhs_expr),
@@ -2501,6 +2548,7 @@ impl HirBuilder {
     /// Process a postfix expression
     fn process_postfix_expression(
         &mut self,
+        ctx: &crate::core::compileSession::CompileContext,
         lhs: Expression,
         op: PostfixOp,
         args: Option<Vec<Expression>>,
@@ -2513,16 +2561,16 @@ impl HirBuilder {
                     arguments: fc_args,
                 } = lhs
                 {
-                    return self.process_function_call_invoke(callee, fc_args, args);
+                    return self.process_function_call_invoke(ctx, callee, fc_args, args);
                 }
 
                 // If lhs is an Identifier, check if it's a variable first
                 if let Expression::Identifier(identifier) = lhs {
-                    return self.process_identifier_invoke(identifier, args);
+                    return self.process_identifier_invoke(ctx, identifier, args);
                 }
 
                 // For other expressions, process normally
-                let lhs_expr = self.process_expression(lhs)?;
+                let lhs_expr = self.process_expression(ctx, lhs)?;
                 match lhs_expr {
                     HirExpression::FunctionCall {
                         function_id,
@@ -2536,9 +2584,9 @@ impl HirBuilder {
                     HirExpression::PostfixInvoke {
                         operand,
                         args: existing_args,
-                    } => self.process_nested_postfix_invoke(operand, existing_args, args),
+                    } => self.process_nested_postfix_invoke(ctx, operand, existing_args, args),
                     other => {
-                        let processed_args = self.process_invoke_args(args)?;
+                        let processed_args = self.process_invoke_args(ctx, args)?;
                         Ok(HirExpression::PostfixInvoke {
                             operand: Box::new(other),
                             args: if processed_args.is_empty() {
@@ -2556,48 +2604,41 @@ impl HirBuilder {
     /// Process a function call expression
     fn process_function_call_expression(
         &mut self,
+        ctx: &crate::core::compileSession::CompileContext,
         callee: Expression,
         arguments: Vec<Expression>,
     ) -> Result<HirExpression, HirError> {
-    
         // Identifier callee: MUST be a function
         if let Expression::Identifier(identifier_name) = callee {
-            let function_id = self
-                .resolve_function(&identifier_name)
-                .ok_or_else(|| {
-                    HirError::TypeError(format!(
-                        "'{}' is not a callable function",
-                        identifier_name
-                    ))
-                })?;
-    
+            let function_id = self.resolve_function(ctx, &identifier_name).ok_or_else(|| {
+                HirError::TypeError(format!("'{}' is not a callable function", identifier_name))
+            })?;
+
             let args = arguments
                 .into_iter()
-                .map(|arg| self.process_expression(arg))
+                .map(|arg| self.process_expression(ctx, arg))
                 .collect::<Result<Vec<_>, _>>()?;
-    
+
             return Ok(HirExpression::FunctionCall {
                 function_id,
                 args,
                 invoke: false,
             });
         }
-    
+
         // Non-identifier callees (thunks, compositions, etc.)
-        let callee_expr = self.process_expression(callee)?;
-    
+        let callee_expr = self.process_expression(ctx, callee)?;
+
         let processed_args = arguments
             .into_iter()
-            .map(|arg| self.process_expression(arg))
+            .map(|arg| self.process_expression(ctx, arg))
             .collect::<Result<Vec<_>, _>>()?;
-    
+
         match callee_expr {
-            HirExpression::ComposeThunk { first, second } => {
-                Ok(HirExpression::PostfixInvoke {
-                    operand: Box::new(HirExpression::ComposeThunk { first, second }),
-                    args: Some(processed_args),
-                })
-            }
+            HirExpression::ComposeThunk { first, second } => Ok(HirExpression::PostfixInvoke {
+                operand: Box::new(HirExpression::ComposeThunk { first, second }),
+                args: Some(processed_args),
+            }),
             HirExpression::FunctionCall {
                 function_id,
                 args: existing_args,
@@ -2611,25 +2652,24 @@ impl HirBuilder {
                     invoke: false,
                 })
             }
-            _ => {
-                Ok(HirExpression::PostfixInvoke {
-                    operand: Box::new(callee_expr),
-                    args: Some(processed_args),
-                })
-            }
+            _ => Ok(HirExpression::PostfixInvoke {
+                operand: Box::new(callee_expr),
+                args: Some(processed_args),
+            }),
         }
     }
 
     /// Process a partial call expression
     fn process_partial_call_expression(
         &mut self,
+        ctx: &crate::core::compileSession::CompileContext,
         func: Expression,
         args: Vec<CallArgument>,
     ) -> Result<HirExpression, HirError> {
         // Process the function identifier
         let func_id = if let Expression::Identifier(ref identifier_name) = func {
             // Check if it's a function
-            if let Some(function_id) = self.resolve_function(identifier_name) {
+            if let Some(function_id) = self.resolve_function(ctx, identifier_name) {
                 function_id
             } else {
                 return Err(HirError::UnknownVariable(identifier_name.clone()));
@@ -2647,7 +2687,7 @@ impl HirBuilder {
             match arg {
                 CallArgument::Hole => bound.push(None),
                 CallArgument::Expr(expr) => {
-                    bound.push(Some(self.process_expression(expr)?));
+                    bound.push(Some(self.process_expression(ctx, expr)?));
                 }
             }
         }
@@ -2656,19 +2696,20 @@ impl HirBuilder {
     }
 
     /// Process a group expression (parentheses)
-    fn process_group_expression(&mut self, expr: Expression) -> Result<HirExpression, HirError> {
+    fn process_group_expression(&mut self, ctx: &crate::core::compileSession::CompileContext, expr: Expression) -> Result<HirExpression, HirError> {
         // Group expressions (parentheses) just unwrap and process the inner expression
-        self.process_expression(expr)
+        self.process_expression(ctx, expr)
     }
 
     /// Process an array expression
     fn process_array_expression(
         &mut self,
+        ctx: &crate::core::compileSession::CompileContext,
         elements: Vec<Expression>,
     ) -> Result<HirExpression, HirError> {
         let mut hir_elements = Vec::new();
         for elem in elements {
-            hir_elements.push(self.process_expression(elem)?);
+            hir_elements.push(self.process_expression(ctx, elem)?);
         }
         Ok(HirExpression::Array(hir_elements))
     }
@@ -2678,6 +2719,7 @@ impl HirBuilder {
     /// Multi-dimensional indexing not yet supported
     fn process_array_index_expression(
         &mut self,
+        ctx: &crate::core::compileSession::CompileContext,
         array: Expression,
         indices: Vec<crate::core::ast::IndexSpec>,
     ) -> Result<HirExpression, HirError> {
@@ -2690,12 +2732,12 @@ impl HirBuilder {
         }
 
         let index_spec = &indices[0];
-        let array_expr = self.process_expression(array)?;
+        let array_expr = self.process_expression(ctx, array)?;
 
         match index_spec {
             crate::core::ast::IndexSpec::Single(index_expr) => {
                 // Single index: arr[3]
-                let index_hir_expr = self.process_expression(index_expr.clone())?;
+                let index_hir_expr = self.process_expression(ctx, index_expr.clone())?;
                 Ok(HirExpression::ArrayIndex {
                     array: Box::new(array_expr),
                     index: Box::new(index_hir_expr),
@@ -2704,17 +2746,17 @@ impl HirBuilder {
             crate::core::ast::IndexSpec::Range { start, end, step } => {
                 // Range: arr[1..5] or arr[1..5..2] or arr[..5] or arr[5..]
                 let start_hir = if let Some(start_expr) = start {
-                    Some(Box::new(self.process_expression(start_expr.clone())?))
+                    Some(Box::new(self.process_expression(ctx, start_expr.clone())?))
                 } else {
                     None
                 };
                 let end_hir = if let Some(end_expr) = end {
-                    Some(Box::new(self.process_expression(end_expr.clone())?))
+                    Some(Box::new(self.process_expression(ctx, end_expr.clone())?))
                 } else {
                     None
                 };
                 let step_hir = if let Some(step_expr) = step {
-                    Some(Box::new(self.process_expression(step_expr.clone())?))
+                    Some(Box::new(self.process_expression(ctx, step_expr.clone())?))
                 } else {
                     None
                 };
@@ -2729,12 +2771,12 @@ impl HirBuilder {
             crate::core::ast::IndexSpec::InclusiveRange { start, end } => {
                 // Inclusive range: arr[1..=5]
                 let start_hir = if let Some(start_expr) = start {
-                    Some(Box::new(self.process_expression(start_expr.clone())?))
+                    Some(Box::new(self.process_expression(ctx, start_expr.clone())?))
                 } else {
                     None
                 };
                 let end_hir = if let Some(end_expr) = end {
-                    Some(Box::new(self.process_expression(end_expr.clone())?))
+                    Some(Box::new(self.process_expression(ctx, end_expr.clone())?))
                 } else {
                     None
                 };
@@ -2753,6 +2795,7 @@ impl HirBuilder {
     /// Detects reducer patterns: array |> reducer (e.g., xs |> sum, xs |> fold(...))
     fn process_compose_expression(
         &mut self,
+        ctx: &crate::core::compileSession::CompileContext,
         lhs: Expression,
         rhs: Expression,
         reverse: bool,
@@ -2765,8 +2808,8 @@ impl HirBuilder {
             let is_array_literal = matches!(lhs, Expression::Array(_));
 
             // Process both sides
-            let first_expr = self.process_expression(lhs)?;
-            let second_expr = self.process_expression(rhs)?;
+            let first_expr = self.process_expression(ctx, lhs)?;
+            let second_expr = self.process_expression(ctx, rhs)?;
 
             // Check if LHS is an array (either array literal or array variable)
             let is_array = is_array_literal
@@ -2813,8 +2856,8 @@ impl HirBuilder {
             })
         } else {
             // For reverse composition, process both sides normally
-            let first_expr = self.process_expression(lhs)?;
-            let second_expr = self.process_expression(rhs)?;
+            let first_expr = self.process_expression(ctx, lhs)?;
+            let second_expr = self.process_expression(ctx, rhs)?;
 
             // For reverse composition (<|), swap the operands
             // f <| g means f(g(x)), so we want to process g first, then f
@@ -2890,6 +2933,7 @@ impl HirBuilder {
     /// Process a loop expression
     fn process_loop_expression(
         &mut self,
+        ctx: &crate::core::compileSession::CompileContext,
         init_vars: Vec<(String, Expression)>,
         body: Block,
     ) -> Result<HirExpression, HirError> {
@@ -2899,7 +2943,7 @@ impl HirBuilder {
         // Initialize loop variables in the loop scope
         let mut hir_init_vars = Vec::new();
         for (var_name, init_expr) in init_vars {
-            let expr = self.process_expression(init_expr)?;
+            let expr = self.process_expression(ctx, init_expr)?;
             let actual_kind = self.infer_variable_kind(&expr);
             let var_id = self.init_var(&var_name, actual_kind);
             hir_init_vars.push((var_id, expr));
@@ -2914,7 +2958,7 @@ impl HirBuilder {
         self.init_var(&break_slot_name, ValueKind::Unknown);
 
         // Process the loop body in the loop scope
-        let hir_body = self.process_block(body)?;
+        let hir_body = self.process_block(ctx, body)?;
 
         self.restore_scope(parent_scope);
 
@@ -2925,33 +2969,33 @@ impl HirBuilder {
         })
     }
 
-    fn process_expression(&mut self, expression: Expression) -> Result<HirExpression, HirError> {
+    fn process_expression(&mut self, ctx: &crate::core::compileSession::CompileContext, expression: Expression) -> Result<HirExpression, HirError> {
         match expression {
             Expression::Literal(lit) => self.process_literal_expression(lit),
-            Expression::Array(elements) => self.process_array_expression(elements),
+            Expression::Array(elements) => self.process_array_expression(ctx, elements),
             Expression::ArrayIndex { array, indices } => {
-                self.process_array_index_expression(*array, indices)
+                self.process_array_index_expression(ctx, *array, indices)
             }
-            Expression::Identifier(identifier) => self.process_identifier_expression(identifier),
+            Expression::Identifier(identifier) => self.process_identifier_expression(ctx, identifier),
             Expression::MemberAccess { object, member } => {
                 self.process_member_access_expression(*object, member)
             }
-            Expression::Infix { lhs, op, rhs } => self.process_infix_expression(*lhs, op, *rhs),
-            Expression::Prefix { op, rhs } => self.process_prefix_expression(op, *rhs),
+            Expression::Infix { lhs, op, rhs } => self.process_infix_expression(ctx, *lhs, op, *rhs),
+            Expression::Prefix { op, rhs } => self.process_prefix_expression(ctx, op, *rhs),
             Expression::Postfix { lhs, op, args } => {
-                self.process_postfix_expression(*lhs, op, args)
+                self.process_postfix_expression(ctx, *lhs, op, args)
             }
             Expression::FunctionCall { callee, arguments } => {
-                self.process_function_call_expression(*callee, arguments)
+                self.process_function_call_expression(ctx, *callee, arguments)
             }
             Expression::PartialCall { func, args } => {
-                self.process_partial_call_expression(*func, args)
+                self.process_partial_call_expression(ctx, *func, args)
             }
-            Expression::Group(expr) => self.process_group_expression(*expr),
+            Expression::Group(expr) => self.process_group_expression(ctx, *expr),
             Expression::Compose { lhs, rhs, reverse } => {
-                self.process_compose_expression(*lhs, *rhs, reverse)
+                self.process_compose_expression(ctx, *lhs, *rhs, reverse)
             }
-            Expression::Loop { init_vars, body } => self.process_loop_expression(init_vars, body),
+            Expression::Loop { init_vars, body } => self.process_loop_expression(ctx, init_vars, body),
         }
     }
 }

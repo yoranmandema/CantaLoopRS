@@ -7,7 +7,7 @@ fn main() {
     let mut engine = Engine::new();
     
     // Load all standard library modules
-    stdlib::load_all_stdlib(&mut engine);
+    stdlib::load_stdlib_runtime(&mut engine);
 
     engine.run(filename);
 }

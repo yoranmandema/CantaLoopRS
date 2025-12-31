@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::channel;
 use std::io::Write;
 
+use CantaLoopRS::core::projectLoader::ProjectLoader;
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use serde::Serialize;
 
@@ -82,7 +83,7 @@ fn create_new_project(
             r#"{{
   "name": "{}",
   "version": "0.1.0",
-  "main": "src/main.mln"
+  "main": "main.mln"
 }}"#,
             project_name
         ),
@@ -121,7 +122,7 @@ fn run_project_cmd(args: &[String]) {
 }
 
 fn run_once(project_root: &Path, debug: bool) {
-    let project = match Engine::load_project(project_root) {
+    let project = match ProjectLoader::load_project(project_root) {
         Ok(p) => p,
         Err(e) => {
             eprintln!("Project error: {}", e);
@@ -130,16 +131,12 @@ fn run_once(project_root: &Path, debug: bool) {
     };
 
     let mut engine = Engine::new();
-    stdlib::load_all_stdlib(&mut engine);
-
-    if let Err(e) = engine.load_project_modules(project_root) {
-        eprintln!("Module load warning: {}", e);
-    }
+    stdlib::load_stdlib_runtime(&mut engine);
 
     let main_path = project.entry.to_str().unwrap();
     println!("{}", main_path);
 
-    match engine.compile(main_path) {
+    match engine.compile_with_project(main_path, Some(project_root)) {
         Ok(artifacts) => {
             println!("🍉 Compile OK");
             engine.run(artifacts.clone());

@@ -18,7 +18,7 @@
   0002: LdNum(0.0)
   0003: StVar(10)
   0004: LdVar(7)
-  0005: LdFunc(10014)
+  0005: LdFunc(10015)
   0006: Thunk(1)
   0007: Invoke
   0008: StVar(11)
@@ -64,8 +64,35 @@
   0005: StVar(4)
   0006: LdConst(2)
   0007: StVar(5)
-  0008: LdStr("Hello, world!")
-  0009: LdFunc(10012)
-  0010: Thunk(1)
-  0011: Invoke
-  0012: Pop
+  0008: LdNum(1.0)
+  0009: LdNum(2.0)
+  0010: LdNum(3.0)
+  0011: LdNum(4.0)
+  0012: LdNum(5.0)
+  0013: MakeArray(5)
+  0014: StVar(13)
+  0015: LdVar(13)
+  0016: ArrayIter
+  0017: LdNum(1.0)
+  0018: StVar(999998)
+  0019: StVar(999996)
+  0020: LdVar(999996)
+  0021: ArrayNext
+  0022: StVar(999995)
+  0023: StVar(999997)
+  0024: LdVar(999998)
+  0025: LdVar(999997)
+  0026: LdFunc(10009)
+  0027: Thunk(2)
+  0028: Invoke
+  0029: StVar(999998)
+  0030: LdVar(999995)
+  0031: JmpIfFalse(33)
+  0032: Jmp(20)
+  0033: LdVar(999998)
+  0034: StVar(14)
+  0035: LdVar(14)
+  0036: LdFunc(10013)
+  0037: Thunk(1)
+  0038: Invoke
+  0039: Pop

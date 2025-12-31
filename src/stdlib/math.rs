@@ -4,7 +4,7 @@ use crate::core::vm::Value;
 use std::sync::Arc;
 
 /// Standard library math module.
-/// 
+///
 /// This is pure declarative metadata describing the math module.
 /// It does not mutate the Engine - it's compiler input, not runtime behavior.
 lazy_static::lazy_static! {
@@ -168,7 +168,28 @@ lazy_static::lazy_static! {
                     .map(|v| v.as_number().expect("expected number"))
                     .fold(f64::NEG_INFINITY, |acc, x| if x > acc { x } else { acc });
                 Value::number(max_val)
-            }),
+            })
+        },
+        StdFunction {
+            name: "clamp",
+            signature: FunctionSignature {
+                params: vec![ValueKind::Number, ValueKind::Number, ValueKind::Number],
+                return_type: Box::new(ValueKind::Number),
+            },
+            arity: Arity::Fixed(3),
+            impl_fn: Arc::new(|args, _heap| {
+                let val = args[0].as_number().expect("expected number as input");
+                let min = args[1].as_number().expect("expected number as min boundary");
+                let max = args[2].as_number().expect("expected number as max boundary");
+
+                if min > max {
+                    panic!("clamp: min must be <= max");
+                }
+
+                let clamped = val.clamp(min, max);
+
+                Value::number(clamped)
+            }),     
         }]
     },
     submodules: vec![],
