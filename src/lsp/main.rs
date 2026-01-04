@@ -1,5 +1,5 @@
 // LSP server binary entry point
-use CantaLoopRS::lsp::CantaLoopLSPServer;
+use cantaloop::lsp::CantaLoopLSPServer;
 use tower_lsp::{LspService, Server};
 
 #[tokio::main]

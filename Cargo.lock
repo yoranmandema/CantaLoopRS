@@ -3,24 +3,6 @@
 version = 4
 
 [[package]]
-name = "CantaLoopRS"
-version = "0.1.0"
-dependencies = [
- "bitflags 2.10.0",
- "lazy_static",
- "lsp-types",
- "notify",
- "pest",
- "pest_derive",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "tower-lsp",
- "walkdir",
-]
-
-[[package]]
 name = "async-trait"
 version = "0.1.89"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -71,6 +53,24 @@ name = "bytes"
 version = "1.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b35204fbdc0b3f4446b89fc1ac2cf84a8a68971995d0bf2e925ec7cd960f9cb3"
+
+[[package]]
+name = "cantaloop"
+version = "0.1.0"
+dependencies = [
+ "bitflags 2.10.0",
+ "lazy_static",
+ "lsp-types",
+ "notify",
+ "pest",
+ "pest_derive",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tower-lsp",
+ "walkdir",
+]
 
 [[package]]
 name = "cfg-if"

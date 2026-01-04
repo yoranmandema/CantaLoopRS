@@ -5,11 +5,10 @@
             "label": "Rebuild Extension",
             "type": "shell",
             "windows": {
-                "command": "C:\\Program Files\\Git\\bin\\bash.exe",
-                "args": [
-                    "-c",
-                    "cd \"${workspaceFolder}\" && bash scripts/rebuild-extension.sh"
-                ]
+                "command": "bash scripts/rebuild-extension.sh",
+                "options": {
+                    "cwd": "${workspaceFolder}"
+                }
             },
             "osx": {
                 "command": "${workspaceFolder}/scripts/rebuild-extension.sh"
@@ -34,14 +33,14 @@
                 "command": "C:\\Program Files\\Git\\bin\\bash.exe",
                 "args": [
                     "-c",
-                    "cd .cantaloop-language && cursor --uninstall-extension yoran.cantaloop-language && cursor --install-extension cantaloop-language-0.0.1.vsix"
+                    "cd .cantaloop-language && code --uninstall-extension yoran.cantaloop-language && code --install-extension cantaloop-language-0.0.1.vsix"
                 ]
             },
             "osx": {
-                "command": "cd .cantaloop-language && cursor --uninstall-extension yoran.cantaloop-language && cursor --install-extension cantaloop-language-0.0.1.vsix"
+                "command": "cd .cantaloop-language && code --uninstall-extension yoran.cantaloop-language && code --install-extension cantaloop-language-0.0.1.vsix"
             },
             "linux": {
-                "command": "cd .cantaloop-language && cursor --uninstall-extension yoran.cantaloop-language && cursor --install-extension cantaloop-language-0.0.1.vsix"
+                "command": "cd .cantaloop-language && code --uninstall-extension yoran.cantaloop-language && code --install-extension cantaloop-language-0.0.1.vsix"
             },
             "group": "none",
             "presentation": {
@@ -54,11 +53,10 @@
             "label": "Quick Rebuild LSP (Dev)",
             "type": "shell",
             "windows": {
-                "command": "C:\\Program Files\\Git\\bin\\bash.exe",
-                "args": [
-                    "-c",
-                    "cd \"${workspaceFolder}\" && bash scripts/rebuild-lsp-dev.sh"
-                ]
+                "command": "bash scripts/rebuild-lsp-dev.sh",
+                "options": {
+                    "cwd": "${workspaceFolder}"
+                }
             },
             "osx": {
                 "command": "${workspaceFolder}/scripts/rebuild-lsp-dev.sh"
@@ -77,11 +75,10 @@
             "label": "Watch: All (Auto-rebuild)",
             "type": "shell",
             "windows": {
-                "command": "C:\\Program Files\\Git\\bin\\bash.exe",
-                "args": [
-                    "-c",
-                    "cd \"${workspaceFolder}\" && bash scripts/watch-all.sh"
-                ]
+                "command": "bash scripts/watch-all.sh",
+                "options": {
+                    "cwd": "${workspaceFolder}"
+                }
             },
             "osx": {
                 "command": "${workspaceFolder}/scripts/watch-all.sh"
@@ -102,11 +99,10 @@
             "label": "Watch: LSP (Auto-rebuild)",
             "type": "shell",
             "windows": {
-                "command": "C:\\Program Files\\Git\\bin\\bash.exe",
-                "args": [
-                    "-c",
-                    "cd \"${workspaceFolder}\" && bash scripts/watch-lsp.sh"
-                ]
+                "command": "bash scripts/watch-lsp.sh",
+                "options": {
+                    "cwd": "${workspaceFolder}"
+                }
             },
             "osx": {
                 "command": "${workspaceFolder}/scripts/watch-lsp.sh"
@@ -127,11 +123,10 @@
             "label": "Watch: melon (Auto-rebuild)",
             "type": "shell",
             "windows": {
-                "command": "C:\\Program Files\\Git\\bin\\bash.exe",
-                "args": [
-                    "-c",
-                    "cd \"${workspaceFolder}\" && bash scripts/watch-melon.sh"
-                ]
+                "command": "bash scripts/watch-melon.sh",
+                "options": {
+                    "cwd": "${workspaceFolder}"
+                }
             },
             "osx": {
                 "command": "${workspaceFolder}/scripts/watch-melon.sh"

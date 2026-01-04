@@ -16,12 +16,18 @@ if [ $? -ne 0 ]; then
 fi
 
 echo "Copying LSP server to extension directory..."
-SERVER_PATH="target/release/cantaloop-lsp"
-EXTENSION_SERVER_PATH=".cantaloop-language/server/cantaloop-lsp"
+# Detect OS and set appropriate paths
+if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "win32" || -n "$WINDIR" ]]; then
+    SERVER_PATH="target/release/cantaloop-lsp.exe"
+    EXTENSION_SERVER_PATH=".cantaloop-language/server/cantaloop-lsp.exe"
+else
+    SERVER_PATH="target/release/cantaloop-lsp"
+    EXTENSION_SERVER_PATH=".cantaloop-language/server/cantaloop-lsp"
+fi
 
 if [ -f "$SERVER_PATH" ]; then
     cp "$SERVER_PATH" "$EXTENSION_SERVER_PATH"
-    echo "LSP server copied successfully"
+    echo "LSP server copied successfully to $EXTENSION_SERVER_PATH"
 else
     echo "LSP server binary not found at $SERVER_PATH"
     exit 1

@@ -1,5 +1,5 @@
 [package]
-name = "CantaLoopRS"
+name = "cantaloop"
 version = "0.1.0"
 edition = "2021"
 
@@ -34,3 +34,7 @@ path = "src/lsp/main.rs"
 [[bin]]
 name = "melon"
 path = "src/melon/main.rs"
+
+[lib]
+name = "cantaloop"
+path = "src/lib.rs"

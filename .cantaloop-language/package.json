@@ -14,7 +14,9 @@
     "Programming Languages"
   ],
   "activationEvents": [
-    "onLanguage:cantaloop"
+    "onLanguage:cantaloop",
+    "workspaceContains:**/*.mln",
+    "onStartupFinished"
   ],
   "main": "./extension.js",
   "contributes": {
