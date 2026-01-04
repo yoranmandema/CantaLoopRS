@@ -49,10 +49,23 @@ pub enum Expression {
         object: Box<Expression>, // e.g., "utils" in "utils.add"
         member: String, // e.g., "add" in "utils.add"
     },
+    StructInit {
+        struct_name: String, // e.g., "Point" in "Point { x: 10, y: 20 }"
+        fields: Vec<(String, Expression)>, // (field_name, value)
+    },
+    FieldAccess {
+        object: Box<Expression>, // e.g., "p" in "p.x"
+        field: String, // e.g., "x" in "p.x"
+    },
     Array(Vec<Expression>), // Array literal: [expr, expr, ...]
     ArrayIndex {
         array: Box<Expression>, // The array being indexed
         indices: Vec<IndexSpec>, // Index specifications (supports multi-dimensional)
+    },
+    Closure {
+        arguments: Vec<Argument>, // Function parameters
+        return_type: Option<String>, // Optional return type annotation
+        body: ClosureBody, // Either an expression or a block
     },
 }
 
@@ -136,6 +149,13 @@ pub enum CallArgument {
     Hole,
 }
 
+/// Represents the body of a closure - either a single expression or a block.
+#[derive(Debug, Clone, Serialize)]
+pub enum ClosureBody {
+    Expression(Box<Expression>), // Single expression: fn(x) => x + 1
+    Block(Block),                 // Block: fn(x) => { return x + 1; }
+}
+
 /// Represents a statement in the CantaLoop language.
 /// 
 /// Statements are the top-level constructs that perform actions:
@@ -207,6 +227,11 @@ pub enum Statement {
     Use {
         path: Vec<String>, // Dot-separated path like ["math", "utils"]
         selector: ImportSelector,
+    },
+    Struct {
+        name: String,
+        fields: Vec<(String, String)>, // (field_name, type_annotation)
+        pub_visibility: bool,
     },
     Expression(Expression),
 }

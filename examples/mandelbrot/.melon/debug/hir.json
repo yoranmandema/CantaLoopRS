@@ -1,0 +1,1310 @@
+{
+  "constants": [
+    {
+      "id": 0,
+      "name": "const_0",
+      "value": {
+        "Number": -2.0
+      },
+      "kind": "Number"
+    },
+    {
+      "id": 1,
+      "name": "const_1",
+      "value": {
+        "Number": -1.0
+      },
+      "kind": "Number"
+    }
+  ],
+  "blocks": [
+    {
+      "scope": 0,
+      "statements": [
+        "Nop",
+        "Nop",
+        {
+          "Assign": {
+            "slot": 0,
+            "value": {
+              "Constant": 0
+            }
+          }
+        },
+        {
+          "Assign": {
+            "slot": 1,
+            "value": {
+              "Number": 1.0
+            }
+          }
+        },
+        {
+          "Assign": {
+            "slot": 2,
+            "value": {
+              "Constant": 1
+            }
+          }
+        },
+        {
+          "Assign": {
+            "slot": 3,
+            "value": {
+              "Number": 1.0
+            }
+          }
+        },
+        {
+          "Assign": {
+            "slot": 4,
+            "value": {
+              "Number": 64.0
+            }
+          }
+        },
+        {
+          "Assign": {
+            "slot": 5,
+            "value": {
+              "Number": 64.0
+            }
+          }
+        },
+        {
+          "Assign": {
+            "slot": 6,
+            "value": {
+              "Number": 32.0
+            }
+          }
+        },
+        "Nop",
+        {
+          "Assign": {
+            "slot": 16,
+            "value": {
+              "Closure": {
+                "function_id": 0
+              }
+            }
+          }
+        },
+        {
+          "Assign": {
+            "slot": 21,
+            "value": {
+              "Closure": {
+                "function_id": 2
+              }
+            }
+          }
+        },
+        {
+          "Assign": {
+            "slot": 22,
+            "value": {
+              "PartialCall": {
+                "func_id": 2,
+                "bound": [
+                  null,
+                  {
+                    "Identifier": 4
+                  },
+                  {
+                    "Identifier": 0
+                  },
+                  {
+                    "Identifier": 1
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "Assign": {
+            "slot": 23,
+            "value": {
+              "PartialCall": {
+                "func_id": 2,
+                "bound": [
+                  null,
+                  {
+                    "Identifier": 5
+                  },
+                  {
+                    "Identifier": 2
+                  },
+                  {
+                    "Identifier": 3
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "Assign": {
+            "slot": 29,
+            "value": {
+              "Reducer": {
+                "array": {
+                  "FunctionCall": {
+                    "function_id": 10025,
+                    "args": [
+                      {
+                        "Number": 0.0
+                      },
+                      {
+                        "Identifier": 5
+                      }
+                    ],
+                    "invoke": true
+                  }
+                },
+                "reducer_type": "Map",
+                "reducer_args": [
+                  {
+                    "Closure": {
+                      "function_id": 3
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "Assign": {
+            "slot": 30,
+            "value": {
+              "String": " .'`^,:;Il!i><~+_-?][}{1)(|/tfjrxnuvczXYUJCLQ0OZmwqpdbkhao*#MW&8%B@$"
+            }
+          }
+        },
+        {
+          "Assign": {
+            "slot": 32,
+            "value": {
+              "Closure": {
+                "function_id": 5
+              }
+            }
+          }
+        },
+        {
+          "Expression": {
+            "Reducer": {
+              "array": {
+                "Reducer": {
+                  "array": {
+                    "Identifier": 29
+                  },
+                  "reducer_type": "Map",
+                  "reducer_args": [
+                    {
+                      "Closure": {
+                        "function_id": 6
+                      }
+                    }
+                  ]
+                }
+              },
+              "reducer_type": "Map",
+              "reducer_args": [
+                {
+                  "FunctionCall": {
+                    "function_id": 10009,
+                    "args": [],
+                    "invoke": false
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "scopes": {
+    "scopes": [
+      {
+        "vars": [
+          {
+            "id": 0,
+            "name": "min_x",
+            "kind": "Number"
+          },
+          {
+            "id": 1,
+            "name": "max_x",
+            "kind": "Number"
+          },
+          {
+            "id": 2,
+            "name": "min_y",
+            "kind": "Number"
+          },
+          {
+            "id": 3,
+            "name": "max_y",
+            "kind": "Number"
+          },
+          {
+            "id": 4,
+            "name": "width",
+            "kind": "Number"
+          },
+          {
+            "id": 5,
+            "name": "height",
+            "kind": "Number"
+          },
+          {
+            "id": 6,
+            "name": "max_iter",
+            "kind": "Number"
+          },
+          {
+            "id": 16,
+            "name": "mandel_iter",
+            "kind": {
+              "Function": "(Number, Number) -> Any"
+            }
+          },
+          {
+            "id": 21,
+            "name": "scale",
+            "kind": {
+              "Function": "(Number, Number, Number, Number) -> Number"
+            }
+          },
+          {
+            "id": 22,
+            "name": "scale_x",
+            "kind": {
+              "Thunk": "num ~> num"
+            }
+          },
+          {
+            "id": 23,
+            "name": "scale_y",
+            "kind": {
+              "Thunk": "num ~> num"
+            }
+          },
+          {
+            "id": 29,
+            "name": "mandel",
+            "kind": {
+              "Array": "Unknown"
+            }
+          },
+          {
+            "id": 30,
+            "name": "gradient",
+            "kind": "String"
+          },
+          {
+            "id": 32,
+            "name": "to_char",
+            "kind": {
+              "Function": "(Number) -> Any"
+            }
+          }
+        ],
+        "parent": null
+      },
+      {
+        "vars": [
+          {
+            "id": 7,
+            "name": "cx",
+            "kind": "Number"
+          },
+          {
+            "id": 8,
+            "name": "cy",
+            "kind": "Number"
+          }
+        ],
+        "parent": 0
+      },
+      {
+        "vars": [
+          {
+            "id": 15,
+            "name": "final",
+            "kind": {
+              "Struct": "State"
+            }
+          }
+        ],
+        "parent": 1
+      },
+      {
+        "vars": [
+          {
+            "id": 9,
+            "name": "state",
+            "kind": "Any"
+          },
+          {
+            "id": 10,
+            "name": "_",
+            "kind": "Any"
+          }
+        ],
+        "parent": 2
+      },
+      {
+        "vars": [],
+        "parent": 3
+      },
+      {
+        "vars": [],
+        "parent": 4
+      },
+      {
+        "vars": [
+          {
+            "id": 11,
+            "name": "zx2",
+            "kind": "Number"
+          },
+          {
+            "id": 12,
+            "name": "zy2",
+            "kind": "Number"
+          },
+          {
+            "id": 13,
+            "name": "escaped",
+            "kind": "Boolean"
+          },
+          {
+            "id": 14,
+            "name": "newState",
+            "kind": {
+              "Struct": "State"
+            }
+          }
+        ],
+        "parent": 4
+      },
+      {
+        "vars": [
+          {
+            "id": 17,
+            "name": "v",
+            "kind": "Number"
+          },
+          {
+            "id": 18,
+            "name": "dimension",
+            "kind": "Number"
+          },
+          {
+            "id": 19,
+            "name": "min",
+            "kind": "Number"
+          },
+          {
+            "id": 20,
+            "name": "max",
+            "kind": "Number"
+          }
+        ],
+        "parent": 0
+      },
+      {
+        "vars": [
+          {
+            "id": 24,
+            "name": "y",
+            "kind": "Any"
+          }
+        ],
+        "parent": 0
+      },
+      {
+        "vars": [
+          {
+            "id": 25,
+            "name": "x",
+            "kind": "Any"
+          }
+        ],
+        "parent": 8
+      },
+      {
+        "vars": [
+          {
+            "id": 26,
+            "name": "sx",
+            "kind": "Number"
+          },
+          {
+            "id": 27,
+            "name": "sy",
+            "kind": "Number"
+          },
+          {
+            "id": 28,
+            "name": "res",
+            "kind": "Unknown"
+          }
+        ],
+        "parent": 9
+      },
+      {
+        "vars": [
+          {
+            "id": 31,
+            "name": "v",
+            "kind": "Number"
+          }
+        ],
+        "parent": 0
+      },
+      {
+        "vars": [],
+        "parent": 11
+      },
+      {
+        "vars": [],
+        "parent": 12
+      },
+      {
+        "vars": [],
+        "parent": 12
+      },
+      {
+        "vars": [
+          {
+            "id": 33,
+            "name": "row",
+            "kind": "Any"
+          }
+        ],
+        "parent": 0
+      },
+      {
+        "vars": [
+          {
+            "id": 34,
+            "name": "x",
+            "kind": "Any"
+          }
+        ],
+        "parent": 15
+      }
+    ]
+  },
+  "functions": {
+    "6": {
+      "id": 6,
+      "name": "<closure_6>",
+      "signature": {
+        "params": [
+          "Any"
+        ],
+        "return_type": "Any"
+      },
+      "definition": {
+        "body": {
+          "scope": 15,
+          "statements": [
+            {
+              "Return": {
+                "value": {
+                  "FunctionCall": {
+                    "function_id": 10012,
+                    "args": [
+                      {
+                        "Reducer": {
+                          "array": {
+                            "Identifier": 33
+                          },
+                          "reducer_type": "Map",
+                          "reducer_args": [
+                            {
+                              "Closure": {
+                                "function_id": 7
+                              }
+                            }
+                          ]
+                        }
+                      },
+                      {
+                        "String": ""
+                      }
+                    ],
+                    "invoke": true
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "param_var_ids": [
+          33
+        ],
+        "scope_id": 15
+      }
+    },
+    "4": {
+      "id": 4,
+      "name": "<closure_4>",
+      "signature": {
+        "params": [
+          "Any"
+        ],
+        "return_type": "Any"
+      },
+      "definition": {
+        "body": {
+          "scope": 10,
+          "statements": [
+            {
+              "Assign": {
+                "slot": 26,
+                "value": {
+                  "PostfixInvoke": {
+                    "operand": {
+                      "Identifier": 22
+                    },
+                    "args": [
+                      {
+                        "Identifier": 25
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "Assign": {
+                "slot": 27,
+                "value": {
+                  "PostfixInvoke": {
+                    "operand": {
+                      "Identifier": 23
+                    },
+                    "args": [
+                      {
+                        "Identifier": 24
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "Assign": {
+                "slot": 28,
+                "value": {
+                  "PostfixInvoke": {
+                    "operand": {
+                      "Identifier": 16
+                    },
+                    "args": [
+                      {
+                        "Identifier": 26
+                      },
+                      {
+                        "Identifier": 27
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "Return": {
+                "value": {
+                  "Identifier": 28
+                }
+              }
+            }
+          ]
+        },
+        "param_var_ids": [
+          25
+        ],
+        "scope_id": 9
+      }
+    },
+    "2": {
+      "id": 2,
+      "name": "<closure_2>",
+      "signature": {
+        "params": [
+          "Number",
+          "Number",
+          "Number",
+          "Number"
+        ],
+        "return_type": "Number"
+      },
+      "definition": {
+        "body": {
+          "scope": 7,
+          "statements": [
+            {
+              "Return": {
+                "value": {
+                  "Binary": {
+                    "lhs": {
+                      "Binary": {
+                        "lhs": {
+                          "Binary": {
+                            "lhs": {
+                              "Identifier": 17
+                            },
+                            "rhs": {
+                              "Identifier": 18
+                            },
+                            "operator": "Div"
+                          }
+                        },
+                        "rhs": {
+                          "Binary": {
+                            "lhs": {
+                              "Identifier": 20
+                            },
+                            "rhs": {
+                              "Identifier": 19
+                            },
+                            "operator": "Sub"
+                          }
+                        },
+                        "operator": "Mul"
+                      }
+                    },
+                    "rhs": {
+                      "Identifier": 19
+                    },
+                    "operator": "Add"
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "param_var_ids": [
+          17,
+          18,
+          19,
+          20
+        ],
+        "scope_id": 7
+      }
+    },
+    "0": {
+      "id": 0,
+      "name": "<closure_0>",
+      "signature": {
+        "params": [
+          "Number",
+          "Number"
+        ],
+        "return_type": "Any"
+      },
+      "definition": {
+        "body": {
+          "scope": 2,
+          "statements": [
+            {
+              "Assign": {
+                "slot": 15,
+                "value": {
+                  "Reducer": {
+                    "array": {
+                      "FunctionCall": {
+                        "function_id": 10025,
+                        "args": [
+                          {
+                            "Number": 0.0
+                          },
+                          {
+                            "Identifier": 6
+                          }
+                        ],
+                        "invoke": true
+                      }
+                    },
+                    "reducer_type": "Fold",
+                    "reducer_args": [
+                      {
+                        "StructInit": {
+                          "struct_name": "State",
+                          "fields": [
+                            [
+                              "zx",
+                              {
+                                "Number": 0.0
+                              }
+                            ],
+                            [
+                              "zy",
+                              {
+                                "Number": 0.0
+                              }
+                            ],
+                            [
+                              "iter",
+                              {
+                                "Number": 0.0
+                              }
+                            ],
+                            [
+                              "escaped",
+                              {
+                                "Boolean": false
+                              }
+                            ]
+                          ]
+                        }
+                      },
+                      {
+                        "Closure": {
+                          "function_id": 1
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "Return": {
+                "value": {
+                  "FieldAccess": {
+                    "base": {
+                      "Identifier": 15
+                    },
+                    "field_name": "iter"
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "param_var_ids": [
+          7,
+          8
+        ],
+        "scope_id": 1
+      }
+    },
+    "7": {
+      "id": 7,
+      "name": "<closure_7>",
+      "signature": {
+        "params": [
+          "Any"
+        ],
+        "return_type": "Any"
+      },
+      "definition": {
+        "body": {
+          "scope": 16,
+          "statements": [
+            {
+              "Return": {
+                "value": {
+                  "PostfixInvoke": {
+                    "operand": {
+                      "Identifier": 32
+                    },
+                    "args": [
+                      {
+                        "Identifier": 34
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "param_var_ids": [
+          34
+        ],
+        "scope_id": 16
+      }
+    },
+    "1": {
+      "id": 1,
+      "name": "<closure_1>",
+      "signature": {
+        "params": [
+          "Any",
+          "Any"
+        ],
+        "return_type": "Unknown"
+      },
+      "definition": {
+        "body": {
+          "scope": 4,
+          "statements": [
+            {
+              "If": {
+                "arms": [
+                  [
+                    {
+                      "FieldAccess": {
+                        "base": {
+                          "Identifier": 9
+                        },
+                        "field_name": "escaped"
+                      }
+                    },
+                    {
+                      "scope": 5,
+                      "statements": [
+                        {
+                          "Return": {
+                            "value": {
+                              "Identifier": 9
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                ],
+                "else_block": {
+                  "scope": 6,
+                  "statements": [
+                    {
+                      "Assign": {
+                        "slot": 11,
+                        "value": {
+                          "Binary": {
+                            "lhs": {
+                              "Binary": {
+                                "lhs": {
+                                  "Binary": {
+                                    "lhs": {
+                                      "FieldAccess": {
+                                        "base": {
+                                          "Identifier": 9
+                                        },
+                                        "field_name": "zx"
+                                      }
+                                    },
+                                    "rhs": {
+                                      "FieldAccess": {
+                                        "base": {
+                                          "Identifier": 9
+                                        },
+                                        "field_name": "zx"
+                                      }
+                                    },
+                                    "operator": "Mul"
+                                  }
+                                },
+                                "rhs": {
+                                  "Binary": {
+                                    "lhs": {
+                                      "FieldAccess": {
+                                        "base": {
+                                          "Identifier": 9
+                                        },
+                                        "field_name": "zy"
+                                      }
+                                    },
+                                    "rhs": {
+                                      "FieldAccess": {
+                                        "base": {
+                                          "Identifier": 9
+                                        },
+                                        "field_name": "zy"
+                                      }
+                                    },
+                                    "operator": "Mul"
+                                  }
+                                },
+                                "operator": "Sub"
+                              }
+                            },
+                            "rhs": {
+                              "Identifier": 7
+                            },
+                            "operator": "Add"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "Assign": {
+                        "slot": 12,
+                        "value": {
+                          "Binary": {
+                            "lhs": {
+                              "Binary": {
+                                "lhs": {
+                                  "Binary": {
+                                    "lhs": {
+                                      "Number": 2.0
+                                    },
+                                    "rhs": {
+                                      "FieldAccess": {
+                                        "base": {
+                                          "Identifier": 9
+                                        },
+                                        "field_name": "zx"
+                                      }
+                                    },
+                                    "operator": "Mul"
+                                  }
+                                },
+                                "rhs": {
+                                  "FieldAccess": {
+                                    "base": {
+                                      "Identifier": 9
+                                    },
+                                    "field_name": "zy"
+                                  }
+                                },
+                                "operator": "Mul"
+                              }
+                            },
+                            "rhs": {
+                              "Identifier": 8
+                            },
+                            "operator": "Add"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "Assign": {
+                        "slot": 13,
+                        "value": {
+                          "Binary": {
+                            "lhs": {
+                              "Binary": {
+                                "lhs": {
+                                  "Binary": {
+                                    "lhs": {
+                                      "Identifier": 11
+                                    },
+                                    "rhs": {
+                                      "Identifier": 11
+                                    },
+                                    "operator": "Mul"
+                                  }
+                                },
+                                "rhs": {
+                                  "Binary": {
+                                    "lhs": {
+                                      "Identifier": 12
+                                    },
+                                    "rhs": {
+                                      "Identifier": 12
+                                    },
+                                    "operator": "Mul"
+                                  }
+                                },
+                                "operator": "Add"
+                              }
+                            },
+                            "rhs": {
+                              "Number": 4.0
+                            },
+                            "operator": "Gt"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "Assign": {
+                        "slot": 14,
+                        "value": {
+                          "StructInit": {
+                            "struct_name": "State",
+                            "fields": [
+                              [
+                                "zx",
+                                {
+                                  "Identifier": 11
+                                }
+                              ],
+                              [
+                                "zy",
+                                {
+                                  "Identifier": 12
+                                }
+                              ],
+                              [
+                                "iter",
+                                {
+                                  "Binary": {
+                                    "lhs": {
+                                      "FieldAccess": {
+                                        "base": {
+                                          "Identifier": 9
+                                        },
+                                        "field_name": "iter"
+                                      }
+                                    },
+                                    "rhs": {
+                                      "Number": 1.0
+                                    },
+                                    "operator": "Add"
+                                  }
+                                }
+                              ],
+                              [
+                                "escaped",
+                                {
+                                  "Identifier": 13
+                                }
+                              ]
+                            ]
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "Return": {
+                        "value": {
+                          "Identifier": 14
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        "param_var_ids": [
+          9,
+          10
+        ],
+        "scope_id": 3
+      }
+    },
+    "3": {
+      "id": 3,
+      "name": "<closure_3>",
+      "signature": {
+        "params": [
+          "Any"
+        ],
+        "return_type": "Any"
+      },
+      "definition": {
+        "body": {
+          "scope": 8,
+          "statements": [
+            {
+              "Return": {
+                "value": {
+                  "Reducer": {
+                    "array": {
+                      "FunctionCall": {
+                        "function_id": 10025,
+                        "args": [
+                          {
+                            "Number": 0.0
+                          },
+                          {
+                            "Identifier": 4
+                          }
+                        ],
+                        "invoke": true
+                      }
+                    },
+                    "reducer_type": "Map",
+                    "reducer_args": [
+                      {
+                        "Closure": {
+                          "function_id": 4
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "param_var_ids": [
+          24
+        ],
+        "scope_id": 8
+      }
+    },
+    "5": {
+      "id": 5,
+      "name": "<closure_5>",
+      "signature": {
+        "params": [
+          "Number"
+        ],
+        "return_type": "Any"
+      },
+      "definition": {
+        "body": {
+          "scope": 12,
+          "statements": [
+            {
+              "If": {
+                "arms": [
+                  [
+                    {
+                      "Binary": {
+                        "lhs": {
+                          "Identifier": 31
+                        },
+                        "rhs": {
+                          "Identifier": 6
+                        },
+                        "operator": "Eq"
+                      }
+                    },
+                    {
+                      "scope": 13,
+                      "statements": [
+                        {
+                          "Return": {
+                            "value": {
+                              "String": "@"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                ],
+                "else_block": {
+                  "scope": 14,
+                  "statements": [
+                    {
+                      "Return": {
+                        "value": {
+                          "ArrayIndex": {
+                            "array": {
+                              "Identifier": 30
+                            },
+                            "index": {
+                              "FunctionCall": {
+                                "function_id": 10001,
+                                "args": [
+                                  {
+                                    "Binary": {
+                                      "lhs": {
+                                        "Binary": {
+                                          "lhs": {
+                                            "Identifier": 31
+                                          },
+                                          "rhs": {
+                                            "Binary": {
+                                              "lhs": {
+                                                "FunctionCall": {
+                                                  "function_id": 10011,
+                                                  "args": [
+                                                    {
+                                                      "Identifier": 30
+                                                    }
+                                                  ],
+                                                  "invoke": true
+                                                }
+                                              },
+                                              "rhs": {
+                                                "Number": 1.0
+                                              },
+                                              "operator": "Sub"
+                                            }
+                                          },
+                                          "operator": "Mul"
+                                        }
+                                      },
+                                      "rhs": {
+                                        "Identifier": 6
+                                      },
+                                      "operator": "Div"
+                                    }
+                                  }
+                                ],
+                                "invoke": true
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        "param_var_ids": [
+          31
+        ],
+        "scope_id": 11
+      }
+    }
+  },
+  "structs": {
+    "State": {
+      "name": "State",
+      "fields": [
+        [
+          "zx",
+          "Number"
+        ],
+        [
+          "zy",
+          "Number"
+        ],
+        [
+          "iter",
+          "Number"
+        ],
+        [
+          "escaped",
+          "Boolean"
+        ]
+      ]
+    },
+    "Matrix4": {
+      "name": "Matrix4",
+      "fields": [
+        [
+          "x",
+          "Number"
+        ],
+        [
+          "y",
+          "Number"
+        ],
+        [
+          "z",
+          "Number"
+        ],
+        [
+          "w",
+          "Number"
+        ]
+      ]
+    }
+  },
+  "module_imports": {
+    "__main__": {
+      "fold": 10041,
+      "map": 10039,
+      "print": 10009,
+      "reduce": 10042,
+      "filter": 10040
+    }
+  },
+  "imported_constant_values": {}
+}

@@ -61,15 +61,28 @@ pub struct StdFunction {
     pub impl_fn: Arc<dyn Fn(Vec<Value>, &mut ValueHeap) -> Value + Send + Sync>,
 }
 
+/// Standard library struct descriptor.
+///
+/// This is pure metadata describing a standard library struct.
+/// It does not mutate the Engine - it's compiler input, not runtime behavior.
+pub struct StdStruct {
+    /// The name of the struct (e.g., "Point", "Color")
+    pub name: &'static str,
+    /// The fields of the struct: (field_name, field_type)
+    pub fields: Vec<(&'static str, crate::core::hir_lowering::ValueKind)>,
+}
+
 /// Standard library module descriptor.
 ///
 /// This is pure metadata describing a standard library module.
-/// Modules can contain functions and submodules, forming a tree structure.
+/// Modules can contain functions, structs, and submodules, forming a tree structure.
 pub struct StdModule {
     /// The name of the module (e.g., "math")
     pub name: &'static str,
     /// Functions defined in this module
     pub functions: Vec<StdFunction>,
+    /// Structs defined in this module
+    pub structs: Vec<StdStruct>,
     /// Submodules nested within this module
     pub submodules: Vec<StdModule>,
 }
@@ -412,17 +425,17 @@ impl Engine {
         crate::core::vm::Value::function(id)
     }
 
-    pub fn compile_and_run(&self, file_path: &str) {
+    pub fn compile_and_run(self: Arc<Self>, file_path: &str) {
         let artifacts = self.compile(file_path);
         self.run(artifacts.unwrap());
     }
 
     /// Runs a CantaLoop program from a RunArtifacts.
-    pub fn run(&self, artifacts: RunArtifacts) {
+    pub fn run(self: Arc<Self>, artifacts: RunArtifacts) {
         let main = artifacts.main;
         let bytecode_functions = artifacts.bytecode_functions;
         let hir = artifacts.hir;
-        let mut vm = VM::new(self, bytecode_functions, hir, main);
+        let mut vm = VM::new(self.clone(), bytecode_functions, hir, main);
         vm.run();
     }
 
@@ -478,6 +491,29 @@ impl Engine {
     /// before compiling, allowing imports to resolve correctly.
     ///
     /// If `current_file` is provided, that file will be skipped when loading modules
+    /// Extract the module name from AST (if present).
+    fn extract_module_name_from_ast(ast: &Program) -> Option<String> {
+        use crate::core::ast::Statement;
+        for block in &ast.blocks {
+            for stmt in &block.statements {
+                if let Statement::Mod { identifier } = stmt {
+                    return Some(identifier.clone());
+                }
+            }
+        }
+        None
+    }
+
+
+    /// Compile source code for LSP (Language Server Protocol) usage.
+    /// 
+    /// This method creates a CompilerState that the LSP can use for IDE features.
+    /// Unlike regular compilation, this doesn't execute code - it only builds semantic information.
+    /// 
+    /// Returns the compiler state with AST, HIR, diagnostics, and symbol table.
+    /// 
+    /// If `project_root` is provided, it will attempt to load project modules.
+    /// If `current_file` is provided, that file will be skipped during module loading
     /// to avoid duplicate declarations.
     pub fn compile_for_lsp(
         &self,
@@ -487,22 +523,26 @@ impl Engine {
     ) -> Result<CompilerState, pest::error::Error<crate::core::parser::Rule>> {
         use crate::core::compileSession::CompileContext;
         use crate::core::hir_lowering::HirBuilder;
-
-        // Parse the source code twice - once to keep AST, once for HIR building
-        // (This is acceptable for LSP where we need both AST and HIR)
+    
+        // 1. Parse current file AST (kept for LSP features)
         let ast = parse_program(src)?;
         let ast_for_hir = parse_program(src)?;
-
-        // Create a CompileContext from Engine's native functions
+    
+        // 2. Build compile context from Engine
         let ctx = CompileContext {
             native_functions: self.native_function_descriptors(),
             is_native_function: &|id| self.functions.contains_key(&id),
         };
-
-        // Create a fresh HirBuilder and register built-in functions
+    
+        // 3. Fresh HIR builder
         let mut hir_builder = HirBuilder::new();
-
-        // Register all built-in functions from Engine
+        let mut diagnostics = Vec::new();
+    
+        /* ---------------------------------------------
+         * Register stdlib (functions + modules)
+         * --------------------------------------------- */
+    
+        // First, register all builtin functions
         for native in self.native_function_descriptors() {
             hir_builder.register_builtin_function(
                 &native.name,
@@ -510,18 +550,110 @@ impl Engine {
                 native.id,
             );
         }
-
-        // If project_root is provided, load all project modules
-        // Note: For now, we skip module loading in LSP mode since Engine doesn't maintain modules
-        // This can be added later if needed
-
-        // Build HIR (diagnostics are collected during build_append)
-        // Set a default module for the file
-        hir_builder.set_current_module(Some("__main__".to_string()));
-        hir_builder.build_append(&ctx, ast_for_hir).ok();
-
+    
+        // Build stdlib module maps from native_descriptors
+        // Functions are registered with qualified names like "std.print", "math.round", etc.
+        let mut stdlib_modules: HashMap<String, HashMap<String, u32>> = HashMap::new();
+        for native in self.native_function_descriptors() {
+            // Look for qualified names (e.g., "std.print", "math.round")
+            if let Some(dot_pos) = native.name.find('.') {
+                let module_name = &native.name[..dot_pos];
+                let function_name = &native.name[dot_pos + 1..];
+                stdlib_modules
+                    .entry(module_name.to_string())
+                    .or_insert_with(HashMap::new)
+                    .insert(function_name.to_string(), native.id);
+            }
+        }
+    
+        // Register stdlib modules with their functions
+        for (module_name, functions) in stdlib_modules {
+            hir_builder.register_module(&module_name, functions, HashMap::new(), HashMap::new());
+        }
+    
+        /* ---------------------------------------------
+         * Load project modules (except current file)
+         * --------------------------------------------- */
+    
+        if let Some(root) = project_root {
+            let src_dir = root.join("src");
+    
+            if src_dir.exists() {
+                for entry in walkdir::WalkDir::new(&src_dir)
+                    .into_iter()
+                    .filter_map(Result::ok)
+                    .filter(|e| e.path().extension().map(|e| e == "mln").unwrap_or(false))
+                {
+                    let path = entry.path();
+    
+                    // Skip the file currently edited in the LSP (normalize paths for comparison)
+                    if let Some(current) = current_file {
+                        match (path.canonicalize(), current.canonicalize()) {
+                            (Ok(path_canon), Ok(current_canon)) if path_canon == current_canon => continue,
+                            _ => {
+                                // If canonicalization fails, fall back to direct comparison
+                                if path == current {
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+    
+                    let source = match std::fs::read_to_string(path) {
+                        Ok(s) => s,
+                        Err(_) => continue, // Skip files that can't be read
+                    };
+    
+                    let module_ast = match parse_program(&source) {
+                        Ok(ast) => ast,
+                        Err(_) => continue, // syntax errors handled separately
+                    };
+    
+                    let module_name =
+                        Self::extract_module_name_from_ast(&module_ast)
+                            .unwrap_or_else(|| "__unnamed__".to_string());
+    
+                    // Register module before building it
+                    hir_builder.register_module(
+                        &module_name,
+                        HashMap::new(),
+                        HashMap::new(),
+                        HashMap::new(),
+                    );
+    
+                    // Set current module and build
+                    hir_builder.set_current_module(Some(module_name.clone()));
+                    if let Err(err) = hir_builder.build_append(&ctx, module_ast) {
+                        diagnostics.push(err);
+                    }
+                }
+            }
+        }
+    
+        /* ---------------------------------------------
+         * Compile current file LAST
+         * --------------------------------------------- */
+    
+        let current_module =
+            Self::extract_module_name_from_ast(&ast)
+                .unwrap_or_else(|| "__main__".to_string());
+    
+        // Register current module before building it
+        hir_builder.register_module(
+            &current_module,
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+        );
+    
+        hir_builder.set_current_module(Some(current_module.clone()));
+        if let Err(err) = hir_builder.build_append(&ctx, ast_for_hir) {
+            diagnostics.push(err);
+        }
+    
         let hir = hir_builder.take_ast();
-
-        Ok(CompilerState::new(ast, hir, Vec::new(), Some(src)))
+    
+        Ok(CompilerState::new(ast, hir, diagnostics, Some(src)))
     }
+    
 }

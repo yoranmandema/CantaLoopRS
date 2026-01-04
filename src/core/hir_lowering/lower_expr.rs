@@ -65,13 +65,27 @@ pub enum HirExpression {
         reducer_type: ReducerType,
         reducer_args: Vec<HirExpression>, // Arguments for reducer (empty for sum, [init, fn] for fold)
     },
+    StructInit {
+        struct_name: String, // Struct type name
+        fields: Vec<(String, HirExpression)>, // (field_name, value)
+    },
+    FieldAccess {
+        base: Box<HirExpression>, // The struct instance
+        field_name: String, // Field name to access
+    },
+    Closure {
+        function_id: u32, // Function ID for the anonymous function
+    },
 }
 
 /// Type of reducer function
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum ReducerType {
-    Sum,  // sum: equivalent to fold(0, add)
-    Fold, // fold(init, fn): custom reducer
+    Sum,    // sum: equivalent to fold(0, add)
+    Fold,   // fold(init, fn): custom reducer
+    Map,    // map(fn): transform each element
+    Filter, // filter(predicate): keep elements where predicate returns true
+    Reduce, // reduce(fn): fold without initial value (uses first element)
 }
 
 // Type inference and expression processing will be moved here from the main file

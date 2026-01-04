@@ -57,6 +57,15 @@ pub enum OpCode {
     ArrayIndex,         // Index array: pops (array, index), pushes element at index
     ArraySlice,         // Slice array: pops (array, step?, end?, start?), pushes sliced array
     // ArraySlice stack order: array, then optional step, optional end, optional start (None values use sentinel)
+    
+    // Reducer operations (functional programming primitives)
+    Map,                // Map: pops (array, function), pushes mapped array
+    Filter,             // Filter: pops (array, predicate), pushes filtered array
+    Fold,               // Fold: pops (array, initial_value, function), pushes folded value
+    
+    // Struct operations
+    MakeStruct { type_id: u32, field_count: u32 }, // Create struct: pops field_count values, pushes struct
+    GetField(u32),      // Get field: pops struct, pushes field value (field_index)
 }
 
 impl OpCode {
@@ -109,8 +118,13 @@ impl OpCode {
             OpCode::ArrayNext => 40,
             OpCode::ArrayIndex => 41,
             OpCode::ArraySlice => 42,
+            OpCode::MakeStruct { .. } => 43,
+            OpCode::GetField(_) => 44,
+            OpCode::Map => 45,
+            OpCode::Filter => 46,
+            OpCode::Fold => 47,
         }
     }
 }
 
-pub const OPCODE_COUNT: usize = 43;
+pub const OPCODE_COUNT: usize = 48;

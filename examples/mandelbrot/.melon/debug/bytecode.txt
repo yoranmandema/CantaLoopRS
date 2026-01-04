@@ -1,0 +1,203 @@
+
+[Function 0]
+  0000: LdNum(0.0)
+  0001: LdVar(6)
+  0002: LdFunc(10025)
+  0003: Thunk(2)
+  0004: Invoke
+  0005: LdNum(0.0)
+  0006: LdNum(0.0)
+  0007: LdNum(0.0)
+  0008: LdBool(false)
+  0009: MakeStruct { type_id: 236861926, field_count: 4 }
+  0010: LdFunc(1)
+  0011: Fold
+  0012: StVar(15)
+  0013: LdVar(15)
+  0014: GetField(2)
+  0015: Ret
+
+[Function 1]
+  0000: LdVar(9)
+  0001: GetField(3)
+  0002: JmpIfFalse(6)
+  0003: LdVar(9)
+  0004: Ret
+  0005: Jmp(51)
+  0006: LdVar(9)
+  0007: GetField(0)
+  0008: LdVar(9)
+  0009: GetField(0)
+  0010: Mul
+  0011: LdVar(9)
+  0012: GetField(1)
+  0013: LdVar(9)
+  0014: GetField(1)
+  0015: Mul
+  0016: Sub
+  0017: LdVar(7)
+  0018: Add
+  0019: StVar(11)
+  0020: LdNum(2.0)
+  0021: LdVar(9)
+  0022: GetField(0)
+  0023: Mul
+  0024: LdVar(9)
+  0025: GetField(1)
+  0026: Mul
+  0027: LdVar(8)
+  0028: Add
+  0029: StVar(12)
+  0030: LdVar(11)
+  0031: LdVar(11)
+  0032: MulNum
+  0033: LdVar(12)
+  0034: LdVar(12)
+  0035: MulNum
+  0036: AddNum
+  0037: LdNum(4.0)
+  0038: Gt
+  0039: StVar(13)
+  0040: LdVar(11)
+  0041: LdVar(12)
+  0042: LdVar(9)
+  0043: GetField(2)
+  0044: LdNum(1.0)
+  0045: Add
+  0046: LdVar(13)
+  0047: MakeStruct { type_id: 236861926, field_count: 4 }
+  0048: StVar(14)
+  0049: LdVar(14)
+  0050: Ret
+
+[Function 2]
+  0000: LdVar(17)
+  0001: LdVar(18)
+  0002: Div
+  0003: LdVar(20)
+  0004: LdVar(19)
+  0005: SubNum
+  0006: MulNum
+  0007: LdVar(19)
+  0008: AddNum
+  0009: Ret
+
+[Function 3]
+  0000: LdNum(0.0)
+  0001: LdVar(4)
+  0002: LdFunc(10025)
+  0003: Thunk(2)
+  0004: Invoke
+  0005: LdFunc(4)
+  0006: Map
+  0007: Ret
+
+[Function 4]
+  0000: LdVar(25)
+  0001: LdVar(22)
+  0002: Thunk(1)
+  0003: Invoke
+  0004: StVar(26)
+  0005: LdVar(24)
+  0006: LdVar(23)
+  0007: Thunk(1)
+  0008: Invoke
+  0009: StVar(27)
+  0010: LdVar(26)
+  0011: LdVar(27)
+  0012: LdVar(16)
+  0013: Thunk(2)
+  0014: Invoke
+  0015: StVar(28)
+  0016: LdVar(28)
+  0017: Ret
+
+[Function 5]
+  0000: LdVar(31)
+  0001: LdVar(6)
+  0002: Eq
+  0003: JmpIfFalse(7)
+  0004: LdStr("@")
+  0005: Ret
+  0006: Jmp(23)
+  0007: LdVar(30)
+  0008: LdVar(31)
+  0009: LdVar(30)
+  0010: LdFunc(10011)
+  0011: Thunk(1)
+  0012: Invoke
+  0013: LdNum(1.0)
+  0014: Sub
+  0015: Mul
+  0016: LdVar(6)
+  0017: Div
+  0018: LdFunc(10001)
+  0019: Thunk(1)
+  0020: Invoke
+  0021: ArrayIndex
+  0022: Ret
+
+[Function 6]
+  0000: LdVar(33)
+  0001: LdFunc(7)
+  0002: Map
+  0003: LdStr("")
+  0004: LdFunc(10012)
+  0005: Thunk(2)
+  0006: RetInvoke
+
+[Function 7]
+  0000: LdVar(34)
+  0001: LdVar(32)
+  0002: Thunk(1)
+  0003: Invoke
+  0004: Ret
+
+[Main]
+  0000: LdConst(0)
+  0001: StVar(0)
+  0002: LdNum(1.0)
+  0003: StVar(1)
+  0004: LdConst(1)
+  0005: StVar(2)
+  0006: LdNum(1.0)
+  0007: StVar(3)
+  0008: LdNum(64.0)
+  0009: StVar(4)
+  0010: LdNum(64.0)
+  0011: StVar(5)
+  0012: LdNum(32.0)
+  0013: StVar(6)
+  0014: LdFunc(0)
+  0015: StVar(16)
+  0016: LdFunc(2)
+  0017: StVar(21)
+  0018: LdVar(1)
+  0019: LdVar(0)
+  0020: LdVar(4)
+  0021: MakePartial { func_id: 2, bound_mask: 14, hole_count: 1 }
+  0022: StVar(22)
+  0023: LdVar(3)
+  0024: LdVar(2)
+  0025: LdVar(5)
+  0026: MakePartial { func_id: 2, bound_mask: 14, hole_count: 1 }
+  0027: StVar(23)
+  0028: LdNum(0.0)
+  0029: LdVar(5)
+  0030: LdFunc(10025)
+  0031: Thunk(2)
+  0032: Invoke
+  0033: LdFunc(3)
+  0034: Map
+  0035: StVar(29)
+  0036: LdStr(" .'`^,:;Il!i><~+_-?][}{1)(|/tfjrxnuvczXYUJCLQ0OZmwqpdbkhao*#MW&8%B@$")
+  0037: StVar(30)
+  0038: LdFunc(5)
+  0039: StVar(32)
+  0040: LdVar(29)
+  0041: LdFunc(6)
+  0042: Map
+  0043: LdFunc(10009)
+  0044: Thunk(0)
+  0045: Map
+  0046: Pop

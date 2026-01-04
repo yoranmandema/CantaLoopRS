@@ -1,0 +1,1158 @@
+{
+  "blocks": [
+    {
+      "statements": [
+        {
+          "Use": {
+            "path": [
+              "std"
+            ],
+            "selector": {
+              "Single": "print"
+            }
+          }
+        },
+        {
+          "Use": {
+            "path": [
+              "functional"
+            ],
+            "selector": {
+              "Multiple": [
+                "map",
+                "filter",
+                "reduce",
+                "fold"
+              ]
+            }
+          }
+        },
+        {
+          "Let": {
+            "identifier": "min_x",
+            "type_annotation": null,
+            "expression": {
+              "Prefix": {
+                "op": "Neg",
+                "rhs": {
+                  "Literal": {
+                    "Number": 2.0
+                  }
+                }
+              }
+            },
+            "pub_visibility": false
+          }
+        },
+        {
+          "Let": {
+            "identifier": "max_x",
+            "type_annotation": null,
+            "expression": {
+              "Literal": {
+                "Number": 1.0
+              }
+            },
+            "pub_visibility": false
+          }
+        },
+        {
+          "Let": {
+            "identifier": "min_y",
+            "type_annotation": null,
+            "expression": {
+              "Prefix": {
+                "op": "Neg",
+                "rhs": {
+                  "Literal": {
+                    "Number": 1.0
+                  }
+                }
+              }
+            },
+            "pub_visibility": false
+          }
+        },
+        {
+          "Let": {
+            "identifier": "max_y",
+            "type_annotation": null,
+            "expression": {
+              "Literal": {
+                "Number": 1.0
+              }
+            },
+            "pub_visibility": false
+          }
+        },
+        {
+          "Let": {
+            "identifier": "width",
+            "type_annotation": null,
+            "expression": {
+              "Literal": {
+                "Number": 64.0
+              }
+            },
+            "pub_visibility": false
+          }
+        },
+        {
+          "Let": {
+            "identifier": "height",
+            "type_annotation": null,
+            "expression": {
+              "Literal": {
+                "Number": 64.0
+              }
+            },
+            "pub_visibility": false
+          }
+        },
+        {
+          "Let": {
+            "identifier": "max_iter",
+            "type_annotation": null,
+            "expression": {
+              "Literal": {
+                "Number": 32.0
+              }
+            },
+            "pub_visibility": false
+          }
+        },
+        {
+          "Struct": {
+            "name": "State",
+            "fields": [
+              [
+                "zx",
+                "num"
+              ],
+              [
+                "zy",
+                "num"
+              ],
+              [
+                "iter",
+                "num"
+              ],
+              [
+                "escaped",
+                "bool"
+              ]
+            ],
+            "pub_visibility": false
+          }
+        },
+        {
+          "Let": {
+            "identifier": "mandel_iter",
+            "type_annotation": null,
+            "expression": {
+              "Closure": {
+                "arguments": [
+                  {
+                    "identifier": "cx",
+                    "kind": "num"
+                  },
+                  {
+                    "identifier": "cy",
+                    "kind": "num"
+                  }
+                ],
+                "return_type": null,
+                "body": {
+                  "Block": {
+                    "statements": [
+                      {
+                        "Let": {
+                          "identifier": "final",
+                          "type_annotation": null,
+                          "expression": {
+                            "Compose": {
+                              "lhs": {
+                                "Postfix": {
+                                  "lhs": {
+                                    "FunctionCall": {
+                                      "callee": {
+                                        "FieldAccess": {
+                                          "object": {
+                                            "Identifier": "array"
+                                          },
+                                          "field": "range"
+                                        }
+                                      },
+                                      "arguments": [
+                                        {
+                                          "Literal": {
+                                            "Number": 0.0
+                                          }
+                                        },
+                                        {
+                                          "Identifier": "max_iter"
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "op": "Invoke",
+                                  "args": null
+                                }
+                              },
+                              "rhs": {
+                                "FunctionCall": {
+                                  "callee": {
+                                    "Identifier": "fold"
+                                  },
+                                  "arguments": [
+                                    {
+                                      "StructInit": {
+                                        "struct_name": "State",
+                                        "fields": [
+                                          [
+                                            "zx",
+                                            {
+                                              "Literal": {
+                                                "Number": 0.0
+                                              }
+                                            }
+                                          ],
+                                          [
+                                            "zy",
+                                            {
+                                              "Literal": {
+                                                "Number": 0.0
+                                              }
+                                            }
+                                          ],
+                                          [
+                                            "iter",
+                                            {
+                                              "Literal": {
+                                                "Number": 0.0
+                                              }
+                                            }
+                                          ],
+                                          [
+                                            "escaped",
+                                            {
+                                              "Literal": {
+                                                "Boolean": false
+                                              }
+                                            }
+                                          ]
+                                        ]
+                                      }
+                                    },
+                                    {
+                                      "Closure": {
+                                        "arguments": [
+                                          {
+                                            "identifier": "state",
+                                            "kind": ""
+                                          },
+                                          {
+                                            "identifier": "_",
+                                            "kind": ""
+                                          }
+                                        ],
+                                        "return_type": "State",
+                                        "body": {
+                                          "Block": {
+                                            "statements": [
+                                              {
+                                                "If": {
+                                                  "arms": [
+                                                    [
+                                                      {
+                                                        "FieldAccess": {
+                                                          "object": {
+                                                            "Identifier": "state"
+                                                          },
+                                                          "field": "escaped"
+                                                        }
+                                                      },
+                                                      {
+                                                        "statements": [
+                                                          {
+                                                            "Return": {
+                                                              "expression": {
+                                                                "Identifier": "state"
+                                                              }
+                                                            }
+                                                          }
+                                                        ]
+                                                      }
+                                                    ]
+                                                  ],
+                                                  "else_block": {
+                                                    "statements": [
+                                                      {
+                                                        "Let": {
+                                                          "identifier": "zx2",
+                                                          "type_annotation": null,
+                                                          "expression": {
+                                                            "Infix": {
+                                                              "lhs": {
+                                                                "Infix": {
+                                                                  "lhs": {
+                                                                    "Infix": {
+                                                                      "lhs": {
+                                                                        "FieldAccess": {
+                                                                          "object": {
+                                                                            "Identifier": "state"
+                                                                          },
+                                                                          "field": "zx"
+                                                                        }
+                                                                      },
+                                                                      "op": "Mul",
+                                                                      "rhs": {
+                                                                        "FieldAccess": {
+                                                                          "object": {
+                                                                            "Identifier": "state"
+                                                                          },
+                                                                          "field": "zx"
+                                                                        }
+                                                                      }
+                                                                    }
+                                                                  },
+                                                                  "op": "Sub",
+                                                                  "rhs": {
+                                                                    "Infix": {
+                                                                      "lhs": {
+                                                                        "FieldAccess": {
+                                                                          "object": {
+                                                                            "Identifier": "state"
+                                                                          },
+                                                                          "field": "zy"
+                                                                        }
+                                                                      },
+                                                                      "op": "Mul",
+                                                                      "rhs": {
+                                                                        "FieldAccess": {
+                                                                          "object": {
+                                                                            "Identifier": "state"
+                                                                          },
+                                                                          "field": "zy"
+                                                                        }
+                                                                      }
+                                                                    }
+                                                                  }
+                                                                }
+                                                              },
+                                                              "op": "Add",
+                                                              "rhs": {
+                                                                "Identifier": "cx"
+                                                              }
+                                                            }
+                                                          },
+                                                          "pub_visibility": false
+                                                        }
+                                                      },
+                                                      {
+                                                        "Let": {
+                                                          "identifier": "zy2",
+                                                          "type_annotation": null,
+                                                          "expression": {
+                                                            "Infix": {
+                                                              "lhs": {
+                                                                "Infix": {
+                                                                  "lhs": {
+                                                                    "Infix": {
+                                                                      "lhs": {
+                                                                        "Literal": {
+                                                                          "Number": 2.0
+                                                                        }
+                                                                      },
+                                                                      "op": "Mul",
+                                                                      "rhs": {
+                                                                        "FieldAccess": {
+                                                                          "object": {
+                                                                            "Identifier": "state"
+                                                                          },
+                                                                          "field": "zx"
+                                                                        }
+                                                                      }
+                                                                    }
+                                                                  },
+                                                                  "op": "Mul",
+                                                                  "rhs": {
+                                                                    "FieldAccess": {
+                                                                      "object": {
+                                                                        "Identifier": "state"
+                                                                      },
+                                                                      "field": "zy"
+                                                                    }
+                                                                  }
+                                                                }
+                                                              },
+                                                              "op": "Add",
+                                                              "rhs": {
+                                                                "Identifier": "cy"
+                                                              }
+                                                            }
+                                                          },
+                                                          "pub_visibility": false
+                                                        }
+                                                      },
+                                                      {
+                                                        "Let": {
+                                                          "identifier": "escaped",
+                                                          "type_annotation": null,
+                                                          "expression": {
+                                                            "Infix": {
+                                                              "lhs": {
+                                                                "Infix": {
+                                                                  "lhs": {
+                                                                    "Infix": {
+                                                                      "lhs": {
+                                                                        "Identifier": "zx2"
+                                                                      },
+                                                                      "op": "Mul",
+                                                                      "rhs": {
+                                                                        "Identifier": "zx2"
+                                                                      }
+                                                                    }
+                                                                  },
+                                                                  "op": "Add",
+                                                                  "rhs": {
+                                                                    "Infix": {
+                                                                      "lhs": {
+                                                                        "Identifier": "zy2"
+                                                                      },
+                                                                      "op": "Mul",
+                                                                      "rhs": {
+                                                                        "Identifier": "zy2"
+                                                                      }
+                                                                    }
+                                                                  }
+                                                                }
+                                                              },
+                                                              "op": "Gt",
+                                                              "rhs": {
+                                                                "Literal": {
+                                                                  "Number": 4.0
+                                                                }
+                                                              }
+                                                            }
+                                                          },
+                                                          "pub_visibility": false
+                                                        }
+                                                      },
+                                                      {
+                                                        "Let": {
+                                                          "identifier": "newState",
+                                                          "type_annotation": null,
+                                                          "expression": {
+                                                            "StructInit": {
+                                                              "struct_name": "State",
+                                                              "fields": [
+                                                                [
+                                                                  "zx",
+                                                                  {
+                                                                    "Identifier": "zx2"
+                                                                  }
+                                                                ],
+                                                                [
+                                                                  "zy",
+                                                                  {
+                                                                    "Identifier": "zy2"
+                                                                  }
+                                                                ],
+                                                                [
+                                                                  "iter",
+                                                                  {
+                                                                    "Infix": {
+                                                                      "lhs": {
+                                                                        "FieldAccess": {
+                                                                          "object": {
+                                                                            "Identifier": "state"
+                                                                          },
+                                                                          "field": "iter"
+                                                                        }
+                                                                      },
+                                                                      "op": "Add",
+                                                                      "rhs": {
+                                                                        "Literal": {
+                                                                          "Number": 1.0
+                                                                        }
+                                                                      }
+                                                                    }
+                                                                  }
+                                                                ],
+                                                                [
+                                                                  "escaped",
+                                                                  {
+                                                                    "Identifier": "escaped"
+                                                                  }
+                                                                ]
+                                                              ]
+                                                            }
+                                                          },
+                                                          "pub_visibility": false
+                                                        }
+                                                      },
+                                                      {
+                                                        "Return": {
+                                                          "expression": {
+                                                            "Identifier": "newState"
+                                                          }
+                                                        }
+                                                      }
+                                                    ]
+                                                  }
+                                                }
+                                              }
+                                            ]
+                                          }
+                                        }
+                                      }
+                                    }
+                                  ]
+                                }
+                              },
+                              "reverse": false
+                            }
+                          },
+                          "pub_visibility": false
+                        }
+                      },
+                      {
+                        "Return": {
+                          "expression": {
+                            "FieldAccess": {
+                              "object": {
+                                "Identifier": "final"
+                              },
+                              "field": "iter"
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            "pub_visibility": false
+          }
+        },
+        {
+          "Let": {
+            "identifier": "scale",
+            "type_annotation": null,
+            "expression": {
+              "Closure": {
+                "arguments": [
+                  {
+                    "identifier": "v",
+                    "kind": "num"
+                  },
+                  {
+                    "identifier": "dimension",
+                    "kind": "num"
+                  },
+                  {
+                    "identifier": "min",
+                    "kind": "num"
+                  },
+                  {
+                    "identifier": "max",
+                    "kind": "num"
+                  }
+                ],
+                "return_type": "num",
+                "body": {
+                  "Expression": {
+                    "Infix": {
+                      "lhs": {
+                        "Infix": {
+                          "lhs": {
+                            "Infix": {
+                              "lhs": {
+                                "Identifier": "v"
+                              },
+                              "op": "Div",
+                              "rhs": {
+                                "Identifier": "dimension"
+                              }
+                            }
+                          },
+                          "op": "Mul",
+                          "rhs": {
+                            "Infix": {
+                              "lhs": {
+                                "Identifier": "max"
+                              },
+                              "op": "Sub",
+                              "rhs": {
+                                "Identifier": "min"
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "op": "Add",
+                      "rhs": {
+                        "Identifier": "min"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "pub_visibility": false
+          }
+        },
+        {
+          "Let": {
+            "identifier": "scale_x",
+            "type_annotation": null,
+            "expression": {
+              "PartialCall": {
+                "func": {
+                  "Identifier": "scale"
+                },
+                "args": [
+                  "Hole",
+                  {
+                    "Expr": {
+                      "Identifier": "width"
+                    }
+                  },
+                  {
+                    "Expr": {
+                      "Identifier": "min_x"
+                    }
+                  },
+                  {
+                    "Expr": {
+                      "Identifier": "max_x"
+                    }
+                  }
+                ]
+              }
+            },
+            "pub_visibility": false
+          }
+        },
+        {
+          "Let": {
+            "identifier": "scale_y",
+            "type_annotation": null,
+            "expression": {
+              "PartialCall": {
+                "func": {
+                  "Identifier": "scale"
+                },
+                "args": [
+                  "Hole",
+                  {
+                    "Expr": {
+                      "Identifier": "height"
+                    }
+                  },
+                  {
+                    "Expr": {
+                      "Identifier": "min_y"
+                    }
+                  },
+                  {
+                    "Expr": {
+                      "Identifier": "max_y"
+                    }
+                  }
+                ]
+              }
+            },
+            "pub_visibility": false
+          }
+        },
+        {
+          "Let": {
+            "identifier": "mandel",
+            "type_annotation": null,
+            "expression": {
+              "Compose": {
+                "lhs": {
+                  "Postfix": {
+                    "lhs": {
+                      "FunctionCall": {
+                        "callee": {
+                          "FieldAccess": {
+                            "object": {
+                              "Identifier": "array"
+                            },
+                            "field": "range"
+                          }
+                        },
+                        "arguments": [
+                          {
+                            "Literal": {
+                              "Number": 0.0
+                            }
+                          },
+                          {
+                            "Identifier": "height"
+                          }
+                        ]
+                      }
+                    },
+                    "op": "Invoke",
+                    "args": null
+                  }
+                },
+                "rhs": {
+                  "FunctionCall": {
+                    "callee": {
+                      "Identifier": "map"
+                    },
+                    "arguments": [
+                      {
+                        "Closure": {
+                          "arguments": [
+                            {
+                              "identifier": "y",
+                              "kind": ""
+                            }
+                          ],
+                          "return_type": null,
+                          "body": {
+                            "Expression": {
+                              "Compose": {
+                                "lhs": {
+                                  "Postfix": {
+                                    "lhs": {
+                                      "FunctionCall": {
+                                        "callee": {
+                                          "FieldAccess": {
+                                            "object": {
+                                              "Identifier": "array"
+                                            },
+                                            "field": "range"
+                                          }
+                                        },
+                                        "arguments": [
+                                          {
+                                            "Literal": {
+                                              "Number": 0.0
+                                            }
+                                          },
+                                          {
+                                            "Identifier": "width"
+                                          }
+                                        ]
+                                      }
+                                    },
+                                    "op": "Invoke",
+                                    "args": null
+                                  }
+                                },
+                                "rhs": {
+                                  "FunctionCall": {
+                                    "callee": {
+                                      "Identifier": "map"
+                                    },
+                                    "arguments": [
+                                      {
+                                        "Closure": {
+                                          "arguments": [
+                                            {
+                                              "identifier": "x",
+                                              "kind": ""
+                                            }
+                                          ],
+                                          "return_type": null,
+                                          "body": {
+                                            "Block": {
+                                              "statements": [
+                                                {
+                                                  "Let": {
+                                                    "identifier": "sx",
+                                                    "type_annotation": null,
+                                                    "expression": {
+                                                      "Postfix": {
+                                                        "lhs": {
+                                                          "FunctionCall": {
+                                                            "callee": {
+                                                              "Identifier": "scale_x"
+                                                            },
+                                                            "arguments": [
+                                                              {
+                                                                "Identifier": "x"
+                                                              }
+                                                            ]
+                                                          }
+                                                        },
+                                                        "op": "Invoke",
+                                                        "args": null
+                                                      }
+                                                    },
+                                                    "pub_visibility": false
+                                                  }
+                                                },
+                                                {
+                                                  "Let": {
+                                                    "identifier": "sy",
+                                                    "type_annotation": null,
+                                                    "expression": {
+                                                      "Postfix": {
+                                                        "lhs": {
+                                                          "FunctionCall": {
+                                                            "callee": {
+                                                              "Identifier": "scale_y"
+                                                            },
+                                                            "arguments": [
+                                                              {
+                                                                "Identifier": "y"
+                                                              }
+                                                            ]
+                                                          }
+                                                        },
+                                                        "op": "Invoke",
+                                                        "args": null
+                                                      }
+                                                    },
+                                                    "pub_visibility": false
+                                                  }
+                                                },
+                                                {
+                                                  "Let": {
+                                                    "identifier": "res",
+                                                    "type_annotation": null,
+                                                    "expression": {
+                                                      "Postfix": {
+                                                        "lhs": {
+                                                          "FunctionCall": {
+                                                            "callee": {
+                                                              "Identifier": "mandel_iter"
+                                                            },
+                                                            "arguments": [
+                                                              {
+                                                                "Identifier": "sx"
+                                                              },
+                                                              {
+                                                                "Identifier": "sy"
+                                                              }
+                                                            ]
+                                                          }
+                                                        },
+                                                        "op": "Invoke",
+                                                        "args": null
+                                                      }
+                                                    },
+                                                    "pub_visibility": false
+                                                  }
+                                                },
+                                                {
+                                                  "Return": {
+                                                    "expression": {
+                                                      "Identifier": "res"
+                                                    }
+                                                  }
+                                                }
+                                              ]
+                                            }
+                                          }
+                                        }
+                                      }
+                                    ]
+                                  }
+                                },
+                                "reverse": false
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                },
+                "reverse": false
+              }
+            },
+            "pub_visibility": false
+          }
+        },
+        {
+          "Let": {
+            "identifier": "gradient",
+            "type_annotation": null,
+            "expression": {
+              "Literal": {
+                "String": " .'`^,:;Il!i><~+_-?][}{1)(|/tfjrxnuvczXYUJCLQ0OZmwqpdbkhao*#MW&8%B@$"
+              }
+            },
+            "pub_visibility": false
+          }
+        },
+        {
+          "Let": {
+            "identifier": "to_char",
+            "type_annotation": null,
+            "expression": {
+              "Closure": {
+                "arguments": [
+                  {
+                    "identifier": "v",
+                    "kind": "num"
+                  }
+                ],
+                "return_type": null,
+                "body": {
+                  "Block": {
+                    "statements": [
+                      {
+                        "If": {
+                          "arms": [
+                            [
+                              {
+                                "Infix": {
+                                  "lhs": {
+                                    "Identifier": "v"
+                                  },
+                                  "op": "Eq",
+                                  "rhs": {
+                                    "Identifier": "max_iter"
+                                  }
+                                }
+                              },
+                              {
+                                "statements": [
+                                  {
+                                    "Return": {
+                                      "expression": {
+                                        "Literal": {
+                                          "String": "@"
+                                        }
+                                      }
+                                    }
+                                  }
+                                ]
+                              }
+                            ]
+                          ],
+                          "else_block": {
+                            "statements": [
+                              {
+                                "Return": {
+                                  "expression": {
+                                    "ArrayIndex": {
+                                      "array": {
+                                        "Identifier": "gradient"
+                                      },
+                                      "indices": [
+                                        {
+                                          "Single": {
+                                            "Postfix": {
+                                              "lhs": {
+                                                "FunctionCall": {
+                                                  "callee": {
+                                                    "FieldAccess": {
+                                                      "object": {
+                                                        "Identifier": "math"
+                                                      },
+                                                      "field": "floor"
+                                                    }
+                                                  },
+                                                  "arguments": [
+                                                    {
+                                                      "Infix": {
+                                                        "lhs": {
+                                                          "Infix": {
+                                                            "lhs": {
+                                                              "Identifier": "v"
+                                                            },
+                                                            "op": "Mul",
+                                                            "rhs": {
+                                                              "Infix": {
+                                                                "lhs": {
+                                                                  "Postfix": {
+                                                                    "lhs": {
+                                                                      "FunctionCall": {
+                                                                        "callee": {
+                                                                          "FieldAccess": {
+                                                                            "object": {
+                                                                              "Identifier": "string"
+                                                                            },
+                                                                            "field": "len"
+                                                                          }
+                                                                        },
+                                                                        "arguments": [
+                                                                          {
+                                                                            "Identifier": "gradient"
+                                                                          }
+                                                                        ]
+                                                                      }
+                                                                    },
+                                                                    "op": "Invoke",
+                                                                    "args": null
+                                                                  }
+                                                                },
+                                                                "op": "Sub",
+                                                                "rhs": {
+                                                                  "Literal": {
+                                                                    "Number": 1.0
+                                                                  }
+                                                                }
+                                                              }
+                                                            }
+                                                          }
+                                                        },
+                                                        "op": "Div",
+                                                        "rhs": {
+                                                          "Identifier": "max_iter"
+                                                        }
+                                                      }
+                                                    }
+                                                  ]
+                                                }
+                                              },
+                                              "op": "Invoke",
+                                              "args": null
+                                            }
+                                          }
+                                        }
+                                      ]
+                                    }
+                                  }
+                                }
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            "pub_visibility": false
+          }
+        },
+        {
+          "Expression": {
+            "Compose": {
+              "lhs": {
+                "Compose": {
+                  "lhs": {
+                    "Identifier": "mandel"
+                  },
+                  "rhs": {
+                    "FunctionCall": {
+                      "callee": {
+                        "Identifier": "map"
+                      },
+                      "arguments": [
+                        {
+                          "Closure": {
+                            "arguments": [
+                              {
+                                "identifier": "row",
+                                "kind": ""
+                              }
+                            ],
+                            "return_type": null,
+                            "body": {
+                              "Expression": {
+                                "Postfix": {
+                                  "lhs": {
+                                    "FunctionCall": {
+                                      "callee": {
+                                        "FieldAccess": {
+                                          "object": {
+                                            "Identifier": "string"
+                                          },
+                                          "field": "join"
+                                        }
+                                      },
+                                      "arguments": [
+                                        {
+                                          "Compose": {
+                                            "lhs": {
+                                              "Identifier": "row"
+                                            },
+                                            "rhs": {
+                                              "FunctionCall": {
+                                                "callee": {
+                                                  "Identifier": "map"
+                                                },
+                                                "arguments": [
+                                                  {
+                                                    "Closure": {
+                                                      "arguments": [
+                                                        {
+                                                          "identifier": "x",
+                                                          "kind": ""
+                                                        }
+                                                      ],
+                                                      "return_type": null,
+                                                      "body": {
+                                                        "Expression": {
+                                                          "Postfix": {
+                                                            "lhs": {
+                                                              "FunctionCall": {
+                                                                "callee": {
+                                                                  "Identifier": "to_char"
+                                                                },
+                                                                "arguments": [
+                                                                  {
+                                                                    "Identifier": "x"
+                                                                  }
+                                                                ]
+                                                              }
+                                                            },
+                                                            "op": "Invoke",
+                                                            "args": null
+                                                          }
+                                                        }
+                                                      }
+                                                    }
+                                                  }
+                                                ]
+                                              }
+                                            },
+                                            "reverse": false
+                                          }
+                                        },
+                                        {
+                                          "Literal": {
+                                            "String": ""
+                                          }
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "op": "Invoke",
+                                  "args": null
+                                }
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  "reverse": false
+                }
+              },
+              "rhs": {
+                "FunctionCall": {
+                  "callee": {
+                    "Identifier": "map"
+                  },
+                  "arguments": [
+                    {
+                      "Identifier": "print"
+                    }
+                  ]
+                }
+              },
+              "reverse": false
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -102,45 +102,6 @@ lazy_static::lazy_static! {
             }),
         },
         StdFunction {
-            name: "fold",
-            signature: FunctionSignature {
-                params: vec![ValueKind::Unknown, ValueKind::Function("(num, num) -> num".to_string())],
-                return_type: Box::new(ValueKind::Unknown),
-            },
-            arity: Arity::Fixed(2),
-            impl_fn: Arc::new(|_args, _heap| {
-                // fold is only used as a reducer in pipelines, not as a direct function call
-                // This implementation should never be called directly
-                panic!("fold should only be used as a reducer in pipelines (e.g., xs |> fold(init, fn))");
-            }),
-        },
-        StdFunction {
-            name: "add",
-            signature: FunctionSignature {
-                params: vec![ValueKind::Number, ValueKind::Number],
-                return_type: Box::new(ValueKind::Number),
-            },
-            arity: Arity::Fixed(2),
-            impl_fn: Arc::new(|args, _heap| {
-                let a = args[0].as_number().expect("expected number");
-                let b = args[1].as_number().expect("expected number");
-                Value::number(a + b)
-            }),
-        },
-        StdFunction {
-            name: "mul",
-            signature: FunctionSignature {
-                params: vec![ValueKind::Number, ValueKind::Number],
-                return_type: Box::new(ValueKind::Number),
-            },
-            arity: Arity::Fixed(2),
-            impl_fn: Arc::new(|args, _heap| {
-                let a = args[0].as_number().expect("expected number");
-                let b = args[1].as_number().expect("expected number");
-                Value::number(a * b)
-            }),
-        },
-        StdFunction {
             name: "min",
             signature: FunctionSignature {
                 params: vec![ValueKind::Number, ValueKind::Number],
@@ -170,28 +131,9 @@ lazy_static::lazy_static! {
                 Value::number(max_val)
             })
         },
-        StdFunction {
-            name: "clamp",
-            signature: FunctionSignature {
-                params: vec![ValueKind::Number, ValueKind::Number, ValueKind::Number],
-                return_type: Box::new(ValueKind::Number),
-            },
-            arity: Arity::Fixed(3),
-            impl_fn: Arc::new(|args, _heap| {
-                let val = args[0].as_number().expect("expected number as input");
-                let min = args[1].as_number().expect("expected number as min boundary");
-                let max = args[2].as_number().expect("expected number as max boundary");
-
-                if min > max {
-                    panic!("clamp: min must be <= max");
-                }
-
-                let clamped = val.clamp(min, max);
-
-                Value::number(clamped)
-            }),     
-        }]
+        ]
     },
+    structs: vec![],
     submodules: vec![],
     };
 }

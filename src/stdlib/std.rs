@@ -38,23 +38,10 @@ lazy_static::lazy_static! {
                 let formatted = format!("{:.1$}", n, decimals as usize);
                 Value::string_with_heap(formatted, heap)
             }),
-        },
-        StdFunction {
-            name: "array_length",
-            signature: FunctionSignature {
-                params: vec![ValueKind::Unknown],
-                return_type: Box::new(ValueKind::Number),
-            },
-            arity: Arity::Fixed(1),
-            impl_fn: Arc::new(|args, heap| {
-                if let Some(arr) = args[0].as_array(heap) {
-                    Value::number(arr.len() as f64)
-                } else {
-                    panic!("array_length expects array argument")
-                }
-            }),
-        }]
+        }
+        ]
     },
+    structs: vec![],
     submodules: vec![],
     };
 }

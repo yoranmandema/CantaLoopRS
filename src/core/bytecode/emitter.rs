@@ -287,7 +287,26 @@ impl ByteCodeEmitter {
         for (case_idx, (pattern, block)) in cases.iter().enumerate() {
             if let Some(pattern_expr) = pattern {
                 ops.push(OpCode::LdVar(temp_slot));
-                self.emit_pattern_expression(ops, pattern_expr, expression, program);
+                
+                // Optimize: if pattern is a simple literal (String, Number, Boolean),
+                // treat it as an equality comparison instead of calling emit_pattern_expression
+                match pattern_expr {
+                    HirExpression::String(_) | HirExpression::Number(_) | HirExpression::Boolean(_) => {
+                        // Simple literal pattern - emit as equality comparison
+                        self.emit_expression(ops, pattern_expr, program);
+                        ops.push(OpCode::Eq);
+                    }
+                    HirExpression::Binary { operator, .. } if matches!(operator, BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Gt | BinaryOp::Lt | BinaryOp::Ge | BinaryOp::Le | BinaryOp::And | BinaryOp::Or) => {
+                        // Binary comparison pattern - use optimized pattern emission
+                        self.emit_pattern_expression(ops, pattern_expr, expression, program);
+                    }
+                    _ => {
+                        // For other patterns, emit as equality comparison (fallback)
+                        self.emit_expression(ops, pattern_expr, program);
+                        ops.push(OpCode::Eq);
+                    }
+                }
+                
                 jmp_if_false_info.push((ops.len(), case_idx));
                 ops.push(OpCode::JmpIfFalse(0)); // Placeholder
             }
@@ -728,18 +747,21 @@ impl ByteCodeEmitter {
         bound: &[Option<HirExpression>],
         program: &HirAst,
     ) {
-        // Push bound arguments onto the stack in the order they appear
-        // (they'll be popped in reverse, so we need to push in reverse order)
+        // Build bound_values array first (tracks which positions are bound)
+        // This must match the order of the bound array (position 0 = first arg, etc.)
         let mut bound_values = Vec::new();
+        for arg_opt in bound.iter() {
+            bound_values.push(arg_opt.is_some());
+        }
+
+        // Push bound arguments onto the stack in reverse order
+        // (they'll be popped in reverse, so we need to push in reverse order)
+        // Iterate in reverse to push values in reverse order
         for arg_opt in bound.iter().rev() {
             if let Some(arg_expr) = arg_opt {
                 self.emit_expression(ops, arg_expr, program);
-                bound_values.push(true);
-            } else {
-                bound_values.push(false);
             }
         }
-        bound_values.reverse(); // Now in correct order (position 0 = first arg, etc.)
 
         // Build bound_mask: bit i is 1 if argument position i is bound, 0 if it's a hole
         let mut bound_mask: u64 = 0;
@@ -768,9 +790,8 @@ impl ByteCodeEmitter {
         program: &HirAst,
     ) {
         // Handle nested PostfixInvoke expressions.
-        // NOTE: There's a known limitation in the HIR structure for nested invocations like
-        // `mul2!(add10!(i))!`. The outer operand (mul2) is not properly represented in the HIR,
-        // so we work around this by handling nested PostfixInvoke when args is None.
+        // When we have clos()!, the inner clos() creates a PostfixInvoke with args,
+        // and the outer ! creates a PostfixInvoke with args: None
         if args.is_none() {
             if let HirExpression::PostfixInvoke {
                 operand: ref inner_operand,
@@ -778,18 +799,19 @@ impl ByteCodeEmitter {
             } = operand
             {
                 if let Some(ref inner_arg_list) = inner_args {
-                    // Emit the inner PostfixInvoke expression (e.g., add10!(i))
+                    // Emit the inner PostfixInvoke expression (e.g., clos())
+                    // This creates a thunk from the function value
                     for arg in inner_arg_list {
                         self.emit_expression(ops, arg, program);
                     }
                     self.emit_expression(ops, inner_operand, program);
                     ops.push(OpCode::Thunk(inner_arg_list.len() as u32));
-                    ops.push(OpCode::Invoke);
-                    // Inner result is now on the stack.
-                    // Workaround: emit operand (the inner PostfixInvoke) as the outer operand.
-                    // This is not ideal but necessary due to HIR structure limitations.
-                    self.emit_expression(ops, operand, program);
-                    ops.push(OpCode::Thunk(1));
+                    // Don't invoke if inner operand is an identifier (variable with function type)
+                    // The outer invoke will handle it
+                    if !matches!(**inner_operand, HirExpression::Identifier(_)) {
+                        ops.push(OpCode::Invoke);
+                    }
+                    // Now invoke the thunk that was created by the inner PostfixInvoke
                     ops.push(OpCode::Invoke);
                     return;
                 }
@@ -804,6 +826,9 @@ impl ByteCodeEmitter {
             }
             self.emit_expression(ops, operand, program);
             ops.push(OpCode::Thunk(arg_count));
+            // Always invoke when we have args - this PostfixInvoke represents a function call with !
+            // The only case where we don't invoke is when this is an inner PostfixInvoke that will
+            // be invoked by an outer one, which is handled in the nested case above
             ops.push(OpCode::Invoke);
         } else {
             // No additional arguments - check if operand is a PartialCall
@@ -813,6 +838,27 @@ impl ByteCodeEmitter {
             } else if let HirExpression::FunctionCall { invoke: true, .. } = operand {
                 // FunctionCall with invoke: true already emits Thunk+Invoke
                 self.emit_expression(ops, operand, program);
+            } else if let HirExpression::PostfixInvoke { operand: inner_operand, args: inner_args } = operand {
+                // Nested PostfixInvoke - emit the inner one first to create the thunk
+                if let Some(ref inner_arg_list) = inner_args {
+                    // Emit the inner PostfixInvoke expression (e.g., clos())
+                    for arg in inner_arg_list {
+                        self.emit_expression(ops, arg, program);
+                    }
+                    self.emit_expression(ops, inner_operand, program);
+                    ops.push(OpCode::Thunk(inner_arg_list.len() as u32));
+                    // Don't invoke here if inner operand is an identifier (variable with function type)
+                    // The outer invoke will handle it
+                    if !matches!(**inner_operand, HirExpression::Identifier(_)) {
+                        ops.push(OpCode::Invoke);
+                    }
+                    // Now invoke the thunk that was created by the inner PostfixInvoke
+                    ops.push(OpCode::Invoke);
+                } else {
+                    // Inner has no args - just emit it and invoke
+                    self.emit_expression(ops, operand, program);
+                    ops.push(OpCode::Invoke);
+                }
             } else {
                 // For other operands (thunks, functions, etc.), invoke them
                 self.emit_expression(ops, operand, program);
@@ -969,6 +1015,25 @@ impl ByteCodeEmitter {
         ops.push(OpCode::ArraySlice);
     }
 
+    /// Resolve an identifier to a function ID by looking it up in imports
+    fn resolve_identifier_to_function_id(&self, var_id: u32, program: &HirAst) -> Option<u32> {
+        // Look up the variable in scopes to get its name
+        for scope in &program.scopes.scopes {
+            if let Some(var) = scope.vars.iter().find(|v| v.id == var_id) {
+                // Look up the variable name in imports
+                for imports in program.module_imports.values() {
+                    if let Some(func_id) = imports.get(&var.name) {
+                        // Verify it's actually a function (not a constant)
+                        if program.functions.contains_key(func_id) {
+                            return Some(*func_id);
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
     fn emit_expr_reducer(
         &mut self,
         ops: &mut Vec<OpCode>,
@@ -977,124 +1042,194 @@ impl ByteCodeEmitter {
         reducer_args: &[HirExpression],
         program: &HirAst,
     ) {
-        // Emit the array
-        self.emit_expression(ops, array, program);
-
-        // Start iteration (consumes array, pushes iterator)
-        ops.push(OpCode::ArrayIter);
-
-        // Initialize accumulator BEFORE the loop
-        // We need to keep the iterator on the stack, so we'll initialize the accumulator first
-        // by loading it into a variable, then we can work with the iterator
-        let acc_slot = 999998u32;
-        let (func_id, use_add_opcode) = match reducer_type {
-            ReducerType::Sum => {
-                // sum is equivalent to fold(0, add)
-                // Load initial value (0) and store it
-                // Stack: [iterator]
-                ops.push(OpCode::LdNum(0.0));
-                // Stack: [iterator, 0]
-                ops.push(OpCode::StVar(acc_slot));
-                // Stack: [iterator] (0 was popped and stored)
-                // sum uses Add opcode, not a function call
-                (0, true)
-            }
-            ReducerType::Fold => {
-                // fold(init, fn) - emit init
-                if reducer_args.len() >= 2 {
-                    // Stack: [iterator]
-                    self.emit_expression(ops, &reducer_args[0], program);
-                    // Stack: [iterator, init]
-                    ops.push(OpCode::StVar(acc_slot));
-                    // Stack: [iterator] (init was popped and stored)
-                    // Get function ID from the function expression
-                    let func_id = match &reducer_args[1] {
-                        HirExpression::FunctionCall { function_id, .. } => *function_id,
-                        HirExpression::Identifier(_) => {
-                            panic!("fold function must be a function call, not a variable");
+        match reducer_type {
+            ReducerType::Map | ReducerType::Filter => {
+                // Map and Filter: emit VM bytecode opcodes
+                // Stack order: [array, function] with function on top
+                // Opcode pops: function first, then array
+                
+                // Emit the array first (will be on bottom)
+                self.emit_expression(ops, array, program);
+                
+                // If the array expression is a ComposeThunk, we need to invoke it to get the actual array
+                if matches!(array, HirExpression::ComposeThunk { .. }) {
+                    ops.push(OpCode::Invoke);
+                }
+                
+                // Emit the mapper/predicate function (will be on top)
+                if reducer_args.len() == 1 {
+                    match &reducer_args[0] {
+                        HirExpression::Closure { function_id } => {
+                            // For closures, load the function directly
+                            ops.push(OpCode::LdFunc(*function_id));
                         }
-                        _ => panic!("fold function must be a function call or identifier"),
-                    };
-                    (func_id, false)
+                        _ => {
+                            // For other expressions (like function calls), emit them
+                            self.emit_expression(ops, &reducer_args[0], program);
+                        }
+                    }
                 } else {
-                    panic!("fold requires 2 arguments");
+                    panic!("Map and Filter require exactly 1 argument (the function)");
+                }
+                
+                // Stack is now [array, function] with function on top
+                // Emit the appropriate opcode
+                match reducer_type {
+                    ReducerType::Map => ops.push(OpCode::Map),
+                    ReducerType::Filter => ops.push(OpCode::Filter),
+                    _ => unreachable!(),
                 }
             }
-        };
+            ReducerType::Fold => {
+                // Fold: emit VM bytecode opcode
+                // Stack order: [array, initial_value, function] with function on top
+                // Opcode pops: function first, then initial_value, then array
+                
+                // Emit the array first (will be on bottom)
+                self.emit_expression(ops, array, program);
+                
+                // If the array expression is a ComposeThunk, we need to invoke it to get the actual array
+                if matches!(array, HirExpression::ComposeThunk { .. }) {
+                    ops.push(OpCode::Invoke);
+                }
+                
+                // Emit the initial value (will be in middle)
+                if reducer_args.len() >= 2 {
+                    self.emit_expression(ops, &reducer_args[0], program);
+                } else {
+                    panic!("fold requires 2 arguments (initial_value, function)");
+                }
+                
+                // Emit the function (will be on top)
+                match &reducer_args[1] {
+                    HirExpression::Closure { function_id } => {
+                        ops.push(OpCode::LdFunc(*function_id));
+                    }
+                    HirExpression::FunctionCall { function_id, .. } => {
+                        ops.push(OpCode::LdFunc(*function_id));
+                    }
+                    HirExpression::Identifier(var_id) => {
+                        let func_id = self.resolve_identifier_to_function_id(*var_id, program)
+                            .unwrap_or_else(|| {
+                                panic!("fold function must be a function call or imported function identifier");
+                            });
+                        ops.push(OpCode::LdFunc(func_id));
+                    }
+                    _ => panic!("fold function must be a function call or identifier"),
+                }
+                
+                // Stack is now [array, initial_value, function] with function on top
+                ops.push(OpCode::Fold);
+            }
+            ReducerType::Sum | ReducerType::Reduce => {
+                // Emit the array
+                self.emit_expression(ops, array, program);
+                
+                // If the array expression is a ComposeThunk, we need to invoke it to get the actual array
+                // Check if it's a ComposeThunk by pattern matching
+                if matches!(array, HirExpression::ComposeThunk { .. }) {
+                    // The ComposeThunk is on the stack as a thunk, invoke it to get the array
+                    ops.push(OpCode::Invoke);
+                }
 
-        // Store iterator in a variable so we can reload it for each iteration
-        // The iterator state is stored in the heap, so reloading the reference will work
-        let iter_slot = 999996u32;
-        ops.push(OpCode::StVar(iter_slot));
-        // Stack: [] (iterator was stored)
+                // Start iteration (consumes array, pushes iterator)
+                ops.push(OpCode::ArrayIter);
 
-        // Emit reduction loop:
-        // loop {
-        //   iter = reload iterator (state is preserved in heap)
-        //   (has_more, x) = array_next(iter)
-        //   if !has_more { break acc }
-        //   acc = fn(acc, x)!
-        // }
+                // Initialize accumulator BEFORE the loop
+                let acc_slot = 999998u32;
+                let (func_id, use_add_opcode, use_first_element) = match reducer_type {
+                    ReducerType::Sum => {
+                        // sum is equivalent to fold(0, add)
+                        ops.push(OpCode::LdNum(0.0));
+                        ops.push(OpCode::StVar(acc_slot));
+                        (0, true, false)
+                    }
+                    ReducerType::Reduce => {
+                        // reduce(fn) - use first element as initial value
+                        // We'll set this up in the loop
+                        (match &reducer_args[0] {
+                            HirExpression::FunctionCall { function_id, .. } => *function_id,
+                            HirExpression::Identifier(var_id) => {
+                                self.resolve_identifier_to_function_id(*var_id, program)
+                                    .unwrap_or_else(|| {
+                                        panic!("reduce function must be a function call or imported function identifier");
+                                    })
+                            }
+                            _ => panic!("reduce function must be a function call or identifier"),
+                        }, false, true)
+                    }
+                    _ => unreachable!(),
+                };
 
-        let loop_start = ops.len();
+                // Store iterator in a variable
+                let iter_slot = 999996u32;
+                ops.push(OpCode::StVar(iter_slot));
 
-        // Reload iterator for this iteration (state is preserved in heap)
-        ops.push(OpCode::LdVar(iter_slot));
-        // Stack: [iterator]
+                // For reduce, we need to get the first element first
+                if use_first_element {
+                    // Load iterator and get first element
+                    ops.push(OpCode::LdVar(iter_slot));
+                    ops.push(OpCode::ArrayNext);
+                    // Stack: [has_more, element]
+                    let has_more_slot = 999995u32;
+                    ops.push(OpCode::StVar(has_more_slot));
+                    // Stack: [element]
+                    ops.push(OpCode::StVar(acc_slot));
+                    // Stack: []
+                    // Check if we have at least one element
+                    ops.push(OpCode::LdVar(has_more_slot));
+                    let check_pos = ops.len();
+                    ops.push(OpCode::JmpIfFalse(0)); // Will patch
+                    // If no elements, we'd need to handle empty array case
+                    // For now, assume non-empty (could add empty check later)
+                    let after_check = ops.len();
+                    ops[check_pos] = OpCode::JmpIfFalse(after_check);
+                }
 
-        // Get next element: ArrayNext expects iterator on stack, pushes (has_more, element)
-        ops.push(OpCode::ArrayNext);
-        // Stack: [has_more, element]
+                let loop_start = ops.len();
 
-        // Store element first (we always need to process it, even if has_more is false)
-        let elem_slot = 999997u32;
-        // Swap has_more and element so we can store element
-        // Stack: [has_more, element] -> we need [element, has_more] to store element
-        // Actually, we can't swap easily, so we'll duplicate has_more, store element, then check has_more
-        // Better: store element, then check has_more, and if false break after processing
+                // Reload iterator
+                ops.push(OpCode::LdVar(iter_slot));
+                ops.push(OpCode::ArrayNext);
+                // Stack: [has_more, element]
 
-        // Duplicate has_more so we can check it after storing element
-        // We'll pop has_more, store element, then check has_more from a temp var
-        let has_more_slot = 999995u32;
-        ops.push(OpCode::StVar(has_more_slot)); // Store has_more
-                                                // Stack: [element] (has_more was stored)
+                let elem_slot = 999997u32;
+                let has_more_slot = 999995u32;
+                ops.push(OpCode::StVar(has_more_slot));
+                ops.push(OpCode::StVar(elem_slot));
 
-        // Store element
-        ops.push(OpCode::StVar(elem_slot));
-        // Stack: [] (element was stored)
+                // Load accumulator and element
+                ops.push(OpCode::LdVar(acc_slot));
+                ops.push(OpCode::LdVar(elem_slot));
 
-        // Load accumulator and element
-        ops.push(OpCode::LdVar(acc_slot));
-        ops.push(OpCode::LdVar(elem_slot));
+                // Call reducer function
+                if use_add_opcode {
+                    ops.push(OpCode::Add);
+                } else {
+                    ops.push(OpCode::LdFunc(func_id));
+                    ops.push(OpCode::Thunk(2));
+                    ops.push(OpCode::Invoke);
+                }
 
-        // Call reducer function
-        if use_add_opcode {
-            // sum uses Add opcode
-            ops.push(OpCode::Add);
-        } else {
-            // fold uses function call
-            ops.push(OpCode::LdFunc(func_id));
-            ops.push(OpCode::Thunk(2));
-            ops.push(OpCode::Invoke);
+                // Store result back to accumulator
+                ops.push(OpCode::StVar(acc_slot));
+
+                // Check has_more - if false, break
+                ops.push(OpCode::LdVar(has_more_slot));
+                let has_more_pos = ops.len();
+                ops.push(OpCode::JmpIfFalse(0));
+
+                // Jump back to loop start
+                ops.push(OpCode::Jmp(loop_start));
+
+                // Patch the break jump
+                let loop_end = ops.len();
+                ops[has_more_pos] = OpCode::JmpIfFalse(loop_end);
+
+                // Load accumulator as result
+                ops.push(OpCode::LdVar(acc_slot));
+            }
         }
-
-        // Store result back to accumulator
-        ops.push(OpCode::StVar(acc_slot));
-
-        // Check has_more - if false, break
-        ops.push(OpCode::LdVar(has_more_slot));
-        let has_more_pos = ops.len();
-        ops.push(OpCode::JmpIfFalse(0)); // Will patch later
-
-        // Jump back to loop start
-        ops.push(OpCode::Jmp(loop_start));
-
-        // Patch the break jump (when has_more is false)
-        let loop_end = ops.len();
-        ops[has_more_pos] = OpCode::JmpIfFalse(loop_end);
-
-        // Load accumulator as result
-        ops.push(OpCode::LdVar(acc_slot));
     }
 
     /// Emit a pattern expression for match statements.
@@ -1209,6 +1344,10 @@ impl ByteCodeEmitter {
             } => {
                 self.emit_expr_array_slice(ops, array, start, end, step, *inclusive_end, program);
             }
+            HirExpression::Closure { function_id } => {
+                // Emit code to load the closure function
+                ops.push(OpCode::LdFunc(*function_id));
+            }
             HirExpression::Reducer {
                 array,
                 reducer_type,
@@ -1216,6 +1355,72 @@ impl ByteCodeEmitter {
             } => {
                 self.emit_expr_reducer(ops, array, *reducer_type, reducer_args, program);
             }
+            HirExpression::StructInit { struct_name, fields } => {
+                self.emit_expr_struct_init(ops, struct_name, fields, program);
+            }
+            HirExpression::FieldAccess { base, field_name } => {
+                self.emit_expr_field_access(ops, base, field_name, program);
+            }
         }
+    }
+
+    fn emit_expr_struct_init(
+        &mut self,
+        ops: &mut Vec<OpCode>,
+        struct_name: &str,
+        fields: &[(String, HirExpression)],
+        program: &HirAst,
+    ) {
+        // Get struct definition to verify field order
+        let struct_def = program.structs.get(struct_name)
+            .expect(&format!("Struct {} not found", struct_name));
+        
+        // Create a map from field name to expression for quick lookup
+        let field_map: std::collections::HashMap<_, _> = fields.iter()
+            .map(|(name, expr)| (name.clone(), expr))
+            .collect();
+        
+        // Emit field values in the order defined in the struct definition
+        for (field_name, _) in &struct_def.fields {
+            let field_expr = field_map.get(field_name)
+                .expect(&format!("Field {} not provided in struct initialization", field_name));
+            self.emit_expression(ops, field_expr, program);
+        }
+        
+        // Now emit MakeStruct with type_id and field count
+        // Use a stable hash of the struct name as type_id
+        let type_id = crate::core::vm::compute_struct_type_id(struct_name);
+        ops.push(OpCode::MakeStruct {
+            type_id,
+            field_count: struct_def.fields.len() as u32,
+        });
+    }
+
+    fn emit_expr_field_access(
+        &mut self,
+        ops: &mut Vec<OpCode>,
+        base: &HirExpression,
+        field_name: &str,
+        program: &HirAst,
+    ) {
+        // Emit the base expression
+        self.emit_expression(ops, base, program);
+        
+        // Find the struct type from the base expression's type
+        // For now, we'll need to look up the field index from the struct definition
+        // This is a simplified version - in practice you'd track types through inference
+        
+        // We need to find which struct this is and get the field index
+        // For now, we'll search all structs to find the one with this field
+        let mut field_index = None;
+        for (struct_name, struct_def) in &program.structs {
+            if let Some(idx) = struct_def.fields.iter().position(|(name, _)| name == field_name) {
+                field_index = Some(idx as u32);
+                break;
+            }
+        }
+        
+        let field_idx = field_index.expect(&format!("Field {} not found in any struct", field_name));
+        ops.push(OpCode::GetField(field_idx));
     }
 }

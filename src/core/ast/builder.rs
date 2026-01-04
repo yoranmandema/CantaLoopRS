@@ -125,6 +125,36 @@ fn extract_return_type(text: &str, span: pest::Span) -> Result<Option<String>, p
     parse_type_annotation_from_text(type_text, span)
 }
 
+/// Extracts return type annotation from closure text after "->" (handles both => and { delimiters)
+/// Returns the type string and the byte offset where the body starts (after the return type)
+fn extract_closure_return_type(text: &str, span: pest::Span) -> Result<(Option<String>, usize), pest::error::Error<Rule>> {
+    let trimmed = text.trim_start();
+    let trim_offset = text.len() - trimmed.len();
+    
+    if !trimmed.starts_with("->") {
+        return Ok((None, 0));
+    }
+    
+    let arrow_pos = trimmed.find("->").unwrap();
+    let after_arrow_raw = &trimmed[arrow_pos + 2..];
+    let after_arrow = after_arrow_raw.trim_start();
+    let after_arrow_trim_offset = after_arrow_raw.len() - after_arrow.len();
+    
+    // Find the position of => or {, whichever comes first
+    let arrow_arrow_pos = after_arrow.find("=>").unwrap_or(after_arrow.len());
+    let brace_pos = after_arrow.find('{').unwrap_or(after_arrow.len());
+    let delimiter_pos = arrow_arrow_pos.min(brace_pos);
+    
+    let type_text = after_arrow[..delimiter_pos].trim();
+    let return_type = parse_type_annotation_from_text(type_text, span)?;
+    
+    // Calculate the offset where the body starts (after "-> type " or "-> type=>" or "-> type{")
+    // This is: trim_offset + arrow_pos + 2 (for "->") + after_arrow_trim_offset + delimiter_pos
+    let body_start_offset = trim_offset + arrow_pos + 2 + after_arrow_trim_offset + delimiter_pos;
+    
+    Ok((return_type, body_start_offset))
+}
+
 // ============================================================================
 // Block Parsing Helpers
 // ============================================================================
@@ -374,6 +404,47 @@ fn parse_function_arguments(
                 let type_pair = arg_inner.next()
                     .ok_or_else(|| error_at_span(arg_span, "Function argument missing type annotation".to_string()))?;
                 let kind = build_type_annotation(type_pair)?;
+                arguments.push(Argument { identifier: id, kind });
+            }
+        }
+    }
+    Ok(arguments)
+}
+
+/// Parses closure arguments from text (supports identifiers and _ placeholders)
+fn parse_closure_arguments(
+    args_text: &str,
+    span: pest::Span,
+) -> Result<Vec<crate::core::ast::Argument>, pest::error::Error<Rule>> {
+    use crate::core::ast::Argument;
+    
+    let mut args_pairs = CantaLoopParser::parse(Rule::closure_args, args_text)
+        .map_err(|e| error_at_span(span, format!("Failed to parse closure arguments: {}", e)))?;
+    
+    let mut arguments = Vec::new();
+    if let Some(args_pair) = args_pairs.next() {
+        for arg_pair in args_pair.into_inner() {
+            if arg_pair.as_rule() == Rule::closure_arg {
+                let arg_span = arg_pair.as_span();
+                let mut arg_inner = arg_pair.into_inner();
+                
+                // Get identifier or placeholder
+                let first = arg_inner.next()
+                    .ok_or_else(|| error_at_span(arg_span, "Closure argument missing identifier or placeholder".to_string()))?;
+                
+                let id = match first.as_rule() {
+                    Rule::identifier => first.as_str().to_string(),
+                    Rule::placeholder => "_".to_string(), // Use "_" as the identifier name for placeholders
+                    _ => return Err(error_at_span(arg_span, "Expected identifier or placeholder".to_string())),
+                };
+                
+                // Get optional type annotation
+                let kind = if let Some(type_pair) = arg_inner.next() {
+                    build_type_annotation(type_pair)?
+                } else {
+                    "".to_string() // No type annotation
+                };
+                
                 arguments.push(Argument { identifier: id, kind });
             }
         }
@@ -811,6 +882,77 @@ fn build_loop_expression(pair: Pair<Rule>) -> Result<Expression, pest::error::Er
     })
 }
 
+fn build_closure_expression(pair: Pair<Rule>) -> Result<Expression, pest::error::Error<Rule>> {
+    use crate::core::ast::ClosureBody;
+    
+    let span = pair.as_span();
+    let full_text = span.as_str();
+    
+    if !full_text.starts_with("fn") {
+        return Err(error_at_span(
+            span,
+            format!("Closure expression must start with 'fn', got: {}", 
+                full_text.chars().take(20).collect::<String>())
+        ));
+    }
+    
+    // Find opening paren
+    let paren_start = full_text.find('(')
+        .ok_or_else(|| error_at_span(span, "Closure missing opening paren".to_string()))?;
+    
+    // Find closing paren
+    let paren_end = full_text[paren_start..].find(')')
+        .ok_or_else(|| error_at_span(span, "Closure missing closing paren".to_string()))? + paren_start + 1;
+    
+    // Parse arguments (supports both identifiers and _ placeholders)
+    let args_text = full_text[paren_start + 1..paren_end - 1].trim();
+    let arguments = if args_text.is_empty() {
+        Vec::new()
+    } else {
+        parse_closure_arguments(args_text, span)?
+    };
+    
+    // Extract return type annotation if present
+    let after_paren = &full_text[paren_end..];
+    let (return_type, body_start_offset) = extract_closure_return_type(after_paren, span)?;
+    let body_text_start = &after_paren[body_start_offset..];
+    
+    // Check if there's an arrow or if it goes directly to a block
+    let body = if let Some(arrow_pos) = body_text_start.find("=>") {
+        // Has arrow: fn(args) => body or fn(args) => { body } or fn(args) -> type => body
+        let body_text = body_text_start[arrow_pos + 2..].trim();
+        
+        if body_text.starts_with('{') {
+            // Block body with arrow
+            // Find the actual '{' position in full_text (accounting for trimmed whitespace)
+            let body_start_in_body_text = arrow_pos + 2;
+            let whitespace_skip = body_text_start[body_start_in_body_text..].len() - body_text.len();
+            let block_start = paren_end + body_start_offset + body_start_in_body_text + whitespace_skip;
+            let block_content = extract_braced_content(full_text, block_start, span)?;
+            let body_block = parse_block_from_text(block_content, span)?;
+            ClosureBody::Block(body_block)
+        } else {
+            // Expression body with arrow
+            let body_expr = parse_expression_from_text(body_text, span)?;
+            ClosureBody::Expression(Box::new(body_expr))
+        }
+    } else if body_text_start.trim().starts_with('{') {
+        // No arrow, but has block: fn(args) { body } or fn(args) -> type { body }
+        let block_start = paren_end + body_start_offset + body_text_start.find('{').unwrap();
+        let block_content = extract_braced_content(full_text, block_start, span)?;
+        let body_block = parse_block_from_text(block_content, span)?;
+        ClosureBody::Block(body_block)
+    } else {
+        return Err(error_at_span(span, "Closure must have either '=>' followed by an expression/block, or a block body without arrow".to_string()));
+    };
+    
+    Ok(Expression::Closure {
+        arguments,
+        return_type,
+        body,
+    })
+}
+
 fn build_primary(primary_pair: Pair<Rule>) -> Result<Expression, pest::error::Error<Rule>> {
     match primary_pair.as_rule() {
         Rule::primary => {
@@ -827,9 +969,10 @@ fn build_primary(primary_pair: Pair<Rule>) -> Result<Expression, pest::error::Er
                 Rule::array_literal => build_array_literal(base_pair),
                 Rule::expression => Ok(Expression::Group(Box::new(build_expression(base_pair)?))),
                 Rule::identifier => build_identifier_expr(base_pair),
-                Rule::call_expression => build_call_expression(base_pair),
                 Rule::loop_expression => build_loop_expression(base_pair),
+                Rule::closure_expression | Rule::atomic_closure_expression => build_closure_expression(base_pair),
                 Rule::member_access => {
+                    let span = base_pair.as_span();
                     let mut member_inner = base_pair.into_inner();
                     let first = member_inner.next().unwrap();
                     let mut identifiers = vec![first.as_str().to_string()];
@@ -837,12 +980,26 @@ fn build_primary(primary_pair: Pair<Rule>) -> Result<Expression, pest::error::Er
                         identifiers.push(id_pair.as_str().to_string());
                     }
                     // Build member access: utils.add becomes MemberAccess(Identifier("utils"), "add")
-                    let object = Box::new(Expression::Identifier(identifiers[0].clone()));
-                    let member = identifiers[1..].join(".");
-                    Ok(Expression::MemberAccess {
-                        object,
-                        member,
-                    })
+                    // For field access like p.x, we'll use FieldAccess instead
+                    if identifiers.len() == 2 {
+                        // Single field access: p.x -> FieldAccess(p, "x")
+                        let object_expr = parse_expression_from_text(&identifiers[0], span)?;
+                        Ok(Expression::FieldAccess {
+                            object: Box::new(object_expr),
+                            field: identifiers[1].clone(),
+                        })
+                    } else {
+                        // Multi-level member access: utils.add -> MemberAccess(Identifier("utils"), "add")
+                        let object = Box::new(Expression::Identifier(identifiers[0].clone()));
+                        let member = identifiers[1..].join(".");
+                        Ok(Expression::MemberAccess {
+                            object,
+                            member,
+                        })
+                    }
+                }
+                Rule::struct_literal => {
+                    build_struct_literal(base_pair)
                 }
                 // Handle parenthesized expressions
                 // When we have "(" ~ expression ~ ")", Pest might structure it differently
@@ -870,8 +1027,8 @@ fn build_primary(primary_pair: Pair<Rule>) -> Result<Expression, pest::error::Er
         Rule::array_literal => build_array_literal(primary_pair),
         Rule::expression => Ok(Expression::Group(Box::new(build_expression(primary_pair)?))),
         Rule::identifier => build_identifier_expr(primary_pair),
-        Rule::call_expression => build_call_expression(primary_pair),
         Rule::loop_expression => build_loop_expression(primary_pair),
+        Rule::closure_expression | Rule::atomic_closure_expression => build_closure_expression(primary_pair),
         Rule::atom => {
             // Pratt parser might pass atom directly
             build_atom(primary_pair)
@@ -1738,6 +1895,9 @@ fn build_statement(pair: Pair<Rule>) -> Result<Statement, pest::error::Error<Rul
         Rule::use_statement => {
             build_use_statement(statement_inner)
         }
+        Rule::struct_statement => {
+            build_struct_statement(statement_inner)
+        }
         _ => unreachable!("unexpected rule in build_statement: {:?}, text: {:?}", statement_inner.as_rule(), statement_inner.as_str()),
     }
 }
@@ -1841,4 +2001,136 @@ fn build_import_items(pair: Pair<Rule>) -> Result<ImportSelector, pest::error::E
     }
     
     Err(error_at_span(span, "Invalid import items".to_string()))
+}
+
+fn build_struct_statement(pair: Pair<Rule>) -> Result<Statement, pest::error::Error<Rule>> {
+    use crate::core::ast::Statement;
+    
+    let span = pair.as_span();
+    let text = pair.as_str();
+    
+    // Check for pub visibility
+    let pub_visibility = text.trim_start().starts_with("pub");
+    let struct_keyword = if pub_visibility { "pub struct " } else { "struct " };
+    
+    // Extract identifier after "struct " or "pub struct "
+    let identifier = extract_identifier_after_keyword(text, struct_keyword, span, &['{'])?;
+    
+    // Find opening brace
+    let brace_start = find_opening_brace(text, span, "Struct")?;
+    
+    // Extract struct fields content
+    let fields_content = extract_braced_content(text, brace_start, span)?;
+    
+    // Parse struct fields
+    let fields = if fields_content.trim().is_empty() {
+        Vec::new()
+    } else {
+        // Trim the content to handle leading/trailing whitespace
+        parse_struct_fields(fields_content.trim(), span)?
+    };
+    
+    Ok(Statement::Struct {
+        name: identifier,
+        fields,
+        pub_visibility,
+    })
+}
+
+fn parse_struct_fields(
+    fields_text: &str,
+    span: pest::Span,
+) -> Result<Vec<(String, String)>, pest::error::Error<Rule>> {
+    // Trim the fields text to remove leading/trailing whitespace
+    let trimmed = fields_text.trim();
+    let mut parse_result = CantaLoopParser::parse(Rule::struct_fields, trimmed)
+        .map_err(|e| error_at_span(span, format!("Failed to parse struct fields: {}", e)))?;
+    
+    let mut fields = Vec::new();
+    if let Some(fields_pair) = parse_result.next() {
+        for field_pair in fields_pair.into_inner() {
+            if field_pair.as_rule() == Rule::struct_field {
+                let field_span = field_pair.as_span();
+                let mut field_inner = field_pair.into_inner();
+                let field_name = field_inner.next()
+                    .ok_or_else(|| error_at_span(field_span, "Struct field missing identifier".to_string()))?
+                    .as_str()
+                    .to_string();
+                let type_pair = field_inner.next()
+                    .ok_or_else(|| error_at_span(field_span, "Struct field missing type annotation".to_string()))?;
+                let type_annotation = build_type_annotation(type_pair)?;
+                fields.push((field_name, type_annotation));
+            }
+        }
+    }
+    
+    Ok(fields)
+}
+
+fn build_struct_literal(pair: Pair<Rule>) -> Result<Expression, pest::error::Error<Rule>> {
+    use crate::core::ast::Expression;
+    
+    let span = pair.as_span();
+    let text = pair.as_str();
+    
+    // Find the struct name (identifier before "{")
+    let brace_start = find_opening_brace(text, span, "Struct literal")?;
+    let struct_name = text[..brace_start].trim().to_string();
+    
+    // Extract struct initialization fields content
+    let fields_content = extract_braced_content(text, brace_start, span)?;
+    
+    // Parse struct initialization fields
+    let fields = if fields_content.trim().is_empty() {
+        Vec::new()
+    } else {
+        // Trim the content to handle leading/trailing whitespace
+        parse_struct_init_fields(fields_content.trim(), span)?
+    };
+    
+    Ok(Expression::StructInit {
+        struct_name,
+        fields,
+    })
+}
+
+fn parse_struct_init_fields(
+    fields_text: &str,
+    span: pest::Span,
+) -> Result<Vec<(String, Expression)>, pest::error::Error<Rule>> {
+    // Trim the fields text to remove leading/trailing whitespace
+    let trimmed = fields_text.trim();
+    let mut parse_result = CantaLoopParser::parse(Rule::struct_init_fields, trimmed)
+        .map_err(|e| error_at_span(span, format!("Failed to parse struct init fields: {}", e)))?;
+    
+    let mut fields = Vec::new();
+    if let Some(fields_pair) = parse_result.next() {
+        for field_pair in fields_pair.into_inner() {
+            if field_pair.as_rule() == Rule::struct_init_field {
+                let field_span = field_pair.as_span();
+                let field_text = field_pair.as_str();
+                
+                // Since expression is a silent rule, we need to extract it manually from the text
+                // Format: identifier ~ WHITESPACE* ~ ":" ~ WHITESPACE* ~ expression
+                // Find the colon to split identifier from expression
+                let colon_pos = field_text.find(':')
+                    .ok_or_else(|| error_at_span(field_span, "Struct init field missing ':' separator".to_string()))?;
+                
+                // Extract identifier (everything before the colon)
+                let identifier_text = field_text[..colon_pos].trim();
+                let field_name = identifier_text.to_string();
+                
+                // Extract expression (everything after the colon)
+                let expr_text = field_text[colon_pos + 1..].trim();
+                if expr_text.is_empty() {
+                    return Err(error_at_span(field_span, "Struct init field missing expression".to_string()));
+                }
+                
+                let expression = parse_expression_from_text(expr_text, field_span)?;
+                fields.push((field_name, expression));
+            }
+        }
+    }
+    
+    Ok(fields)
 }

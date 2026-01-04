@@ -8,11 +8,11 @@ statement_with_semicolon = { !("fn" ~ WHITESPACE) ~ !(("pub" ~ WHITESPACE+) ~ "f
 maybe_assign = { identifier ~ WHITESPACE* ~ "=" }
 maybe_assign_increment = { identifier ~ WHITESPACE* ~ "+=" }
 maybe_assign_decrement = { identifier ~ WHITESPACE* ~ "-=" }
-statement_without_semicolon = { function_statement | if_statement | pattern_match_statement | loop_statement | while_statement | for_statement }
+statement_without_semicolon = { function_statement | struct_statement | if_statement | pattern_match_statement | loop_statement | while_statement | for_statement }
 statement = { statement_with_semicolon | statement_without_semicolon }
 
 // Keywords - used for negative lookahead to prevent keywords from being identifiers
-keyword = _{ "fn" ~ !ASCII_ALPHANUMERIC | "if" ~ !ASCII_ALPHANUMERIC | "else" ~ !ASCII_ALPHANUMERIC | "elseif" ~ !ASCII_ALPHANUMERIC | "match" ~ !ASCII_ALPHANUMERIC | "return" ~ !ASCII_ALPHANUMERIC | "let" ~ !ASCII_ALPHANUMERIC | "true" ~ !ASCII_ALPHANUMERIC | "false" ~ !ASCII_ALPHANUMERIC | "loop" ~ !ASCII_ALPHANUMERIC | "while" ~ !ASCII_ALPHANUMERIC | "for" ~ !ASCII_ALPHANUMERIC | "in" ~ !ASCII_ALPHANUMERIC | "break" ~ !ASCII_ALPHANUMERIC | "continue" ~ !ASCII_ALPHANUMERIC | "use" ~ !ASCII_ALPHANUMERIC | "mod" ~ !ASCII_ALPHANUMERIC | "pub" ~ !ASCII_ALPHANUMERIC | "const" ~ !ASCII_ALPHANUMERIC }
+keyword = _{ "fn" ~ !ASCII_ALPHANUMERIC | "if" ~ !ASCII_ALPHANUMERIC | "else" ~ !ASCII_ALPHANUMERIC | "elseif" ~ !ASCII_ALPHANUMERIC | "match" ~ !ASCII_ALPHANUMERIC | "return" ~ !ASCII_ALPHANUMERIC | "let" ~ !ASCII_ALPHANUMERIC | "true" ~ !ASCII_ALPHANUMERIC | "false" ~ !ASCII_ALPHANUMERIC | "loop" ~ !ASCII_ALPHANUMERIC | "while" ~ !ASCII_ALPHANUMERIC | "for" ~ !ASCII_ALPHANUMERIC | "in" ~ !ASCII_ALPHANUMERIC | "break" ~ !ASCII_ALPHANUMERIC | "continue" ~ !ASCII_ALPHANUMERIC | "use" ~ !ASCII_ALPHANUMERIC | "mod" ~ !ASCII_ALPHANUMERIC | "pub" ~ !ASCII_ALPHANUMERIC | "const" ~ !ASCII_ALPHANUMERIC | "struct" ~ !ASCII_ALPHANUMERIC }
 
 expression_statement = { !("fn" ~ WHITESPACE) ~ !("return" ~ WHITESPACE) ~ !("let" ~ WHITESPACE) ~ !maybe_assign ~ !maybe_assign_increment ~ !maybe_assign_decrement ~ expression }
 let_statement = ${ ("pub" ~ WHITESPACE+)? ~ "let" ~ WHITESPACE+ ~ identifier ~ (WHITESPACE* ~ ":" ~ WHITESPACE* ~ type_annotation)? ~ WHITESPACE* ~ "=" ~ WHITESPACE* ~ expression }
@@ -50,6 +50,14 @@ mod_statement = ${ "mod" ~ WHITESPACE+ ~ identifier }
 function_statement = ${
     ("pub" ~ WHITESPACE+)? ~ "fn" ~ WHITESPACE+ ~ identifier ~ WHITESPACE* ~ "(" ~ WHITESPACE* ~ function_args? ~ WHITESPACE* ~ ")" ~ WHITESPACE* ~ (return_type_annotation ~ WHITESPACE*)? ~ braced_block
 }
+
+// Struct declaration
+struct_statement = ${
+    ("pub" ~ WHITESPACE+)? ~ "struct" ~ WHITESPACE+ ~ identifier ~ WHITESPACE* ~ "{" ~ WHITESPACE* ~ struct_fields? ~ WHITESPACE* ~ "}"
+}
+
+struct_fields = { struct_field ~ (WHITESPACE* ~ "," ~ WHITESPACE* ~ struct_field)* }
+struct_field = { identifier ~ WHITESPACE* ~ ":" ~ WHITESPACE* ~ type_annotation }
 
 return_type_annotation = { "->" ~ WHITESPACE+ ~ type_annotation }
 
@@ -95,9 +103,25 @@ loop_block_char = { !"}" ~ !"{" ~ ANY }
 // Wrap loop_expression as atomic so PEG treats it as indivisible
 atomic_loop_expression = _{ loop_expression }
 
+// --- Closure Expression ---
+// Closure: fn(args) => body, fn(args) => { body }, or fn(args) { body } (block without arrow)
+// Also supports return types: fn(args) -> type => body, fn(args) -> type { body }
+closure_expression = ${ "fn" ~ WHITESPACE* ~ "(" ~ WHITESPACE* ~ closure_args? ~ WHITESPACE* ~ ")" ~ WHITESPACE* ~ (return_type_annotation ~ WHITESPACE*)? ~ (closure_with_arrow | closure_without_arrow) }
+closure_with_arrow = { "=>" ~ WHITESPACE* ~ (closure_body_block | closure_body_expr) }
+closure_without_arrow = { closure_body_block } // Block body without arrow: fn(args) { body }
+closure_args = { closure_arg ~ ("," ~ WHITESPACE* ~ closure_arg)* }
+closure_arg = { (identifier | placeholder) ~ (WHITESPACE* ~ ":" ~ WHITESPACE* ~ type_annotation)? }
+closure_body_block = { braced_block }
+closure_body_expr = { expression }
+// Wrap closure_expression as atomic so PEG treats it as indivisible
+atomic_closure_expression = _{ closure_expression }
+
 // --- Primary Expressions ---
 member_access = { identifier ~ ("." ~ identifier)+ }
-primary   = { value | call_expression | atomic_loop_expression | member_access | identifier | "(" ~ expression ~ ")" | array_literal }
+struct_literal = ${ identifier ~ WHITESPACE* ~ "{" ~ WHITESPACE* ~ struct_init_fields? ~ WHITESPACE* ~ "}" }
+struct_init_fields = { struct_init_field ~ (WHITESPACE* ~ "," ~ WHITESPACE* ~ struct_init_field)* }
+struct_init_field = { identifier ~ WHITESPACE* ~ ":" ~ WHITESPACE* ~ expression }
+primary   = { value | atomic_loop_expression | atomic_closure_expression | struct_literal | member_access | identifier | "(" ~ expression ~ ")" | array_literal }
 
 // --- Atom & Expression ---
 atom = { primary ~ (WHITESPACE* ~ postfix)* }
@@ -147,7 +171,7 @@ placeholder = { "_" }
 value = { number | string | boolean | array_literal }
 array_literal = ${ "[" ~ WHITESPACE* ~ expression_list? ~ WHITESPACE* ~ "]" }
 
-identifier = @{ !("fn" ~ (WHITESPACE | !(ASCII_ALPHANUMERIC | "_"))) ~ !("if" ~ (WHITESPACE | !(ASCII_ALPHANUMERIC | "_"))) ~ !("else" ~ (WHITESPACE | !(ASCII_ALPHANUMERIC | "_"))) ~ !("elseif" ~ (WHITESPACE | !(ASCII_ALPHANUMERIC | "_"))) ~ !("match" ~ (WHITESPACE | !(ASCII_ALPHANUMERIC | "_"))) ~ !("return" ~ (WHITESPACE | !(ASCII_ALPHANUMERIC | "_"))) ~ !("let" ~ (WHITESPACE | !(ASCII_ALPHANUMERIC | "_"))) ~ !("true" ~ (WHITESPACE | !(ASCII_ALPHANUMERIC | "_"))) ~ !("false" ~ (WHITESPACE | !(ASCII_ALPHANUMERIC | "_"))) ~ !("loop" ~ (WHITESPACE | !(ASCII_ALPHANUMERIC | "_"))) ~ !("while" ~ (WHITESPACE | !(ASCII_ALPHANUMERIC | "_"))) ~ !("for" ~ (WHITESPACE | !(ASCII_ALPHANUMERIC | "_"))) ~ !("in" ~ (WHITESPACE | !(ASCII_ALPHANUMERIC | "_"))) ~ !("break" ~ (WHITESPACE | !(ASCII_ALPHANUMERIC | "_"))) ~ !("continue" ~ (WHITESPACE | !(ASCII_ALPHANUMERIC | "_"))) ~ !("use" ~ (WHITESPACE | !(ASCII_ALPHANUMERIC | "_"))) ~ !("mod" ~ (WHITESPACE | !(ASCII_ALPHANUMERIC | "_"))) ~ !("pub" ~ (WHITESPACE | !(ASCII_ALPHANUMERIC | "_"))) ~ !("const" ~ (WHITESPACE | !(ASCII_ALPHANUMERIC | "_"))) ~ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
+identifier = @{ !("fn" ~ (WHITESPACE | !(ASCII_ALPHANUMERIC | "_"))) ~ !("if" ~ (WHITESPACE | !(ASCII_ALPHANUMERIC | "_"))) ~ !("else" ~ (WHITESPACE | !(ASCII_ALPHANUMERIC | "_"))) ~ !("elseif" ~ (WHITESPACE | !(ASCII_ALPHANUMERIC | "_"))) ~ !("match" ~ (WHITESPACE | !(ASCII_ALPHANUMERIC | "_"))) ~ !("return" ~ (WHITESPACE | !(ASCII_ALPHANUMERIC | "_"))) ~ !("let" ~ (WHITESPACE | !(ASCII_ALPHANUMERIC | "_"))) ~ !("true" ~ (WHITESPACE | !(ASCII_ALPHANUMERIC | "_"))) ~ !("false" ~ (WHITESPACE | !(ASCII_ALPHANUMERIC | "_"))) ~ !("loop" ~ (WHITESPACE | !(ASCII_ALPHANUMERIC | "_"))) ~ !("while" ~ (WHITESPACE | !(ASCII_ALPHANUMERIC | "_"))) ~ !("for" ~ (WHITESPACE | !(ASCII_ALPHANUMERIC | "_"))) ~ !("in" ~ (WHITESPACE | !(ASCII_ALPHANUMERIC | "_"))) ~ !("break" ~ (WHITESPACE | !(ASCII_ALPHANUMERIC | "_"))) ~ !("continue" ~ (WHITESPACE | !(ASCII_ALPHANUMERIC | "_"))) ~ !("use" ~ (WHITESPACE | !(ASCII_ALPHANUMERIC | "_"))) ~ !("mod" ~ (WHITESPACE | !(ASCII_ALPHANUMERIC | "_"))) ~ !("pub" ~ (WHITESPACE | !(ASCII_ALPHANUMERIC | "_"))) ~ !("const" ~ (WHITESPACE | !(ASCII_ALPHANUMERIC | "_"))) ~ !("struct" ~ (WHITESPACE | !(ASCII_ALPHANUMERIC | "_"))) ~ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
 
 number = { digit+ ~ ("." ~ digit*)? }
 string = @{ "\"" ~ (!"\"" ~ ANY)* ~ "\"" }

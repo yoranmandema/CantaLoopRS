@@ -103,7 +103,18 @@ impl<'a> CompileSession<'a> {
     /// ```
     pub fn register_module(&mut self, path: &str, functions: HashMap<String, u32>) {
         self.hir_builder
-            .register_module(path, functions, HashMap::new());
+            .register_module(path, functions, HashMap::new(), HashMap::new());
+    }
+
+    /// Register a module with functions and structs.
+    pub fn register_module_with_structs(
+        &mut self,
+        path: &str,
+        functions: HashMap<String, u32>,
+        structs: HashMap<String, crate::core::hir_lowering::StructDef>,
+    ) {
+        self.hir_builder
+            .register_module(path, functions, HashMap::new(), structs);
     }
 
     /// Get the function ID for a registered function by name.
@@ -113,9 +124,24 @@ impl<'a> CompileSession<'a> {
         self.hir_builder.resolve_function(&self.context, name)
     }
 
+    /// Get the function ID for a native function by name from the context.
+    ///
+    /// This looks up the function directly from native_functions, which is useful
+    /// for stdlib module registration where functions are registered with both
+    /// qualified (e.g., "matrix.add") and unqualified (e.g., "add") names.
+    ///
+    /// Returns None if the function is not found.
+    pub fn get_native_function_id_by_name(&self, name: &str) -> Option<u32> {
+        self.context.native_functions
+            .iter()
+            .find(|native| native.name == name)
+            .map(|native| native.id)
+    }
+
     /// Formats a ValueKind for error messages, handling function/thunk types specially.
     fn format_value_kind_for_error(kind: &ValueKind) -> String {
         match kind {
+            ValueKind::Any => "Any".to_string(),
             ValueKind::Number => "Number".to_string(),
             ValueKind::String => "String".to_string(),
             ValueKind::Boolean => "Boolean".to_string(),
@@ -123,6 +149,7 @@ impl<'a> CompileSession<'a> {
             ValueKind::Function(ty) => ty.clone(),
             ValueKind::Thunk(ty) => ty.clone(),
             ValueKind::Void => "Void".to_string(),
+            ValueKind::Struct(name) => name.clone(),
             ValueKind::Array(inner) => {
                 let inner_str = Self::format_value_kind_for_error(inner);
                 format!("Array<{}>", inner_str)
@@ -199,10 +226,12 @@ impl<'a> CompileSession<'a> {
             (ValueKind::Number, _) => panic!("Constant number should have a Number value"),
             (ValueKind::String, _) => panic!("Constant string should have a String value"),
             (ValueKind::Boolean, _) => panic!("Constant boolean should have a Boolean value"),
+            (ValueKind::Any, _) => panic!("Constant should not have Any kind"),
             (ValueKind::Unknown, _) => panic!("Constant should not have Unknown kind"),
             (ValueKind::Function(_), _) => panic!("Constant should not have Function kind"),
             (ValueKind::Thunk(_), _) => panic!("Constant should not have Thunk kind"),
             (ValueKind::Void, _) => panic!("Constant should not have Void kind"),
+            (ValueKind::Struct(_), _) => panic!("Constant should not have Struct kind"),
             (ValueKind::Array(_), _) => panic!("Constant should not have Array kind"),
         }
     }
@@ -244,7 +273,7 @@ impl<'a> CompileSession<'a> {
 
         // Register module shell – real IDs are filled during unified build
         self.hir_builder
-            .register_module(&module_name, HashMap::new(), HashMap::new());
+            .register_module(&module_name, HashMap::new(), HashMap::new(), HashMap::new());
 
         Ok(module_name)
     }
@@ -374,7 +403,7 @@ impl<'a> CompileSession<'a> {
         let module_name = module_name.ok_or_else(|| "Module file missing 'mod' declaration")?;
 
         // Register empty module shell - pub items will be registered during build_append()
-        hir_builder.register_module(&module_name, HashMap::new(), HashMap::new());
+        hir_builder.register_module(&module_name, HashMap::new(), HashMap::new(), HashMap::new());
 
         Ok(module_name)
     }
@@ -566,7 +595,7 @@ impl<'a> CompileSession<'a> {
         let main_module = "__main__".to_string();
 
         self.hir_builder
-            .register_module(&main_module, HashMap::new(), HashMap::new());
+            .register_module(&main_module, HashMap::new(), HashMap::new(), HashMap::new());
         self.hir_builder.set_current_module(Some(main_module));
 
         let ast = parse_program(&input)

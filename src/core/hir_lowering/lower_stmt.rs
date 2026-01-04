@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 
 use crate::core::ast::{
-    Argument, BinaryOp, Block, CallArgument, Expression, Literal, PostfixOp, Program, Statement,
+    Argument, BinaryOp, Block, CallArgument, ClosureBody, Expression, Literal, PostfixOp, Program, Statement,
     UnaryOp,
 };
 use serde::Serialize;
@@ -14,7 +14,7 @@ use serde::Serialize;
 use super::{
     scopes::{HirBlockContext, ScopeArena, ScopeId},
     Constant, ConstantValue, Function, FunctionDefinition, FunctionSignature, HirAst, HirError,
-    HirExpression, ImportTable, Module, ReducerType, ValueKind, Variable,
+    HirExpression, ImportTable, Module, ReducerType, StructDef, ValueKind, Variable,
 };
 
 // Hashable key for constant deduplication
@@ -99,6 +99,9 @@ pub struct HirBuilder {
 
     /// The current module being processed
     current_module: Option<String>,
+    
+    /// Maps variable_id to function_id for variables that contain closures
+    closure_variables: HashMap<u32, u32>,
 }
 
 impl HirBuilder {
@@ -120,6 +123,7 @@ impl HirBuilder {
             modules: HashMap::new(),
             module_imports: HashMap::new(),
             current_module: None,
+            closure_variables: HashMap::new(),
         }
     }
 
@@ -130,6 +134,7 @@ impl HirBuilder {
             blocks: Vec::new(),
             scopes: ScopeArena::default(),
             functions: HashMap::new(),
+            structs: HashMap::new(),
             module_imports: HashMap::new(),
             imported_constant_values: HashMap::new(),
         };
@@ -145,6 +150,7 @@ impl HirBuilder {
         self.next_var_id = 0;
         self.next_function_id = 0;
         self.constant_map.clear();
+        self.closure_variables.clear();
         self.current_module = None;
     }
 
@@ -156,6 +162,14 @@ impl HirBuilder {
     }
 
     pub fn take_ast(&mut self) -> HirAst {
+        // Before taking the AST, ensure all structs from registered modules are included
+        // This is important for stdlib structs to be available for pretty printing
+        for (_module_path, module) in &self.modules {
+            for (struct_name, struct_def) in &module.structs {
+                // Only add if not already present (avoid overwriting user-defined structs)
+                self.ast.structs.entry(struct_name.clone()).or_insert_with(|| struct_def.clone());
+            }
+        }
         std::mem::take(&mut self.ast)
     }
 
@@ -267,6 +281,7 @@ impl HirBuilder {
 
     fn format_value_kind_for_type(kind: &ValueKind) -> String {
         match kind {
+            ValueKind::Any => "any".to_string(),
             ValueKind::Number => "num".to_string(),
             ValueKind::String => "string".to_string(),
             ValueKind::Boolean => "bool".to_string(),
@@ -278,6 +293,7 @@ impl HirBuilder {
                 let inner_str = Self::format_value_kind_for_type(inner);
                 format!("{}[]", inner_str)
             }
+            ValueKind::Struct(name) => name.clone(),
         }
     }
 
@@ -323,6 +339,7 @@ impl HirBuilder {
 
     fn format_value_kind(kind: &ValueKind) -> String {
         match kind {
+            ValueKind::Any => "Any".to_string(),
             ValueKind::Number => "Number".to_string(),
             ValueKind::String => "String".to_string(),
             ValueKind::Boolean => "Boolean".to_string(),
@@ -330,6 +347,7 @@ impl HirBuilder {
             ValueKind::Function(ty) => ty.clone(),
             ValueKind::Thunk(ty) => ty.clone(),
             ValueKind::Void => "void".to_string(),
+            ValueKind::Struct(name) => name.clone(),
             ValueKind::Array(inner) => {
                 let inner_str = Self::format_value_kind(inner);
                 format!("Array<{}>", inner_str)
@@ -338,7 +356,7 @@ impl HirBuilder {
     }
 
     fn check_type_compatibility(expected: &ValueKind, actual: &ValueKind) -> bool {
-        // Types must match exactly, except Unknown (any) accepts any type
+        // Types must match exactly, except Unknown and Any accept any type
         match (expected, actual) {
             (ValueKind::Number, ValueKind::Number) => true,
             (ValueKind::String, ValueKind::String) => true,
@@ -355,7 +373,9 @@ impl HirBuilder {
                 // Arrays are compatible if their inner types are compatible
                 Self::check_type_compatibility(expected_inner, actual_inner)
             }
+            (ValueKind::Any, _) => true, // Any accepts any type
             (ValueKind::Unknown, _) => true, // Unknown (any) accepts any type
+            (_, ValueKind::Any) => true, // Any is compatible with any expected type
             _ => false,
         }
     }
@@ -508,12 +528,35 @@ impl HirBuilder {
         let first_kind = self.infer_variable_kind(first);
         let second_kind = self.infer_variable_kind(second);
 
-        // Try to extract input/output types
+        // If second expression directly returns an Array (like map/filter), return that
+        if matches!(second_kind, ValueKind::Array(_)) {
+            return second_kind;
+        }
+
+        // Special case: if first is an Array and second is a Thunk that returns Array
+        if matches!(first_kind, ValueKind::Array(_)) {
+            if let Some(second_output) = Self::get_function_output_type(&second_kind) {
+                let output_kind = self.parse_type_string(&second_output);
+                if matches!(output_kind, ValueKind::Array(_)) {
+                    return output_kind;
+                }
+            }
+        }
+
+        // Try to extract input/output types from thunk/function types
         let first_input = Self::get_function_input_type(&first_kind);
         let second_output = Self::get_function_output_type(&second_kind);
 
         match (first_input, second_output) {
             (Some(f_in), Some(g_out)) => {
+                // Check if output type is an Array - if so, return Array directly
+                // This handles cases like array |> map(...) |> filter(...) where
+                // the composition should return an Array, not a Thunk
+                let output_kind = self.parse_type_string(&g_out);
+                if matches!(output_kind, ValueKind::Array(_)) {
+                    return output_kind;
+                }
+                
                 // Both are functions/thunks - compose them
                 // f |> g means g(f(x)), so:
                 // - Input type = input type of f
@@ -597,6 +640,19 @@ impl HirBuilder {
                 invoke,
                 ..
             } => self.infer_function_call_kind(*function_id, *invoke),
+            HirExpression::Closure { function_id } => {
+                // Closure returns a function type
+                if let Some(func) = self.ast.functions.get(function_id) {
+                    let param_types: Vec<String> = func.signature.params.iter()
+                        .map(|p| format!("{:?}", p))
+                        .collect();
+                    let return_type_str = format!("{:?}", func.signature.return_type);
+                    let func_type = format!("({}) -> {}", param_types.join(", "), return_type_str);
+                    ValueKind::Function(func_type)
+                } else {
+                    ValueKind::Unknown
+                }
+            },
             HirExpression::PostfixInvoke { operand, .. } => self.infer_postfix_invoke_kind(operand),
             HirExpression::ComposeThunk { first, second } => {
                 self.infer_compose_thunk_kind(first, second)
@@ -611,6 +667,21 @@ impl HirBuilder {
                     ValueKind::Unknown
                 } else {
                     ValueKind::Unknown
+                }
+            }
+            HirExpression::StructInit { struct_name, .. } => {
+                ValueKind::Struct(struct_name.clone())
+            }
+            HirExpression::FieldAccess { base, field_name } => {
+                // Infer the struct type from the base expression
+                let base_type = self.infer_variable_kind(base);
+                match base_type {
+                    ValueKind::Struct(_) => {
+                        // For now, return Unknown - in a full implementation,
+                        // we'd look up the struct definition and return the field type
+                        ValueKind::Unknown
+                    }
+                    _ => ValueKind::Unknown,
                 }
             }
             HirExpression::Array(elements) => {
@@ -642,11 +713,12 @@ impl HirBuilder {
                 }
             }
             HirExpression::Reducer {
+                array,
                 reducer_type,
                 reducer_args,
                 ..
             } => {
-                // Reducer returns the accumulator type
+                // Reducer returns different types based on reducer type
                 match reducer_type {
                     ReducerType::Sum => ValueKind::Number, // sum always returns number
                     ReducerType::Fold => {
@@ -656,6 +728,32 @@ impl HirBuilder {
                         } else {
                             ValueKind::Unknown
                         }
+                    }
+                    ReducerType::Map => {
+                        // map(fn) returns array of transformed elements
+                        // Infer the return type from the function, but for now return same array type
+                        let array_type = self.infer_variable_kind(array);
+                        match array_type {
+                            ValueKind::Array(inner_type) => {
+                                // For map, we'd ideally infer the return type of the function
+                                // For now, return array with same inner type (will be refined later)
+                                ValueKind::Array(inner_type)
+                            }
+                            _ => ValueKind::Array(Box::new(ValueKind::Unknown)),
+                        }
+                    }
+                    ReducerType::Filter => {
+                        // filter(predicate) returns array of same element type
+                        let array_type = self.infer_variable_kind(array);
+                        match array_type {
+                            ValueKind::Array(inner_type) => ValueKind::Array(inner_type),
+                            _ => ValueKind::Array(Box::new(ValueKind::Unknown)),
+                        }
+                    }
+                    ReducerType::Reduce => {
+                        // reduce(fn) returns the accumulator type (same as fold, but uses first element)
+                        // For now, return Unknown - in practice, this would be the return type of fn
+                        ValueKind::Unknown
                     }
                 }
             }
@@ -675,9 +773,17 @@ impl HirBuilder {
     pub fn resolve_function(&self, ctx: &crate::core::compileSession::CompileContext, name: &str) -> Option<u32> {
         // 1. Imports first
         if let Some(imported_id) = self.resolve_import_in_current_module(name) {
-            if self.ast.functions.contains_key(&imported_id) || (ctx.is_native_function)(imported_id) {
+            // Check if it's a native function OR if it's in ast.functions
+            // Native functions are always callable, even if not in ast.functions
+            if (ctx.is_native_function)(imported_id) {
                 return Some(imported_id);
             }
+            // Also check ast.functions for user-defined functions that were imported
+            if self.ast.functions.contains_key(&imported_id) {
+                return Some(imported_id);
+            }
+            // If imported but neither native nor in ast.functions, it's invalid
+            return None;
         }
 
         // 2. Find function by name
@@ -745,17 +851,25 @@ impl HirBuilder {
     /// * `path` - Dot-separated module path (e.g., "math.utils")
     /// * `functions` - Map of function names to their function IDs
     /// * `constants` - Map of constant names to their constant IDs
+    /// * `structs` - Map of struct names to their struct definitions
     pub fn register_module(
         &mut self,
         path: &str,
         functions: HashMap<String, u32>,
         constants: HashMap<String, u32>,
+        structs: HashMap<String, StructDef>,
     ) {
+        // Also add structs to ast.structs so they're available for type registry and pretty printing
+        for (struct_name, struct_def) in &structs {
+            self.ast.structs.insert(struct_name.clone(), struct_def.clone());
+        }
+        
         self.modules.insert(
             path.to_string(),
             Module {
                 functions,
                 constants,
+                structs,
             },
         );
     }
@@ -770,6 +884,7 @@ impl HirBuilder {
                 Module {
                     functions: module.functions.clone(),
                     constants: module.constants.clone(),
+                    structs: module.structs.clone(),
                 },
             );
         }
@@ -800,30 +915,38 @@ impl HirBuilder {
 
         match selector {
             crate::core::ast::ImportSelector::Single(name) => {
-                // Check functions first, then constants
+                // Check functions first, then constants, then structs
                 if let Some(func_id) = module.functions.get(name) {
                     imports.insert(name.clone(), *func_id);
                 } else if let Some(const_id) = module.constants.get(name) {
                     // Constants are stored as constant IDs
                     imports.insert(name.clone(), *const_id);
+                } else if module.structs.contains_key(name) {
+                    // Structs are handled separately - they don't need to be in the import table
+                    // The struct handling code (after resolve_import) will copy them to ast.structs
+                    // So we just skip them here without error
                 } else {
                     return Err(HirError::TypeError(format!(
-                        "Function or constant '{}' not found in module '{}'",
+                        "Function, constant, or struct '{}' not found in module '{}'",
                         name, module_path
                     )));
                 }
             }
             crate::core::ast::ImportSelector::Multiple(names) => {
                 for name in names {
-                    // Check functions first, then constants
+                    // Check functions first, then constants, then structs
                     if let Some(func_id) = module.functions.get(name) {
                         imports.insert(name.clone(), *func_id);
                     } else if let Some(const_id) = module.constants.get(name) {
                         // Constants are stored as variable IDs, import them as such
                         imports.insert(name.clone(), *const_id);
+                    } else if module.structs.contains_key(name) {
+                        // Structs are handled separately - they don't need to be in the import table
+                        // The struct handling code (after resolve_import) will copy them to ast.structs
+                        // So we just skip them here without error
                     } else {
                         return Err(HirError::TypeError(format!(
-                            "Function or constant '{}' not found in module '{}'",
+                            "Function, constant, or struct '{}' not found in module '{}'",
                             name, module_path
                         )));
                     }
@@ -844,20 +967,28 @@ impl HirBuilder {
     }
 
     /// Parse a type string into a structured ValueKind
-    /// Supports: simple types (num, str, bool), array types ([num], [string]),
+    /// Supports: simple types (num, str, bool), array types ([num], [string], Array(Any)),
     /// function types (num -> num), and thunk types (num ~> num)
     fn parse_type_string(&self, type_str: &str) -> ValueKind {
         let trimmed = type_str.trim();
 
-        // Check for array type (starts with "[")
+        // Check for array type (starts with "[" or "Array(")
+        // Must check BEFORE thunk/function checks since Array(...) could be mistaken for other patterns
         if trimmed.starts_with('[') && trimmed.ends_with(']') {
             // Extract inner type: [num] -> num
             let inner = &trimmed[1..trimmed.len() - 1].trim();
             let inner_kind = self.parse_type_string(inner);
             return ValueKind::Array(Box::new(inner_kind));
         }
+        // Check for Array(...) format (used in function signatures)
+        if trimmed.starts_with("Array(") && trimmed.ends_with(')') {
+            // Extract inner type: Array(Any) -> Any
+            let inner = &trimmed[6..trimmed.len() - 1].trim();
+            let inner_kind = self.parse_type_string(inner);
+            return ValueKind::Array(Box::new(inner_kind));
+        }
 
-        // Check for thunk type (contains "~>") - check this first since it's more specific
+        // Check for thunk type (contains "~>")
         if trimmed.contains("~>") {
             // Normalize the type string (remove extra whitespace, normalize parentheses)
             let normalized = Self::normalize_type_string(trimmed);
@@ -1153,10 +1284,17 @@ impl HirBuilder {
     fn parse_type_string_static(type_str: &str) -> ValueKind {
         let trimmed = type_str.trim();
 
-        // Check for array type (starts with "[")
+        // Check for array type (starts with "[" or "Array(")
         if trimmed.starts_with('[') && trimmed.ends_with(']') {
             // Extract inner type: [num] -> num
             let inner = &trimmed[1..trimmed.len() - 1].trim();
+            let inner_kind = Self::parse_type_string_static(inner);
+            return ValueKind::Array(Box::new(inner_kind));
+        }
+        // Check for Array(...) format (used in function signatures)
+        if trimmed.starts_with("Array(") && trimmed.ends_with(')') {
+            // Extract inner type: Array(Any) -> Any
+            let inner = &trimmed[6..trimmed.len() - 1].trim();
             let inner_kind = Self::parse_type_string_static(inner);
             return ValueKind::Array(Box::new(inner_kind));
         }
@@ -1404,6 +1542,7 @@ impl HirBuilder {
                     .or_insert_with(|| Module {
                         functions: HashMap::new(),
                         constants: HashMap::new(),
+                        structs: HashMap::new(),
                     })
                     .constants
                     .insert(identifier.clone(), const_id);
@@ -1703,6 +1842,12 @@ impl HirBuilder {
         }
 
         let slot = self.init_var(&identifier, expected_kind);
+        
+        // Track if this variable contains a closure
+        if let HirExpression::Closure { function_id } = expr {
+            self.closure_variables.insert(slot, function_id);
+        }
+        
         Ok(HirStmt::Assign { slot, value: expr })
     }
 
@@ -1882,6 +2027,7 @@ impl HirBuilder {
                     .or_insert_with(|| Module {
                         functions: HashMap::new(),
                         constants: HashMap::new(),
+                        structs: HashMap::new(),
                     })
                     .functions
                     .insert(identifier.clone(), func_id);
@@ -2174,6 +2320,9 @@ impl HirBuilder {
             Statement::Break { expression } => self.process_break_statement(ctx, expression),
             Statement::Continue => self.process_continue_statement(),
             Statement::Expression(expression) => self.process_expression_statement(ctx, expression),
+            Statement::Struct { name, fields, pub_visibility } => {
+                self.process_struct_statement(name, fields, pub_visibility)
+            }
             Statement::Use { path, selector } => {
                 // Ensure we're inside a module
                 if self.current_module.is_none() {
@@ -2187,7 +2336,55 @@ impl HirBuilder {
                         .insert("__main__".to_string(), HashMap::new());
                 }
 
+                let module_path = path.join(".");
+                let module = self
+                    .modules
+                    .get(&module_path)
+                    .ok_or_else(|| HirError::TypeError(format!("Module '{}' not found", module_path)))?;
+
                 let imports = self.resolve_import(&path, &selector)?;
+
+                // Handle struct imports by copying struct definitions to HirAst.structs
+                match selector {
+                    crate::core::ast::ImportSelector::Single(name) => {
+                        if let Some(struct_def) = module.structs.get(&name) {
+                            // Copy struct definition to HirAst.structs
+                            if self.ast.structs.contains_key(&name) {
+                                return Err(HirError::TypeError(format!(
+                                    "Struct '{}' already defined",
+                                    name
+                                )));
+                            }
+                            self.ast.structs.insert(name.clone(), struct_def.clone());
+                        }
+                    }
+                    crate::core::ast::ImportSelector::Multiple(names) => {
+                        for name in names {
+                            if let Some(struct_def) = module.structs.get(&name) {
+                                // Copy struct definition to HirAst.structs
+                                if self.ast.structs.contains_key(&name) {
+                                    return Err(HirError::TypeError(format!(
+                                        "Struct '{}' already defined",
+                                        name
+                                    )));
+                                }
+                                self.ast.structs.insert(name.clone(), struct_def.clone());
+                            }
+                        }
+                    }
+                    crate::core::ast::ImportSelector::Wildcard => {
+                        // Import all structs from the module
+                        for (name, struct_def) in &module.structs {
+                            if self.ast.structs.contains_key(name) {
+                                return Err(HirError::TypeError(format!(
+                                    "Struct '{}' already defined",
+                                    name
+                                )));
+                            }
+                            self.ast.structs.insert(name.clone(), struct_def.clone());
+                        }
+                    }
+                }
 
                 for (name, id) in imports {
                     // Check for duplicate imports within THIS module only
@@ -2316,17 +2513,20 @@ impl HirBuilder {
                 operand,
                 args: existing_args,
             } => {
+                let has_inner_args = existing_args.is_some();
                 let mut processed_args = Vec::new();
-                if let Some(arg_list) = existing_args {
-                    processed_args.extend(arg_list);
+                if let Some(ref arg_list) = existing_args {
+                    processed_args.extend(arg_list.clone());
                 }
                 processed_args.extend(self.process_invoke_args(ctx, invoke_args)?);
+                // Preserve the args structure: if inner had Some([]), keep it as Some([])
+                // This is important for clos()! where clos() has empty args
                 Ok(HirExpression::PostfixInvoke {
                     operand,
-                    args: if processed_args.is_empty() {
-                        None
-                    } else {
+                    args: if has_inner_args || !processed_args.is_empty() {
                         Some(processed_args)
+                    } else {
+                        None
                     },
                 })
             }
@@ -2427,11 +2627,12 @@ impl HirBuilder {
         member: String,
     ) -> Result<HirExpression, HirError> {
         // The object should be an identifier (module name)
+        // We extract the name directly without processing it, since modules aren't values
         let module_name = match object {
             Expression::Identifier(name) => name,
             _ => {
                 return Err(HirError::TypeError(format!(
-                    "Member access object must be an identifier, got: {:?}",
+                    "Member access object must be an identifier (module name), got: {:?}",
                     object
                 )));
             }
@@ -2445,7 +2646,8 @@ impl HirBuilder {
 
         // Look up the member in the module
         if let Some(function_id) = module.functions.get(&member) {
-            // It's a function
+            // It's a function - return a FunctionCall with empty args
+            // The actual arguments will be added by process_function_call_expression
             Ok(HirExpression::FunctionCall {
                 function_id: *function_id,
                 args: Vec::new(),
@@ -2455,6 +2657,12 @@ impl HirBuilder {
             // It's a constant - return the constant ID directly
             // The constant ID is stored in modules.constants (not variable slot ID)
             Ok(HirExpression::Constant(*constant_id))
+        } else if module.structs.contains_key(&member) {
+            // It's a struct type - structs can't be used as values, only as types
+            Err(HirError::TypeError(format!(
+                "'{}' is a struct type in module '{}' and cannot be used as a value. Use it in type annotations or struct initialization.",
+                member, module_name
+            )))
         } else {
             // TODO: Also check variables
             Err(HirError::TypeError(format!(
@@ -2487,7 +2695,7 @@ impl HirBuilder {
             }
         }
 
-        if let Some(slot) = self.resolve_var(&identifier) {
+        if let Some(slot) = self.resolve_var_aggressive(&identifier) {
             return Ok(HirExpression::Identifier(slot));
         }
         if let Some(const_id) = self.resolve_const(&identifier) {
@@ -2502,9 +2710,19 @@ impl HirBuilder {
                 args: Vec::new(),
                 invoke: false,
             });
-        } else {
-            Err(HirError::UnknownVariable(identifier))
         }
+
+        // If we get here, the identifier is not a variable, constant, function, or import
+        // Check if it's a module name - if so, provide a helpful error message
+        if self.modules.contains_key(&identifier) {
+            return Err(HirError::TypeError(format!(
+                "'{}' is a module name and cannot be used as a value. Use '{}.function_name(...)' to call module functions.",
+                identifier, identifier
+            )));
+        }
+
+        // The identifier is not a variable, constant, function, import, or module
+        Err(HirError::UnknownVariable(identifier))
     }
 
     /// Process an infix (binary) expression
@@ -2564,6 +2782,44 @@ impl HirBuilder {
                     return self.process_function_call_invoke(ctx, callee, fc_args, args);
                 }
 
+                // Special handling: if lhs is a MemberAccess (e.g., matrix.add), handle it directly
+                // This avoids processing the module name as an identifier
+                if let Expression::MemberAccess { object, member } = lhs {
+                    // Extract module name directly without processing it as an identifier
+                    let module_name = match *object {
+                        Expression::Identifier(name) => name,
+                        other => {
+                            return Err(HirError::TypeError(format!(
+                                "Member access object must be an identifier (module name), got: {:?}",
+                                other
+                            )));
+                        }
+                    };
+
+                    // Look up the module and get the function ID
+                    let function_id = {
+                        let module = self
+                            .modules
+                            .get(&module_name)
+                            .ok_or_else(|| HirError::TypeError(format!("Module '{}' not found", module_name)))?;
+
+                        *module.functions.get(&member)
+                            .ok_or_else(|| HirError::TypeError(format!(
+                                "Function '{}' not found in module '{}'",
+                                member, module_name
+                            )))?
+                    };
+
+                    // Process invoke arguments (now that we've released the borrow on self.modules)
+                    let processed_args = self.process_invoke_args(ctx, args)?;
+                    
+                    return Ok(HirExpression::FunctionCall {
+                        function_id,
+                        args: processed_args,
+                        invoke: true,
+                    });
+                }
+
                 // If lhs is an Identifier, check if it's a variable first
                 if let Expression::Identifier(identifier) = lhs {
                     return self.process_identifier_invoke(ctx, identifier, args);
@@ -2608,12 +2864,113 @@ impl HirBuilder {
         callee: Expression,
         arguments: Vec<Expression>,
     ) -> Result<HirExpression, HirError> {
-        // Identifier callee: MUST be a function
+        // Identifier callee: Check if it's a function name OR a variable with function type
         if let Expression::Identifier(identifier_name) = callee {
-            let function_id = self.resolve_function(ctx, &identifier_name).ok_or_else(|| {
-                HirError::TypeError(format!("'{}' is not a callable function", identifier_name))
-            })?;
+            // First, try to resolve as a variable with function/thunk type (closures should be callable like functions)
+            if let Some(var_id) = self.resolve_var_aggressive(&identifier_name) {
+                let var_expr = HirExpression::Identifier(var_id);
+                let var_kind = self.infer_variable_kind(&var_expr);
+                match var_kind {
+                    ValueKind::Function(func_type_str) | ValueKind::Thunk(func_type_str) => {
+                        // Variable contains a function value - process arguments first
+                        let processed_args = arguments
+                            .into_iter()
+                            .map(|arg| self.process_expression(ctx, arg))
+                            .collect::<Result<Vec<_>, _>>()?;
+                        
+                        // Perform type checking - parse the function type to get parameter types
+                        if let Some((param_types, _, _)) = Self::parse_callable_type(&func_type_str) {
+                            // Check argument count
+                            if processed_args.len() != param_types.len() {
+                                return Err(HirError::TypeError(format!(
+                                    "Function '{}' expects {} argument(s), but {} were provided",
+                                    identifier_name, param_types.len(), processed_args.len()
+                                )));
+                            }
+                            
+                            // Check argument types (skip if Any or Unknown to allow flexibility)
+                            for (i, (param_type_str, arg_expr)) in param_types.iter().zip(processed_args.iter()).enumerate() {
+                                let expected_kind = Self::parse_type_string_static(param_type_str);
+                                // Skip type checking for Any/Unknown parameters
+                                if matches!(expected_kind, ValueKind::Any | ValueKind::Unknown) {
+                                    continue;
+                                }
+                                
+                                let actual_kind = self.infer_variable_kind(arg_expr);
+                                
+                                if !Self::check_type_compatibility(&expected_kind, &actual_kind) {
+                                    return Err(HirError::TypeError(format!(
+                                        "Type mismatch in argument {} of function '{}': expected {}, got {}",
+                                        i + 1, identifier_name,
+                                        Self::format_value_kind_for_type(&expected_kind),
+                                        Self::format_value_kind_for_type(&actual_kind)
+                                    )));
+                                }
+                            }
+                        }
+                        
+                        // Create a thunk from the function value
+                        return Ok(HirExpression::PostfixInvoke {
+                            operand: Box::new(var_expr),
+                            args: Some(processed_args),
+                        });
+                    }
+                    _ => {
+                        // Not a function type - fall through to check if it's a function name
+                    }
+                }
+            }
+            
+            // Try to resolve as a function name
+            if let Some(function_id) = self.resolve_function(ctx, &identifier_name) {
+                let args = arguments
+                    .into_iter()
+                    .map(|arg| self.process_expression(ctx, arg))
+                    .collect::<Result<Vec<_>, _>>()?;
 
+                return Ok(HirExpression::FunctionCall {
+                    function_id,
+                    args,
+                    invoke: false,
+                });
+            }
+            
+            // If we get here, the identifier is not a variable with function type or a function name
+            // Return an error - the identifier is not callable
+            return Err(HirError::UnknownVariable(format!(
+                "'{}' is not a callable function or variable",
+                identifier_name
+            )));
+        }
+
+        // Member access callee (e.g., matrix.add): handle directly to avoid processing module name as identifier
+        if let Expression::MemberAccess { object, member } = callee {
+            // Extract module name directly without processing it as an identifier
+            let module_name = match *object {
+                Expression::Identifier(name) => name,
+                other => {
+                    return Err(HirError::TypeError(format!(
+                        "Member access object must be an identifier (module name), got: {:?}",
+                        other
+                    )));
+                }
+            };
+
+            // Look up the module and get the function ID
+            let function_id = {
+                let module = self
+                    .modules
+                    .get(&module_name)
+                    .ok_or_else(|| HirError::TypeError(format!("Module '{}' not found", module_name)))?;
+
+                *module.functions.get(&member)
+                    .ok_or_else(|| HirError::TypeError(format!(
+                        "Function '{}' not found in module '{}'",
+                        member, module_name
+                    )))?
+            };
+
+            // Process arguments (now that we've released the borrow on self.modules)
             let args = arguments
                 .into_iter()
                 .map(|arg| self.process_expression(ctx, arg))
@@ -2668,9 +3025,21 @@ impl HirBuilder {
     ) -> Result<HirExpression, HirError> {
         // Process the function identifier
         let func_id = if let Expression::Identifier(ref identifier_name) = func {
-            // Check if it's a function
+            // Try to resolve as a function declaration first (for backwards compatibility)
             if let Some(function_id) = self.resolve_function(ctx, identifier_name) {
                 function_id
+            } else if let Some(var_id) = self.resolve_var_aggressive(identifier_name) {
+                // Variable exists - check if it contains a closure
+                if let Some(closure_func_id) = self.closure_variables.get(&var_id) {
+                    // Variable contains a closure - use its function_id
+                    *closure_func_id
+                } else {
+                    // Variable exists but is not a closure - partial calls only work with closures or functions
+                    return Err(HirError::TypeError(format!(
+                        "Variable '{}' is not a closure or function. Partial calls only work with closures or function declarations.",
+                        identifier_name
+                    )));
+                }
             } else {
                 return Err(HirError::UnknownVariable(identifier_name.clone()));
             }
@@ -2792,7 +3161,7 @@ impl HirBuilder {
     }
 
     /// Process a compose expression
-    /// Detects reducer patterns: array |> reducer (e.g., xs |> sum, xs |> fold(...))
+    /// Detects reducer patterns structurally: if RHS is a reducer application, treat as reducer pipeline
     fn process_compose_expression(
         &mut self,
         ctx: &crate::core::compileSession::CompileContext,
@@ -2800,52 +3169,23 @@ impl HirBuilder {
         rhs: Expression,
         reverse: bool,
     ) -> Result<HirExpression, HirError> {
-        // Check if this is a reducer pattern BEFORE processing expressions
-        // This allows us to detect array literals directly from the AST
         // Only for forward pipe (|>), not reverse (<|)
         if !reverse {
-            // Check if LHS is an array literal in the AST
-            let is_array_literal = matches!(lhs, Expression::Array(_));
-
-            // Process both sides
+            // Process both sides first
             let first_expr = self.process_expression(ctx, lhs)?;
             let second_expr = self.process_expression(ctx, rhs)?;
 
-            // Check if LHS is an array (either array literal or array variable)
-            let is_array = is_array_literal
-                || match &first_expr {
-                    HirExpression::Array(_) => true,
-                    HirExpression::Identifier(var_id) => {
-                        // Check if variable is of array type
-                        if let Some(var_kind) = self.get_var_kind_from_id(*var_id) {
-                            matches!(var_kind, ValueKind::Array(_))
-                        } else {
-                            // If we can't get the type, infer it from the expression
-                            // This handles cases where the variable type hasn't been set yet
-                            let inferred = self.infer_variable_kind(&first_expr);
-                            matches!(inferred, ValueKind::Array(_))
-                        }
-                    }
-                    _ => {
-                        // For other expressions, infer the type
-                        let inferred = self.infer_variable_kind(&first_expr);
-                        matches!(inferred, ValueKind::Array(_))
-                    }
-                };
-
-            if is_array {
-                // Check if RHS is a reducer function (sum or fold)
-                let reducer_info = self.detect_reducer(&second_expr)?;
-
-                if let Some((reducer_type, reducer_args)) = reducer_info {
-                    // This is a reducer pattern - return a special reducer expression
-                    // We'll lower this to bytecode that emits an internal loop
-                    return Ok(HirExpression::Reducer {
-                        array: Box::new(first_expr),
-                        reducer_type,
-                        reducer_args,
-                    });
-                }
+            // STRUCTURAL REDUCER DETECTION: Check if RHS is a reducer application
+            // This is purely syntactic - we don't care about the type of LHS
+            // A reducer is a terminal pipeline operator, so we detect it by structure, not type
+            if let Some((reducer_type, reducer_args)) = self.detect_reducer(&second_expr)? {
+                // This is a reducer pattern - return a special reducer expression
+                // The reducer will handle evaluating the LHS pipeline to get the array
+                return Ok(HirExpression::Reducer {
+                    array: Box::new(first_expr),
+                    reducer_type,
+                    reducer_args,
+                });
             }
 
             // If not a reducer, treat as normal composition
@@ -2868,8 +3208,11 @@ impl HirBuilder {
         }
     }
 
-    /// Detect if an expression is a reducer function (sum or fold)
+    /// Detect if an expression is a reducer application (structural check)
     /// Returns (reducer_type, args) if it's a reducer, None otherwise
+    /// 
+    /// This is a purely structural check that recursively looks through ComposeThunk
+    /// to find reducer applications. It does NOT depend on type inference.
     fn detect_reducer(
         &self,
         expr: &HirExpression,
@@ -2894,10 +3237,21 @@ impl HirBuilder {
                     {
                         Some(name)
                     } else {
-                        // Search current module's imports
-                        self.get_current_imports().and_then(|imports| {
+                        // Fallback 2: Search current module's imports (from HirBuilder)
+                        let name_from_builder = self.get_current_imports().and_then(|imports| {
                             imports
                                 .iter()
+                                .find(|(_, &imported_id)| imported_id == *function_id)
+                                .map(|(name, _)| name.as_str())
+                        });
+                        
+                        // Fallback 3: Search all modules' imports (from HirAst)
+                        // This is needed because get_current_imports() might return None
+                        // if current_module isn't set, but the imports are in ast.module_imports
+                        name_from_builder.or_else(|| {
+                            self.ast.module_imports
+                                .values()
+                                .flat_map(|imports| imports.iter())
                                 .find(|(_, &imported_id)| imported_id == *function_id)
                                 .map(|(name, _)| name.as_str())
                         })
@@ -2920,15 +3274,46 @@ impl HirBuilder {
                                 Ok(None)
                             }
                         }
+                        "reduce" => {
+                            // reduce(fn) is a reducer with 1 arg
+                            if args.len() == 1 {
+                                Ok(Some((ReducerType::Reduce, args.clone())))
+                            } else {
+                                Ok(None)
+                            }
+                        }
+                        "map" => {
+                            // map(fn) is a reducer with 1 arg (the transformation function)
+                            if args.len() == 1 {
+                                Ok(Some((ReducerType::Map, args.clone())))
+                            } else {
+                                Ok(None)
+                            }
+                        }
+                        "filter" => {
+                            // filter(predicate) is a reducer with 1 arg (the predicate function)
+                            if args.len() == 1 {
+                                Ok(Some((ReducerType::Filter, args.clone())))
+                            } else {
+                                Ok(None)
+                            }
+                        }
                         _ => Ok(None),
                     }
                 } else {
                     Ok(None)
                 }
             }
+            HirExpression::ComposeThunk { second, .. } => {
+                // Recursively check the rightmost expression in the composition
+                // This allows us to detect reducers even when wrapped in composition
+                // e.g., (map(f) |> filter(g)) |> reduce(add)
+                self.detect_reducer(second)
+            }
             _ => Ok(None),
         }
     }
+
 
     /// Process a loop expression
     fn process_loop_expression(
@@ -2996,6 +3381,255 @@ impl HirBuilder {
                 self.process_compose_expression(ctx, *lhs, *rhs, reverse)
             }
             Expression::Loop { init_vars, body } => self.process_loop_expression(ctx, init_vars, body),
+            Expression::StructInit { struct_name, fields } => {
+                self.process_struct_init_expression(ctx, struct_name, fields)
+            }
+            Expression::FieldAccess { object, field } => {
+                self.process_field_access_expression(ctx, *object, field)
+            }
+            Expression::Closure { arguments, return_type, body } => {
+                self.process_closure_expression(ctx, arguments, return_type, body)
+            }
+        }
+    }
+
+    fn process_struct_statement(
+        &mut self,
+        name: String,
+        fields: Vec<(String, String)>,
+        pub_visibility: bool,
+    ) -> Result<HirStmt, HirError> {
+        use super::StructDef;
+        
+        // Parse field types
+        let mut parsed_fields = Vec::new();
+        for (field_name, type_str) in fields {
+            let field_type = self.parse_struct_type_string(&type_str)?;
+            parsed_fields.push((field_name, field_type));
+        }
+        
+        // Store struct definition
+        let struct_def = StructDef {
+            name: name.clone(),
+            fields: parsed_fields.clone(),
+        };
+        self.ast.structs.insert(name.clone(), struct_def.clone());
+        
+        // Register pub structs in the module registry
+        if pub_visibility {
+            if let Some(module_name) = &self.current_module {
+                self.modules
+                    .entry(module_name.clone())
+                    .or_insert_with(|| Module {
+                        functions: HashMap::new(),
+                        constants: HashMap::new(),
+                        structs: HashMap::new(),
+                    })
+                    .structs
+                    .insert(name.clone(), struct_def);
+            }
+        }
+        
+        Ok(HirStmt::Nop) // Struct definitions are compile-time only
+    }
+
+    fn process_struct_init_expression(
+        &mut self,
+        ctx: &crate::core::compileSession::CompileContext,
+        struct_name: String,
+        fields: Vec<(String, Expression)>,
+    ) -> Result<HirExpression, HirError> {
+        // Verify struct exists
+        if !self.ast.structs.contains_key(&struct_name) {
+            return Err(HirError::TypeError(format!("Unknown struct type: {}", struct_name)));
+        }
+        
+        // Process field values
+        let mut hir_fields = Vec::new();
+        for (field_name, field_expr) in fields {
+            let field_value = self.process_expression(ctx, field_expr)?;
+            hir_fields.push((field_name, field_value));
+        }
+        
+        Ok(HirExpression::StructInit {
+            struct_name,
+            fields: hir_fields,
+        })
+    }
+
+    fn process_closure_expression(
+        &mut self,
+        ctx: &crate::core::compileSession::CompileContext,
+        arguments: Vec<Argument>,
+        return_type: Option<String>,
+        body: ClosureBody,
+    ) -> Result<HirExpression, HirError> {
+        // Parse argument types
+        let mut param_types = Vec::new();
+        for arg in &arguments {
+            let param_kind = if arg.kind.is_empty() {
+                // No type annotation - infer as Any for now
+                ValueKind::Any
+            } else {
+                self.parse_type_string(&arg.kind)
+            };
+            param_types.push(param_kind);
+        }
+
+        // Parse return type (default to Any if not specified)
+        let return_kind = if let Some(return_type_str) = return_type {
+            self.parse_type_string(&return_type_str)
+        } else {
+            ValueKind::Any
+        };
+
+        // Create function signature
+        let signature = FunctionSignature {
+            params: param_types,
+            return_type: Box::new(return_kind),
+        };
+
+        // Assign a function ID
+        let func_id = self.next_function_id;
+        self.next_function_id += 1;
+
+        // Save current scope
+        let parent_scope = self.current_scope;
+
+        // Create a new scope for the closure body
+        let closure_scope_id = ScopeId(self.ast.scopes.scopes.len());
+        self.ast.scopes.scopes.push(HirBlockContext {
+            vars: Vec::new(),
+            parent: Some(parent_scope),
+        });
+
+        // Switch to closure scope
+        self.current_scope = closure_scope_id;
+
+        // Initialize closure parameters as variables in the closure scope
+        let mut param_var_ids = Vec::new();
+        for arg in &arguments {
+            let param_kind = if arg.kind.is_empty() {
+                ValueKind::Any
+            } else {
+                self.parse_type_string(&arg.kind)
+            };
+            let var_id = self.init_var(&arg.identifier, param_kind);
+            param_var_ids.push(var_id);
+        }
+
+        // Process the closure body
+        let closure_body = match body {
+            ClosureBody::Expression(expr) => {
+                // For expression bodies, wrap in a return statement
+                let expr_hir = self.process_expression(ctx, *expr)?;
+                HirBlock {
+                    scope: closure_scope_id,
+                    statements: vec![HirStmt::Return { value: expr_hir }],
+                }
+            }
+            ClosureBody::Block(block) => {
+                // For block bodies, process the block normally
+                self.process_block(ctx, block)?
+            }
+        };
+
+        // Create and store the closure function
+        let closure_def = FunctionDefinition {
+            body: closure_body,
+            param_var_ids: param_var_ids.clone(),
+            scope_id: closure_scope_id,
+        };
+
+        let function = Function {
+            id: func_id,
+            name: format!("<closure_{}>", func_id), // Anonymous function name
+            signature,
+            definition: closure_def,
+        };
+
+        self.ast.functions.insert(func_id, function);
+
+        // Restore parent scope
+        self.current_scope = parent_scope;
+
+        // Return a closure expression that references the function ID
+        Ok(HirExpression::Closure { function_id: func_id })
+    }
+
+    fn process_field_access_expression(
+        &mut self,
+        ctx: &crate::core::compileSession::CompileContext,
+        object: Expression,
+        field: String,
+    ) -> Result<HirExpression, HirError> {
+        // Check if the object is an identifier that's a module name
+        // If so, treat this as a MemberAccess (module member access) rather than FieldAccess (struct field access)
+        if let Expression::Identifier(module_name) = object {
+            if self.modules.contains_key(&module_name) {
+                // This is a module member access, not a struct field access
+                // Look up the module and get the function ID
+                let function_id = {
+                    let module = self
+                        .modules
+                        .get(&module_name)
+                        .ok_or_else(|| HirError::TypeError(format!("Module '{}' not found", module_name)))?;
+
+                    *module.functions.get(&field)
+                        .ok_or_else(|| HirError::TypeError(format!(
+                            "Function '{}' not found in module '{}'",
+                            field, module_name
+                        )))?
+                };
+
+                // Return a FunctionCall with empty args (the actual arguments will be added by the caller)
+                return Ok(HirExpression::FunctionCall {
+                    function_id,
+                    args: Vec::new(),
+                    invoke: false,
+                });
+            }
+            // If it's not a module, fall through to process as field access
+            // We need to process the identifier as an expression first
+            let base_expr = self.process_expression(ctx, Expression::Identifier(module_name))?;
+            return Ok(HirExpression::FieldAccess {
+                base: Box::new(base_expr),
+                field_name: field,
+            });
+        }
+
+        // It's a regular struct field access
+        let base_expr = self.process_expression(ctx, object)?;
+        
+        Ok(HirExpression::FieldAccess {
+            base: Box::new(base_expr),
+            field_name: field,
+        })
+    }
+
+    fn parse_struct_type_string(&self, type_str: &str) -> Result<ValueKind, HirError> {
+        use super::ValueKind;
+        
+        let trimmed = type_str.trim();
+        match trimmed {
+            "num" => Ok(ValueKind::Number),
+            "str" | "string" => Ok(ValueKind::String),
+            "bool" | "boolean" => Ok(ValueKind::Boolean),
+            _ => {
+                // Check if it's a struct type
+                if self.ast.structs.contains_key(trimmed) {
+                    Ok(ValueKind::Struct(trimmed.to_string()))
+                } else {
+                    // Try to parse as array type
+                    if trimmed.starts_with('[') && trimmed.ends_with(']') {
+                        let inner = &trimmed[1..trimmed.len()-1].trim();
+                        let inner_kind = self.parse_struct_type_string(inner)?;
+                        Ok(ValueKind::Array(Box::new(inner_kind)))
+                    } else {
+                        Ok(ValueKind::Unknown)
+                    }
+                }
+            }
         }
     }
 }

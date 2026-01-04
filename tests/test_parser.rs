@@ -4,6 +4,28 @@ use common::helpers::*;
 use CantaLoopRS::parse_program;
 
 #[test]
+fn test_parse_struct() {
+    assert_parse_success(r#"
+struct Point {
+    x: num,
+    y: num
+}
+"#);
+}
+
+#[test]
+fn test_parse_struct_init() {
+    assert_parse_success(r#"
+struct Point {
+    x: num,
+    y: num
+}
+
+let p = Point { x: 10, y: 20 };
+"#);
+}
+
+#[test]
 fn test_parse_simple_assignment() {
     assert_parse_success("let x = 42;");
 }

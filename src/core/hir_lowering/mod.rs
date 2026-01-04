@@ -40,6 +40,7 @@ pub struct FunctionSignature {
 /// function/thunk types with their signatures.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub enum ValueKind {
+    Any,
     Number,
     String,
     Boolean,
@@ -51,6 +52,8 @@ pub enum ValueKind {
     Thunk(String),
     // Array type: stores the inner element type
     Array(Box<ValueKind>),
+    // Struct type: stores the struct name (structs are identified by name)
+    Struct(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -94,6 +97,15 @@ pub struct Function {
     pub definition: FunctionDefinition,
 }
 
+/// Struct definition (compile-time only).
+///
+/// Structs do not exist at runtime — only instances do.
+#[derive(Debug, Clone, Serialize)]
+pub struct StructDef {
+    pub name: String,
+    pub fields: Vec<(String, ValueKind)>, // (field_name, field_type)
+}
+
 /// High-level Intermediate Representation (HIR) of a CantaLoop program.
 ///
 /// HIR is the typed representation after semantic analysis, containing:
@@ -110,6 +122,7 @@ pub struct HirAst {
     pub blocks: Vec<HirBlock>,
     pub scopes: ScopeArena,
     pub functions: std::collections::HashMap<u32, Function>, // Function ID -> Function struct
+    pub structs: HashMap<String, StructDef>, // Struct name -> StructDef
     pub module_imports: HashMap<String, ImportTable>,
     /// Maps imported constant names to their values (for LSP hover)
     pub imported_constant_values: HashMap<String, ConstantValue>,
@@ -123,6 +136,7 @@ impl Default for HirAst {
             blocks: Vec::new(),
             scopes: ScopeArena { scopes: Vec::new() },
             functions: HashMap::new(),
+            structs: HashMap::new(),
             module_imports: HashMap::new(),
             imported_constant_values: HashMap::new(),
         }
@@ -270,13 +284,15 @@ impl std::error::Error for HirError {}
 pub type ImportTable = HashMap<String, u32>; // symbol_name -> function_id
 
 /// Represents a module that can be imported from.
-/// A module is a collection of functions and constants identified by dot-separated paths.
+/// A module is a collection of functions, constants, and structs identified by dot-separated paths.
 #[derive(Debug, Clone, Serialize)]
 pub struct Module {
     /// Functions in this module: function_name -> function_id
     pub functions: HashMap<String, u32>,
     /// Constants in this module: constant_name -> constant_id
     pub constants: HashMap<String, u32>,
+    /// Structs in this module: struct_name -> StructDef
+    pub structs: HashMap<String, StructDef>,
 }
 
 /// Compiler state containing all semantic information from compilation.

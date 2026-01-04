@@ -1,5 +1,16 @@
 use std::collections::HashMap;
 
+/// Compute a stable type ID from a struct name using a simple hash function.
+/// This avoids collisions that would occur with just using the string length.
+/// Uses a djb2-style hash algorithm for good distribution.
+pub fn compute_struct_type_id(struct_name: &str) -> u32 {
+    let mut hash: u32 = 5381;
+    for byte in struct_name.bytes() {
+        hash = hash.wrapping_mul(33).wrapping_add(byte as u32);
+    }
+    hash
+}
+
 use crate::core::bytecode::{OpCode, OPCODE_COUNT};
 use crate::core::engine::{Arity, BytecodeFunction, Engine};
 use crate::core::hir_lowering::HirAst;
@@ -65,6 +76,11 @@ static DISPATCH: [OpHandler; OPCODE_COUNT] = [
     VM::op_array_next,    // 40: ArrayNext
     VM::op_index,   // 41: ArrayIndex
     VM::op_array_slice,   // 42: ArraySlice
+    VM::op_make_struct,   // 43: MakeStruct
+    VM::op_get_field,     // 44: GetField
+    VM::op_map,           // 45: Map
+    VM::op_filter,        // 46: Filter
+    VM::op_fold,          // 47: Fold
 ];
 
 // Tagged union Value using NaN boxing
@@ -92,22 +108,33 @@ const TAG_THUNK: u64 = 0x4;
 const TAG_NONE: u64 = 0x5;
 const TAG_ARRAY: u64 = 0x6;
 const TAG_ARRAY_ITER: u64 = 0x7;
+const TAG_STRUCT: u64 = 0x8;
 
 /// Heap storage for VM-managed data structures.
 ///
-/// Stores strings, thunks, arrays, and iterators that cannot fit in the 64-bit Value representation.
+/// Stores strings, thunks, arrays, structs, and iterators that cannot fit in the 64-bit Value representation.
 /// Managed per VM instance to avoid global state.
 pub struct ValueHeap {
     pub(crate) strings: Vec<String>,
     pub(crate) thunks: Vec<ThunkData>,
     pub(crate) arrays: Vec<Vec<Value>>,
     pub(crate) array_iters: Vec<ArrayIterator>,
+    pub(crate) structs: Vec<StructData>,
+    pub(crate) type_registry: Option<std::collections::HashMap<u32, (String, Vec<String>)>>, // Maps type_id -> (struct_name, field_names)
+    pub(crate) engine: Option<std::sync::Arc<crate::core::engine::Engine>>, // Engine reference for stdlib functions to invoke thunks
+    pub(crate) bytecode_functions: std::collections::HashMap<u32, crate::core::engine::BytecodeFunction>, // Bytecode functions for invoking from stdlib
 }
 
 /// Array iterator state
 pub(crate) struct ArrayIterator {
     pub array_idx: usize,
     pub current_idx: usize,
+}
+
+/// Struct instance data stored in the heap
+pub(crate) struct StructData {
+    pub type_id: u32, // Struct type ID (index into struct definitions)
+    pub fields: Vec<Value>, // Field values in order
 }
 
 pub(crate) enum ThunkData {
@@ -128,7 +155,19 @@ impl ValueHeap {
             thunks: Vec::new(),
             arrays: Vec::new(),
             array_iters: Vec::new(),
+            structs: Vec::new(),
+            type_registry: None,
+            engine: None,
+            bytecode_functions: std::collections::HashMap::new(),
         }
+    }
+
+    fn set_type_registry(&mut self, registry: std::collections::HashMap<u32, (String, Vec<String>)>) {
+        self.type_registry = Some(registry);
+    }
+
+    pub(crate) fn set_engine(&mut self, engine: std::sync::Arc<crate::core::engine::Engine>) {
+        self.engine = Some(engine);
     }
 }
 
@@ -213,10 +252,29 @@ impl Value {
     }
 
     #[inline(always)]
+    pub fn struct_with_heap(type_id: u32, fields: Vec<Value>, heap: &mut ValueHeap) -> Self {
+        let idx = heap.structs.len();
+        heap.structs.push(StructData { type_id, fields });
+        Self {
+            raw: (QNAN_BASE & TAG_CLEAR_MASK) | (TAG_STRUCT << 48) | QNAN_BIT_51 | (idx as u64),
+        }
+    }
+
+    #[inline(always)]
     pub fn as_array<'a>(&self, heap: &'a ValueHeap) -> Option<&'a Vec<Value>> {
         if self.tag() == TAG_ARRAY {
             let idx = (self.raw & PAYLOAD_MASK) as usize;
             heap.arrays.get(idx)
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    pub fn as_array_mut<'a>(&self, heap: &'a mut ValueHeap) -> Option<&'a mut Vec<Value>> {
+        if self.tag() == TAG_ARRAY {
+            let idx = (self.raw & PAYLOAD_MASK) as usize;
+            heap.arrays.get_mut(idx)
         } else {
             None
         }
@@ -233,12 +291,37 @@ impl Value {
     }
 
     #[inline(always)]
+    pub fn as_struct<'a>(&self, heap: &'a ValueHeap) -> Option<&'a StructData> {
+        if self.tag() == TAG_STRUCT {
+            let idx = (self.raw & PAYLOAD_MASK) as usize;
+            heap.structs.get(idx)
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    pub fn is_struct(&self) -> bool {
+        self.tag() == TAG_STRUCT
+    }
+
+    #[inline(always)]
     fn tag(&self) -> u64 {
         // Check if it's a NaN (exponent bits 0x7FF)
         if (self.raw & 0x7FF0_0000_0000_0000) == 0x7FF0_0000_0000_0000 {
-            // Extract tag from bits 48-51, but bit 51 is always set for quiet NaN
-            // So we only look at bits 48-50 for the tag (3 bits)
-            (self.raw >> 48) & 0x7
+            // Extract tag from bits 48-51
+            // Bit 51 is always set for quiet NaN (0x8 in the 4-bit value)
+            // Tags 0-7 use bits 48-50 (3 bits), with bit 51 set
+            // Tag 8 (STRUCT) uses all 4 bits: 0x8 (bit 51 set, bits 48-50 = 0)
+            // But wait - if bit 51 is always set, then 0x8 means bit 51 set + bits 48-50 = 0
+            // So we need to distinguish: if bits 48-51 == 0x8, it's TAG_STRUCT (8)
+            // Otherwise, extract bits 48-50 for tags 0-7
+            let tag_bits = (self.raw >> 48) & 0xF; // Extract bits 48-51 (4 bits)
+            if tag_bits == 0x8 {
+                8 // TAG_STRUCT: bit 51 set, bits 48-50 = 0
+            } else {
+                tag_bits & 0x7 // Tags 0-7: extract bits 48-50 (bit 51 is set but not part of tag value)
+            }
         } else {
             0 // Number
         }
@@ -316,7 +399,63 @@ impl Value {
         self.tag() == TAG_NONE
     }
 
+    /// Invoke a thunk with additional arguments.
+    /// This is useful for stdlib functions that need to invoke thunks.
+    /// Only works for native functions (not bytecode functions).
+    /// Requires the Engine to be stored in the ValueHeap (via set_engine).
+    pub fn invoke_thunk(self, args: &[Value], heap: &mut ValueHeap) -> Value {
+        if !self.is_thunk() {
+            panic!("invoke_thunk called on non-thunk value");
+        }
+
+        // Extract thunk data first (before borrowing engine)
+        let (func_id, mut bound) = if let Some((id, b)) = self.as_thunk(heap) {
+            (id, b)
+        } else {
+            panic!("Cannot invoke composed thunk from stdlib - requires VM");
+        };
+
+        // Fill holes with provided arguments
+        let mut arg_iter = args.iter();
+        for slot in bound.iter_mut() {
+            if slot.is_none() {
+                if let Some(arg) = arg_iter.next() {
+                    *slot = Some(*arg);
+                }
+            }
+        }
+
+        // Check if all holes are filled
+        if bound.iter().any(|s| s.is_none()) {
+            panic!("Thunk still has holes after applying arguments");
+        }
+
+        // Extract final arguments
+        let final_args: Vec<Value> = bound.into_iter().filter_map(|opt| opt).collect();
+
+        // Get Engine from heap (clone Arc to avoid borrow conflicts)
+        let engine_arc = heap.engine.as_ref().expect("Engine must be set in ValueHeap to invoke thunks").clone();
+        
+        // Check if it's a native function (using cloned Arc, so we can borrow heap mutably below)
+        let func_id_copy = func_id; // Copy func_id to avoid borrowing engine_arc in closure
+        if let Some(native_func) = engine_arc.functions.get(&func_id_copy) {
+            // Call the native function (now we can borrow heap mutably since engine_arc is owned)
+            (native_func.func)(final_args, heap)
+        } else if let Some(_bytecode_func) = heap.bytecode_functions.get(&func_id_copy) {
+            // It's a bytecode function - we can't execute it from stdlib without the VM
+            // This is a limitation: bytecode functions need the VM to execute
+            // For now, return an error - this needs VM execution which isn't available from stdlib
+            panic!("Cannot invoke bytecode function from stdlib - function {} requires VM. Closures in map/filter need VM execution.", func_id);
+        } else {
+            panic!("Function {} not found (neither native nor bytecode)", func_id);
+        }
+    }
+
     pub fn value_to_string(self, heap: &ValueHeap) -> String {
+        self.value_to_string_with_hir(heap, None)
+    }
+
+    pub fn value_to_string_with_hir(self, heap: &ValueHeap, hir: Option<&crate::core::hir_lowering::HirAst>) -> String {
         if let Some(n) = self.as_number() {
             n.to_string()
         } else if let Some(s) = self.as_string(heap) {
@@ -330,8 +469,51 @@ impl Value {
         } else if self.is_none() {
             "None".to_string()
         } else if let Some(arr) = self.as_array(heap) {
-            let elements: Vec<String> = arr.iter().map(|v| v.value_to_string(heap)).collect();
+            let elements: Vec<String> = arr.iter().map(|v| v.value_to_string_with_hir(heap, hir)).collect();
             format!("[{}]", elements.join(","))
+        } else if let Some(struct_data) = self.as_struct(heap) {
+            // Try to find the struct definition from HIR or type registry
+            let (struct_name, field_names_opt) = if let Some(hir) = hir {
+                // Find struct by matching type_id (computed from struct_name hash)
+                if let Some((struct_name, struct_def)) = hir.structs.iter()
+                    .find(|(name, _)| compute_struct_type_id(name) == struct_data.type_id) {
+                    let field_names: Vec<String> = struct_def.fields.iter().map(|(name, _)| name.clone()).collect();
+                    (struct_name.clone(), Some(field_names))
+                } else {
+                    // Try type registry as fallback
+                    let (name, field_names) = heap.type_registry.as_ref()
+                        .and_then(|reg| reg.get(&struct_data.type_id))
+                        .cloned()
+                        .unwrap_or_else(|| (format!("Struct_{}", struct_data.type_id), vec![]));
+                    (name, if !field_names.is_empty() { Some(field_names) } else { None })
+                }
+            } else {
+                // No HIR - try type registry
+                let (name, field_names) = heap.type_registry.as_ref()
+                    .and_then(|reg| reg.get(&struct_data.type_id))
+                    .cloned()
+                    .unwrap_or_else(|| (format!("Struct_{}", struct_data.type_id), vec![]));
+                (name, if !field_names.is_empty() { Some(field_names) } else { None })
+            };
+            
+            // Format field values
+            let field_strings: Vec<String> = if let Some(field_names) = field_names_opt {
+                // We have field names - use them
+                field_names.iter()
+                    .zip(struct_data.fields.iter())
+                    .map(|(field_name, field_value)| {
+                        format!("{}: {}", field_name, field_value.value_to_string_with_hir(heap, hir))
+                    })
+                    .collect()
+            } else {
+                // No field names - use generic field names
+                struct_data.fields.iter()
+                    .enumerate()
+                    .map(|(i, v)| format!("field_{}: {}", i, v.value_to_string_with_hir(heap, hir)))
+                    .collect()
+            };
+            
+            format!("{} {{ {} }}", struct_name, field_strings.join(", "))
         } else {
             "Unknown".to_string()
         }
@@ -370,19 +552,20 @@ struct CallFrame {
     stack_depth: usize,   // Stack depth when this frame was entered (for cleanup on return)
 }
 
-pub struct VM<'a> {
-    engine: &'a Engine,                                 // For native functions only
+pub struct VM {
+    engine: std::sync::Arc<Engine>,                     // For native functions only (Arc so it can be stored in ValueHeap)
     bytecode_functions: HashMap<u32, BytecodeFunction>, // Compiled bytecode functions
     hir: HirAst,            // For constant lookups (cloned, but constants are small)
+    type_registry: HashMap<u32, (String, Vec<String>)>, // Maps type_id -> (struct_name, field_names) for pretty printing
     ops: &'static [OpCode], // Top-level bytecode - cached, not cloned
     stack: Vec<Value>,
     call_stack: Vec<CallFrame>,
     heap: ValueHeap,
 }
 
-impl<'a> VM<'a> {
+impl VM {
     pub fn new(
-        engine: &'a Engine,
+        mut engine: std::sync::Arc<Engine>,
         bytecode_functions: HashMap<u32, BytecodeFunction>,
         hir: HirAst,
         ops: Vec<OpCode>,
@@ -392,14 +575,28 @@ impl<'a> VM<'a> {
         let ops_box = Box::new(ops);
         let ops_slice: &'static [OpCode] = Box::leak(ops_box);
 
+        // Build type registry: map type_id (computed from struct_name hash) -> (struct_name, field_names)
+        let mut type_registry = HashMap::new();
+        for (struct_name, struct_def) in &hir.structs {
+            let type_id = compute_struct_type_id(struct_name);
+            let field_names: Vec<String> = struct_def.fields.iter().map(|(name, _)| name.clone()).collect();
+            type_registry.insert(type_id, (struct_name.clone(), field_names));
+        }
+
+        let mut heap = ValueHeap::new();
+        heap.set_type_registry(type_registry.clone());
+        heap.set_engine(engine.clone()); // Store Engine in heap for stdlib functions to invoke thunks
+        heap.bytecode_functions = bytecode_functions.clone(); // Store bytecode functions in heap for stdlib functions to invoke
+
         Self {
             engine,
             bytecode_functions,
             hir,
+            type_registry,
             ops: ops_slice,
             stack: Vec::new(),
             call_stack: Vec::new(),
-            heap: ValueHeap::new(),
+            heap,
         }
     }
 
@@ -534,36 +731,43 @@ impl<'a> VM<'a> {
     fn op_ld_var(_vm: &mut VM, frame_idx: usize, opcode: &OpCode) -> StepResult {
         if let OpCode::LdVar(id) = opcode {
             let idx = *id as usize;
-            let frame = &_vm.call_stack[frame_idx];
-            let val = if idx < frame.locals.len() && !frame.locals[idx].is_none() {
-                // Variable exists in current frame and has a value
-                frame.locals[idx]
-            } else {
-                // Variable not found or is None in current frame - check top-level frame (frame 0)
-                // This allows functions to access module-level variables
-                // Note: We check top-level even if current frame has the variable as None,
-                // because function locals may be pre-allocated with None for parameters
-                if frame_idx > 0 && !_vm.call_stack.is_empty() {
-                    let top_level_frame = &_vm.call_stack[0];
-                    if idx < top_level_frame.locals.len() {
-                        top_level_frame.locals[idx]
-                    } else {
-                        // Not in top-level either - return None from current frame if it exists, else None
-                        if idx < frame.locals.len() {
-                            frame.locals[idx]
-                        } else {
-                            Value::none()
-                        }
-                    }
-                } else {
-                    // We're in the top-level frame
-                    if idx < frame.locals.len() {
-                        frame.locals[idx]
-                    } else {
-                        Value::none()
+            
+            // Walk the call stack backwards to find the variable
+            // This allows closures to capture variables from outer scopes
+            let mut val = Value::none();
+            let mut found = false;
+            
+            // Check frames from current to oldest (allowing closure capture)
+            for i in (0..=frame_idx).rev() {
+                if i >= _vm.call_stack.len() {
+                    continue;
+                }
+                let frame = &_vm.call_stack[i];
+                if idx < frame.locals.len() {
+                    let frame_val = frame.locals[idx];
+                    if !frame_val.is_none() {
+                        // Found a non-None value in this frame
+                        val = frame_val;
+                        found = true;
+                        break;
+                    } else if i == frame_idx {
+                        // In current frame, if variable exists but is None, 
+                        // continue searching parent frames (might be a parameter slot)
+                        // but remember this slot exists
+                        found = true; // Mark as found so we don't return None unnecessarily
                     }
                 }
-            };
+            }
+            
+            // If we found the variable slot but it was None (in current frame),
+            // return None. Otherwise return the value we found (or None if not found at all)
+            if !found && frame_idx < _vm.call_stack.len() {
+                let frame = &_vm.call_stack[frame_idx];
+                if idx < frame.locals.len() {
+                    val = frame.locals[idx]; // Return None from current frame
+                }
+            }
+            
             _vm.stack.push(val);
         }
         StepResult::Normal
@@ -582,7 +786,7 @@ impl<'a> VM<'a> {
     #[inline(always)]
     fn op_ld_func(_vm: &mut VM, _frame_idx: usize, opcode: &OpCode) -> StepResult {
         if let OpCode::LdFunc(id) = opcode {
-            let func_val = _vm.engine.get_function(*id);
+            let func_val = _vm.engine.as_ref().get_function(*id);
             _vm.stack.push(func_val);
         }
         StepResult::Normal
@@ -779,7 +983,7 @@ impl<'a> VM<'a> {
     #[inline(always)]
     fn op_print(_vm: &mut VM, _frame_idx: usize, _opcode: &OpCode) -> StepResult {
         let v = _vm.stack.pop().expect("Stack underflow");
-        let s = v.value_to_string(&_vm.heap);
+        let s = v.value_to_string_with_hir(&_vm.heap, Some(&_vm.hir));
         println!("{}", s);
         StepResult::Normal
     }
@@ -832,15 +1036,24 @@ impl<'a> VM<'a> {
                 }
             }
 
-            // Pop bound arguments from stack (they were pushed in reverse order)
+            // Pop bound arguments from stack
+            // The emitter iterates bound.iter().rev() and pushes values in reverse order.
+            // Since stack is LIFO, when we pop, we get values in the reverse order of how
+            // they were pushed, which matches the bound array order (no reverse needed).
+            // Example: bound = [None, Some(0), Some(1)]
+            //   Emitter: bound.iter().rev() pushes 1.0, then 0.0
+            //   Stack: [1.0, 0.0] (0.0 on top)
+            //   Pop: 0.0, then 1.0 → popped_values = [0.0, 1.0] ✓ (matches bound order)
             let mut popped_values = Vec::new();
             for _ in 0..args_to_pop {
                 popped_values.push(_vm.stack.pop().expect("Stack underflow"));
             }
-            popped_values.reverse(); // Now in correct order (position 0 = first arg)
 
             // Build bound_args vector: None for holes, Some(value) for bound args
             // Position i corresponds to function parameter i
+            // The bound_mask tells us which positions are bound (bit i set = position i is bound)
+            // popped_values contains the bound values in the order they appear in the bound array
+            // We assign them sequentially to the bound positions in parameter order
             let mut bound_args_vec = Vec::new();
             let mut popped_idx = 0;
             for i in 0..total_params {
@@ -1110,6 +1323,134 @@ impl<'a> VM<'a> {
         StepResult::Normal
     }
 
+    fn op_make_struct(_vm: &mut VM, _frame_idx: usize, opcode: &OpCode) -> StepResult {
+        if let OpCode::MakeStruct { type_id, field_count } = opcode {
+            let mut fields = Vec::new();
+            for _ in 0..*field_count {
+                fields.push(_vm.stack.pop().expect("Stack underflow in MakeStruct"));
+            }
+            fields.reverse(); // Stack is LIFO, so reverse to get correct order
+            let struct_val = Value::struct_with_heap(*type_id, fields, &mut _vm.heap);
+            _vm.stack.push(struct_val);
+        }
+        StepResult::Normal
+    }
+
+    fn op_map(vm: &mut VM, _frame_idx: usize, _opcode: &OpCode) -> StepResult {
+        // Stack: [array, function] with function on top
+        // Pop function first, then array
+        let func_val = vm.stack.pop().expect("Stack underflow in Map (function)");
+        let array_val = vm.stack.pop().expect("Stack underflow in Map (array)");
+        
+        // Get the array and clone elements to avoid borrow conflicts
+        let array_idx = (array_val.raw & PAYLOAD_MASK) as usize;
+        let array_data: Vec<Value> = vm.heap.arrays[array_idx].iter().copied().collect();
+        
+        // Get function ID
+        let func_id = if let Some(id) = func_val.as_function() {
+            id
+        } else if let Some((id, _)) = func_val.as_thunk(&vm.heap) {
+            id
+        } else {
+            panic!("Map expects function or thunk, got: {:?}", func_val);
+        };
+        
+        // Map each element
+        let mut result = Vec::new();
+        for element in array_data.iter() {
+            // Call function with element
+            let mapped = vm.call_function(func_id, vec![*element]);
+            result.push(mapped);
+        }
+        
+        // Push result array
+        let result_array = Value::array_with_heap(result, &mut vm.heap);
+        vm.stack.push(result_array);
+        StepResult::Normal
+    }
+
+    fn op_filter(vm: &mut VM, _frame_idx: usize, _opcode: &OpCode) -> StepResult {
+        // Stack: [array, predicate] with predicate on top
+        // Pop predicate first, then array
+        let func_val = vm.stack.pop().expect("Stack underflow in Filter (predicate)");
+        let array_val = vm.stack.pop().expect("Stack underflow in Filter (array)");
+        
+        // Get the array and clone elements to avoid borrow conflicts
+        let array_idx = (array_val.raw & PAYLOAD_MASK) as usize;
+        let array_data: Vec<Value> = vm.heap.arrays[array_idx].iter().copied().collect();
+        
+        // Get function ID
+        let func_id = if let Some(id) = func_val.as_function() {
+            id
+        } else if let Some((id, _)) = func_val.as_thunk(&vm.heap) {
+            id
+        } else {
+            panic!("Filter expects function or thunk, got: {:?}", func_val);
+        };
+        
+        // Filter elements
+        let mut result = Vec::new();
+        for element in array_data.iter() {
+            // Call predicate with element
+            let keep = vm.call_function(func_id, vec![*element]);
+            if keep.as_boolean().unwrap_or(false) {
+                result.push(*element);
+            }
+        }
+        
+        // Push result array
+        let result_array = Value::array_with_heap(result, &mut vm.heap);
+        vm.stack.push(result_array);
+        StepResult::Normal
+    }
+
+    fn op_fold(vm: &mut VM, _frame_idx: usize, _opcode: &OpCode) -> StepResult {
+        // Stack: [array, initial_value, function] with function on top
+        // Pop function first, then initial_value, then array
+        let func_val = vm.stack.pop().expect("Stack underflow in Fold (function)");
+        let init_val = vm.stack.pop().expect("Stack underflow in Fold (initial_value)");
+        let array_val = vm.stack.pop().expect("Stack underflow in Fold (array)");
+        
+        // Get the array and clone elements to avoid borrow conflicts
+        let array_idx = (array_val.raw & PAYLOAD_MASK) as usize;
+        let array_data: Vec<Value> = vm.heap.arrays[array_idx].iter().copied().collect();
+        
+        // Get function ID
+        let func_id = if let Some(id) = func_val.as_function() {
+            id
+        } else if let Some((id, _)) = func_val.as_thunk(&vm.heap) {
+            id
+        } else {
+            panic!("Fold expects function or thunk, got: {:?}", func_val);
+        };
+        
+        // Fold: start with initial value, apply function to each element
+        let mut accumulator = init_val;
+        for element in array_data.iter() {
+            // Call function(accumulator, element)
+            accumulator = vm.call_function(func_id, vec![accumulator, *element]);
+        }
+        
+        // Push result
+        vm.stack.push(accumulator);
+        StepResult::Normal
+    }
+
+    fn op_get_field(_vm: &mut VM, _frame_idx: usize, opcode: &OpCode) -> StepResult {
+        if let OpCode::GetField(field_index) = opcode {
+            let struct_val = _vm.stack.pop().expect("Stack underflow in GetField");
+            if let Some(struct_data) = struct_val.as_struct(&_vm.heap) {
+                let field_value = struct_data.fields.get(*field_index as usize)
+                    .copied()
+                    .expect(&format!("Field index {} out of bounds", field_index));
+                _vm.stack.push(field_value);
+            } else {
+                panic!("GetField expects struct value, got: {:?}", struct_val);
+            }
+        }
+        StepResult::Normal
+    }
+
     #[inline(always)]
     fn op_jmp_if_false(_vm: &mut VM, frame_idx: usize, opcode: &OpCode) -> StepResult {
         if let OpCode::JmpIfFalse(offset) = opcode {
@@ -1251,7 +1592,7 @@ impl<'a> VM<'a> {
         let lhs = self.force_value(lhs_val);
         match (lhs.as_number(), rhs.as_number()) {
             (Some(a), Some(b)) => self.stack.push(Value::number(a / b)),
-            _ => panic!("Divide operation requires both operands to be numbers"),
+            _ => panic!("Divide operation requires both operands to be numbers, got {:?} {:?}", lhs, rhs),
         }
     }
 

@@ -6,6 +6,7 @@ use crate::core::ast::{Expression, Literal};
 /// Format a ValueKind as a string for display.
 pub fn format_value_kind(kind: &ValueKind) -> String {
     match kind {
+        ValueKind::Any => "Any".to_string(),
         ValueKind::Number => "Number".to_string(),
         ValueKind::String => "String".to_string(),
         ValueKind::Boolean => "Boolean".to_string(),
@@ -13,6 +14,7 @@ pub fn format_value_kind(kind: &ValueKind) -> String {
         ValueKind::Function(ty) => ty.clone(),
         ValueKind::Thunk(ty) => ty.clone(),
         ValueKind::Void => "Void".to_string(),
+        ValueKind::Struct(name) => name.clone(),
         ValueKind::Array(inner) => {
             let inner_str = format_value_kind(inner);
             format!("Array<{}>", inner_str)

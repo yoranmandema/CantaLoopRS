@@ -79,13 +79,142 @@ pub fn find_error_location(text: &str, error: &HirError) -> (usize, usize) {
                 return (line_num, col);
             }
         }
-        _ => {
-            // For other errors, try to find a keyword or identifier
-            for (line_num, line) in lines.iter().enumerate() {
-                if line.contains("let") || line.contains("=") {
-                    return (line_num, 0);
+        HirError::TypeError(msg) => {
+            // Handle module-related errors
+            if msg.contains("Module '") && msg.contains("' not found") {
+                // Extract module name from error message: "Module 'utils' not found"
+                if let Some(start) = msg.find("Module '") {
+                    let module_start = start + 8; // "Module '" is 8 chars
+                    if let Some(end) = msg[module_start..].find("' not found") {
+                        let module_name = &msg[module_start..module_start + end];
+                        
+                        // Check if this file IS the module (has "mod <module_name>" at the top)
+                        // If so, this error shouldn't appear - it's likely from another file
+                        // Skip the "mod" statement and look for actual usage
+                        let is_current_file_module = lines.iter().any(|line| {
+                            let mod_pattern = format!("mod {}", module_name);
+                            if let Some(pos) = line.find(&mod_pattern) {
+                                let after_pos = pos + mod_pattern.len();
+                                let is_word_boundary = after_pos >= line.len() || {
+                                    let ch = line.chars().nth(after_pos);
+                                    ch.map_or(true, |c| !c.is_alphanumeric() && c != '_')
+                                };
+                                is_word_boundary
+                            } else {
+                                false
+                            }
+                        });
+                        
+                        if is_current_file_module {
+                            // This file IS the module, so the error is likely from usage elsewhere
+                            // Look for module member access or imports, not the mod declaration
+                            // Fallback: try to find module member access like "utils.something"
+                            for (line_num, line) in lines.iter().enumerate() {
+                                let member_pattern = format!("{}.", module_name);
+                                if let Some(pos) = line.find(&member_pattern) {
+                                    // Check word boundary before module name
+                                    let before_ok = pos == 0 || {
+                                        let ch = line.chars().nth(pos - 1);
+                                        ch.map_or(true, |c| !c.is_alphanumeric() && c != '_')
+                                    };
+                                    if before_ok {
+                                        return (line_num, pos);
+                                    }
+                                }
+                            }
+                            
+                            // Look for "use ... from <module_name>" imports
+                            for (line_num, line) in lines.iter().enumerate() {
+                                let use_pattern = format!("from {}", module_name);
+                                if let Some(pos) = line.find(&use_pattern) {
+                                    // Check word boundary after module name
+                                    let after_pos = pos + use_pattern.len();
+                                    let is_word_boundary = after_pos >= line.len() || {
+                                        let ch = line.chars().nth(after_pos);
+                                        ch.map_or(true, |c| !c.is_alphanumeric() && c != '_')
+                                    };
+                                    if is_word_boundary {
+                                        return (line_num, pos + 5); // "from " is 5 chars, point to module name
+                                    }
+                                }
+                            }
+                            
+                            // If we can't find usage, return (0, 0) to suppress the diagnostic
+                            // The error is likely from another file
+                            return (0, 0);
+                        }
+                        
+                        // This file is NOT the module, so look for usage
+                        // First, try to find "mod <module_name>" statement (shouldn't exist, but check)
+                        for (line_num, line) in lines.iter().enumerate() {
+                            let mod_pattern = format!("mod {}", module_name);
+                            if let Some(pos) = line.find(&mod_pattern) {
+                                // Check word boundary after module name
+                                let after_pos = pos + mod_pattern.len();
+                                let is_word_boundary = after_pos >= line.len() || {
+                                    let ch = line.chars().nth(after_pos);
+                                    ch.map_or(true, |c| !c.is_alphanumeric() && c != '_')
+                                };
+                                if is_word_boundary {
+                                    // Return position at the start of the module name (after "mod ")
+                                    return (line_num, pos + 4); // "mod " is 4 characters
+                                }
+                            }
+                        }
+                        
+                        // Look for "use ... from <module_name>" imports
+                        for (line_num, line) in lines.iter().enumerate() {
+                            let use_pattern = format!("from {}", module_name);
+                            if let Some(pos) = line.find(&use_pattern) {
+                                // Check word boundary after module name
+                                let after_pos = pos + use_pattern.len();
+                                let is_word_boundary = after_pos >= line.len() || {
+                                    let ch = line.chars().nth(after_pos);
+                                    ch.map_or(true, |c| !c.is_alphanumeric() && c != '_')
+                                };
+                                if is_word_boundary {
+                                    return (line_num, pos + 5); // "from " is 5 chars, point to module name
+                                }
+                            }
+                        }
+                        
+                        // Fallback: try to find module member access like "utils.something"
+                        for (line_num, line) in lines.iter().enumerate() {
+                            let member_pattern = format!("{}.", module_name);
+                            if let Some(pos) = line.find(&member_pattern) {
+                                // Check word boundary before module name
+                                let before_ok = pos == 0 || {
+                                    let ch = line.chars().nth(pos - 1);
+                                    ch.map_or(true, |c| !c.is_alphanumeric() && c != '_')
+                                };
+                                if before_ok {
+                                    return (line_num, pos);
+                                }
+                            }
+                        }
+                        
+                        // Last resort: find the module name anywhere
+                        if let Some((line_num, col)) = text_utils::find_variable_in_code(&lines, module_name) {
+                            return (line_num, col);
+                        }
+                    }
                 }
             }
+            // For other TypeError messages, try to extract identifier and find it
+            // Look for patterns like "Function or constant 'X' not found" or "Member 'X' not found"
+            if let Some(start) = msg.find('\'') {
+                let name_start = start + 1;
+                if let Some(end) = msg[name_start..].find('\'') {
+                    let name = &msg[name_start..name_start + end];
+                    if let Some((line_num, col)) = text_utils::find_variable_in_code(&lines, name) {
+                        return (line_num, col);
+                    }
+                }
+            }
+        }
+        _ => {
+            // For other errors, don't fall back to arbitrary line - return (0, 0) explicitly
+            // This prevents unrelated errors from appearing at line 0 or line 4
         }
     }
     (0, 0)

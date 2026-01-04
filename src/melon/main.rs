@@ -1,11 +1,13 @@
 use std::env;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::channel;
-use std::io::Write;
+use std::sync::Arc;
+use std::time::Instant;
 
-use CantaLoopRS::core::projectLoader::ProjectLoader;
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use serde::Serialize;
+use CantaLoopRS::core::projectLoader::ProjectLoader;
 
 use CantaLoopRS::core::ast::Program;
 use CantaLoopRS::core::engine::RunArtifacts;
@@ -36,8 +38,8 @@ fn main() {
 }
 
 /* ============================
-   Project creation
-   ============================ */
+Project creation
+============================ */
 
 fn create_new_project_cmd(args: &[String]) {
     let name = if args.len() >= 3 {
@@ -59,7 +61,11 @@ fn finish_project_creation(project_name: String) {
         std::process::exit(1);
     }
 
-    println!("Created project '{}' at {}", project_name, project_path.display());
+    println!(
+        "Created project '{}' at {}",
+        project_name,
+        project_path.display()
+    );
     println!("Next:");
     println!("  cd {}", project_name);
     println!("  melon run");
@@ -101,8 +107,8 @@ print("Hello, world! 🍉")!;
 }
 
 /* ============================
-   Run / Watch
-   ============================ */
+Run / Watch
+============================ */
 
 fn run_project_cmd(args: &[String]) {
     let watch = args.iter().any(|a| a == "--watch" || a == "-w");
@@ -136,16 +142,25 @@ fn run_once(project_root: &Path, debug: bool) {
     let main_path = project.entry.to_str().unwrap();
     println!("{}", main_path);
 
-    match engine.compile_with_project(main_path, Some(project_root)) {
+    // Wrap Engine in Arc so it can be passed to VM
+    let engine_arc = Arc::new(engine);
+    match engine_arc.compile_with_project(main_path, Some(project_root)) {
         Ok(artifacts) => {
             println!("🍉 Compile OK");
-            engine.run(artifacts.clone());
 
+            // Write debug output BEFORE running, so it's available even if execution panics
             if debug {
                 write_ast(project_root, &artifacts.ast);
                 write_hir(project_root, &artifacts.hir);
                 write_bytecode(project_root, &artifacts);
             }
+
+            let start = Instant::now();
+
+            engine_arc.run(artifacts.clone());
+
+            let elapsed = start.elapsed();
+            println!("⏱️ Total run time: {:.2?}", elapsed);
         }
         Err(err) => {
             eprintln!("❌ Compile error:\n{:#?}", err);
@@ -157,8 +172,7 @@ fn run_with_watch(project_root: &Path, debug: bool) {
     let src = project_root.join("src");
     let (tx, rx) = channel();
 
-    let mut watcher =
-        RecommendedWatcher::new(tx, notify::Config::default()).unwrap();
+    let mut watcher = RecommendedWatcher::new(tx, notify::Config::default()).unwrap();
     watcher.watch(&src, RecursiveMode::Recursive).unwrap();
 
     loop {
@@ -170,8 +184,8 @@ fn run_with_watch(project_root: &Path, debug: bool) {
 }
 
 /* ============================
-   Debug output
-   ============================ */
+Debug output
+============================ */
 
 fn write_ast(project_root: &Path, ast: &Program) {
     write_json(project_root, "ast.json", ast);
@@ -202,7 +216,11 @@ fn write_bytecode(project_root: &Path, artifacts: &RunArtifacts) {
         out.push_str(&format!("  {:04}: {:?}\n", i, op));
     }
 
-    std::fs::write(path, out).unwrap();
+    if let Err(e) = std::fs::write(&path, out) {
+        eprintln!("Failed to write bytecode.txt to {:?}: {}", path, e);
+    } else {
+        println!("Debug: bytecode written to {:?}", path);
+    }
 }
 
 fn write_json<T: Serialize>(project_root: &Path, name: &str, value: &T) {
@@ -219,8 +237,8 @@ fn ensure_debug_dir(project_root: &Path) -> PathBuf {
 }
 
 /* ============================
-   Utils
-   ============================ */
+Utils
+============================ */
 
 fn read_line() -> String {
     let mut s = String::new();

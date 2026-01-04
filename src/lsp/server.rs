@@ -28,6 +28,7 @@ pub struct CantaLoopLSPServer {
     documents: Arc<tokio::sync::RwLock<HashMap<Url, String>>>,
     compiler_state_cache: Arc<tokio::sync::RwLock<HashMap<Url, CompilerState>>>,
     engine: Arc<Engine>, // Shared engine with built-in functions registered
+    workspace_root: Arc<tokio::sync::RwLock<Option<std::path::PathBuf>>>, // Workspace root directory
 }
 
 impl CantaLoopLSPServer {
@@ -43,6 +44,7 @@ impl CantaLoopLSPServer {
             documents: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
             compiler_state_cache: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
             engine: Arc::new(engine),
+            workspace_root: Arc::new(tokio::sync::RwLock::new(None)),
         }
     }
 
@@ -50,12 +52,23 @@ impl CantaLoopLSPServer {
         // Convert URI to file path
         let file_path = uri.to_file_path().ok()?;
         
-        // Walk up the directory tree looking for melon.json
+        // Walk up the directory tree looking for project indicators
         let mut current = file_path.parent()?;
         loop {
+            // Check for melon.json (primary indicator)
             let melon_json = current.join("melon.json");
             if melon_json.exists() {
                 return Some(current.to_path_buf());
+            }
+            
+            // Fallback: check if this directory has a src/ subdirectory
+            // This helps when melon.json is missing but project structure is clear
+            let src_dir = current.join("src");
+            if src_dir.exists() && src_dir.is_dir() {
+                // Only use this as project root if the current file is in src/
+                if file_path.starts_with(&src_dir) {
+                    return Some(current.to_path_buf());
+                }
             }
             
             if let Some(parent) = current.parent() {
@@ -66,9 +79,21 @@ impl CantaLoopLSPServer {
         }
     }
 
+    /// Get project root for a URI, using workspace root as fallback
+    async fn get_project_root(&self, uri: &Url) -> Option<std::path::PathBuf> {
+        // First try to find project root from the file's location
+        if let Some(root) = Self::find_project_root(uri) {
+            return Some(root);
+        }
+        
+        // Fallback to workspace root if available
+        let workspace_root = self.workspace_root.read().await;
+        workspace_root.clone()
+    }
+
     async fn rebuild_compiler_state(&self, uri: &Url, text: &str) {
         // Find project root if this file is part of a project
-        let project_root = Self::find_project_root(uri);
+        let project_root = self.get_project_root(uri).await;
         
         // Get the current file path to skip it when loading modules
         let current_file = uri.to_file_path().ok();
@@ -104,7 +129,7 @@ impl CantaLoopLSPServer {
         let mut diagnostics_list = Vec::new();
 
         // Find project root if this file is part of a project
-        let project_root = Self::find_project_root(&uri);
+        let project_root = self.get_project_root(&uri).await;
         
         // Get the current file path to skip it when loading modules
         let current_file = uri.to_file_path().ok();
@@ -112,9 +137,39 @@ impl CantaLoopLSPServer {
         // Use compiler state - single source of truth
         match self.engine.compile_for_lsp(&text, project_root.as_deref(), current_file.as_deref()) {
             Ok(state) => {
+                // Extract current module name from AST to filter out false positives
+                let current_module_name = state.ast.blocks.iter()
+                    .flat_map(|block| &block.statements)
+                    .find_map(|stmt| {
+                        if let crate::core::ast::Statement::Mod { identifier } = stmt {
+                            Some(identifier.clone())
+                        } else {
+                            None
+                        }
+                    });
+                
                 // Add diagnostics from compiler state
                 for error in &state.diagnostics {
                     let error_msg = diagnostics::format_hir_error(error);
+                    
+                    // Filter out "Module 'X' not found" errors when current file IS module X
+                    // This happens when the module is being compiled but other files try to import it
+                    if let Some(ref current_module) = current_module_name {
+                        if error_msg.contains("Module '") && error_msg.contains("' not found") {
+                            if let Some(start) = error_msg.find("Module '") {
+                                let module_start = start + 8;
+                                if let Some(end) = error_msg[module_start..].find("' not found") {
+                                    let module_name = &error_msg[module_start..module_start + end];
+                                    if module_name == current_module {
+                                        // This file IS the module, so skip this error
+                                        // It's likely from another file trying to import it
+                                        continue;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    
                     let (found_line, found_col) = diagnostics::find_error_location(&text, error);
                     
                     // Check if this is a nested invoke pattern error - these should be warnings, not errors
@@ -206,7 +261,21 @@ impl CantaLoopLSPServer {
 
 #[tower_lsp::async_trait]
 impl LanguageServer for CantaLoopLSPServer {
-    async fn initialize(&self, _: InitializeParams) -> Result<InitializeResult> {
+    async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
+        // Capture workspace root from initialize params
+        let workspace_root = params
+            .root_uri
+            .and_then(|uri| uri.to_file_path().ok())
+            .or_else(|| {
+                params.workspace_folders
+                    .and_then(|folders| folders.first().cloned())
+                    .and_then(|folder| folder.uri.to_file_path().ok())
+            });
+        
+        if let Some(root) = workspace_root {
+            let mut stored_root = self.workspace_root.write().await;
+            *stored_root = Some(root);
+        }
         Ok(InitializeResult {
             server_info: Some(ServerInfo {
                 name: "CantaLoop LSP".to_string(),

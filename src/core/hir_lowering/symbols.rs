@@ -12,6 +12,7 @@ use serde::Serialize;
 fn format_function_type_string(sig: &FunctionSignature) -> String {
     fn format_kind_recursive(kind: &ValueKind) -> String {
         match kind {
+            ValueKind::Any => "any".to_string(),
             ValueKind::Number => "num".to_string(),
             ValueKind::String => "string".to_string(),
             ValueKind::Boolean => "bool".to_string(),
@@ -19,6 +20,7 @@ fn format_function_type_string(sig: &FunctionSignature) -> String {
             ValueKind::Function(ty) => ty.clone(),
             ValueKind::Thunk(ty) => ty.clone(),
             ValueKind::Void => "void".to_string(),
+            ValueKind::Struct(name) => name.clone(),
             ValueKind::Array(inner) => {
                 let inner_str = format_kind_recursive(inner);
                 format!("{}[]", inner_str)
@@ -105,6 +107,19 @@ impl SymbolTable {
     }
 }
 
+/// Extract the module name from AST.
+fn extract_module_name(ast: &crate::core::ast::Program) -> Option<String> {
+    use crate::core::ast::Statement;
+    for block in &ast.blocks {
+        for stmt in &block.statements {
+            if let Statement::Mod { identifier } = stmt {
+                return Some(identifier.clone());
+            }
+        }
+    }
+    None
+}
+
 /// Build a symbol table from HIR, extracting spans from AST.
 pub fn build_symbol_table(
     hir: &HirAst,
@@ -138,6 +153,9 @@ pub fn build_symbol_table(
         }
     };
 
+    // Determine the current module name (default to "__main__" if not found)
+    let current_module = extract_module_name(ast).unwrap_or_else(|| "__main__".to_string());
+
     // Add all functions (both regular and built-in)
     for (_, func) in &hir.functions {
         let symbol_id = SymbolId(next_symbol_id);
@@ -155,56 +173,60 @@ pub fn build_symbol_table(
     }
 
     // Add imported functions (they're not in hir.functions, but in import_table)
-    for (name, func_id) in hir.all_imports() {
-        // Check if this is a constant (variable ID) or a function
-        let is_constant = hir
-            .scopes
-            .scopes
-            .iter()
-            .any(|scope| scope.vars.iter().any(|v| v.id == *func_id));
-
-        if is_constant {
-            // It's a constant - add as a variable
-            if let Some(var) = hir
+    // Only include imports for the CURRENT module, not all modules
+    let current_imports = hir.module_imports.get(&current_module);
+    if let Some(imports) = current_imports {
+        for (name, func_id) in imports {
+            // Check if this is a constant (variable ID) or a function
+            let is_constant = hir
                 .scopes
                 .scopes
                 .iter()
-                .find_map(|scope| scope.vars.iter().find(|v| v.id == *func_id))
-            {
+                .any(|scope| scope.vars.iter().any(|v| v.id == *func_id));
+
+            if is_constant {
+                // It's a constant - add as a variable
+                if let Some(var) = hir
+                    .scopes
+                    .scopes
+                    .iter()
+                    .find_map(|scope| scope.vars.iter().find(|v| v.id == *func_id))
+                {
+                    let symbol_id = SymbolId(next_symbol_id);
+                    next_symbol_id += 1;
+                    let scope = ScopeId(0);
+                    table.symbols.push(Symbol {
+                        id: symbol_id,
+                        name: name.clone(),
+                        kind: SymbolKind::Variable,
+                        ty: var.kind.clone(),
+                        defined_at: get_span(name),
+                        scope,
+                    });
+                }
+            } else {
+                // It's a function - try to get signature from hir.functions, or use generic type
+                let func_type = if let Some(func) = hir.functions.get(func_id) {
+                    ValueKind::Function(format_function_type_string(&func.signature))
+                } else {
+                    // Function from another module - use generic function type
+                    // This happens when importing from other modules
+                    ValueKind::Function("unknown -> unknown".to_string())
+                };
+
                 let symbol_id = SymbolId(next_symbol_id);
                 next_symbol_id += 1;
+                // Imported symbols are in root scope
                 let scope = ScopeId(0);
                 table.symbols.push(Symbol {
                     id: symbol_id,
                     name: name.clone(),
-                    kind: SymbolKind::Variable,
-                    ty: var.kind.clone(),
+                    kind: SymbolKind::Function,
+                    ty: func_type,
                     defined_at: get_span(name),
                     scope,
                 });
             }
-        } else {
-            // It's a function - try to get signature from hir.functions, or use generic type
-            let func_type = if let Some(func) = hir.functions.get(func_id) {
-                ValueKind::Function(format_function_type_string(&func.signature))
-            } else {
-                // Function from another module - use generic function type
-                // This happens when importing from other modules
-                ValueKind::Function("unknown -> unknown".to_string())
-            };
-
-            let symbol_id = SymbolId(next_symbol_id);
-            next_symbol_id += 1;
-            // Imported symbols are in root scope
-            let scope = ScopeId(0);
-            table.symbols.push(Symbol {
-                id: symbol_id,
-                name: name.clone(),
-                kind: SymbolKind::Function,
-                ty: func_type,
-                defined_at: get_span(name),
-                scope,
-            });
         }
     }
 
@@ -241,6 +263,11 @@ pub fn build_symbol_table_without_spans(hir: &HirAst) -> SymbolTable {
     let mut table = SymbolTable::new();
     let mut next_symbol_id = 0u32;
 
+    // Determine the current module name (default to "__main__" if not found in any module)
+    // Note: Without AST, we can't determine the module name, so we default to "__main__"
+    // This is acceptable since this function is only used as a fallback
+    let current_module = "__main__".to_string();
+
     // Add all functions (both regular and built-in)
     for (_, func) in &hir.functions {
         let symbol_id = SymbolId(next_symbol_id);
@@ -256,7 +283,10 @@ pub fn build_symbol_table_without_spans(hir: &HirAst) -> SymbolTable {
     }
 
     // Add imported functions
-    for (name, func_id) in hir.all_imports() {
+    // Only include imports for the CURRENT module, not all modules
+    let current_imports = hir.module_imports.get(&current_module);
+    if let Some(imports) = current_imports {
+        for (name, func_id) in imports {
         // Check if this is a constant (variable ID) or a function
         let is_constant = hir
             .scopes
@@ -302,6 +332,7 @@ pub fn build_symbol_table_without_spans(hir: &HirAst) -> SymbolTable {
                 defined_at: None,
                 scope: ScopeId(0),
             });
+        }
         }
     }
 
