@@ -1,47 +1,28 @@
-use crate::core::engine::{Arity, StdFunction, StdModule};
-use crate::core::hir_lowering::{FunctionSignature, ValueKind};
+use crate::core::engine::StdModule;
 use crate::core::vm::Value;
-use std::sync::Arc;
 
 /// Standard library I/O module.
 /// 
 /// This is pure declarative metadata describing the std module.
 /// It does not mutate the Engine - it's compiler input, not runtime behavior.
 lazy_static::lazy_static! {
-    pub static ref STD_MODULE: StdModule = StdModule {
-    name: "std",
-    functions: {
-        vec![
-        StdFunction {
-            name: "print",
-            signature: FunctionSignature {
-                params: vec![ValueKind::String],
-                return_type: Box::new(ValueKind::String),
-            },
-            arity: Arity::Fixed(1),
-            impl_fn: Arc::new(|args, heap| {
+    pub static ref STD_MODULE: StdModule = crate::melon_module! {
+    module std {
+        fn print(s: str) -> str {
+            |args, heap| {
                 let s = args[0].value_to_string(heap);
                 println!("{}", s);
                 Value::string_with_heap(String::new(), heap)
-            }),
-        },
-        StdFunction {
-            name: "format_number",
-            signature: FunctionSignature {
-                params: vec![ValueKind::Number, ValueKind::Number],
-                return_type: Box::new(ValueKind::String),
-            },
-            arity: Arity::Fixed(2),
-            impl_fn: Arc::new(|args, heap| {
+            }
+        }
+        fn format_number(n: num, decimals: num) -> str {
+            |args, heap| {
                 let n = args[0].as_number().expect("expected number");
                 let decimals = args[1].as_number().expect("expected number") as i32;
                 let formatted = format!("{:.1$}", n, decimals as usize);
                 Value::string_with_heap(formatted, heap)
-            }),
+            }
         }
-        ]
-    },
-    structs: vec![],
-    submodules: vec![],
+    }
     };
 }

@@ -19,16 +19,18 @@ use ::std::collections::HashMap;
 ///
 /// This function loads all available standard library modules,
 /// making them available for import and use in CantaLoop programs.
+///
+/// Uses the unified `register_module` API for consistency.
 pub fn load_stdlib_runtime(engine: &mut Engine) {
-    engine.load_stdlib(&*math::MATH_MODULE, "");
-    engine.load_stdlib(&*std::STD_MODULE, "");
-    engine.load_stdlib(&*string::STRING_MODULE, "");
-    engine.load_stdlib(&*matrix::MATRIX_MODULE, "");
-    engine.load_stdlib(&*array::ARRAY_MODULE, "");
-    engine.load_stdlib(&*number::NUMBER_MODULE, "");
-    engine.load_stdlib(&*comparison::COMPARISON_MODULE, "");
-    engine.load_stdlib(&*logic::LOGIC_MODULE, "");
-    engine.load_stdlib(&*functional::FUNCTIONAL_MODULE, "");
+    engine.register_module(&*math::MATH_MODULE, "");
+    engine.register_module(&*std::STD_MODULE, "");
+    engine.register_module(&*string::STRING_MODULE, "");
+    engine.register_module(&*matrix::MATRIX_MODULE, "");
+    engine.register_module(&*array::ARRAY_MODULE, "");
+    engine.register_module(&*number::NUMBER_MODULE, "");
+    engine.register_module(&*comparison::COMPARISON_MODULE, "");
+    engine.register_module(&*logic::LOGIC_MODULE, "");
+    engine.register_module(&*functional::FUNCTIONAL_MODULE, "");
 }
 
 /// Load all standard library modules into the compile session.

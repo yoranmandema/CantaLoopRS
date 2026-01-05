@@ -15,6 +15,7 @@ bitflags = { version = "2", features = ["serde"] }
 serde = { version = "1", default-features = false, features = ["derive"] }
 notify = "8.2.0"
 walkdir = "2.5.0"
+libloading = "0.8"
 
 [dev-dependencies]
 tempfile = "3.10"

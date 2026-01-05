@@ -17,6 +17,7 @@ pub mod vm;
 
 pub mod compileSession;
 pub mod projectLoader;
+pub mod native_module_loader;
 
 // Re-export commonly used types
 pub use engine::Engine;

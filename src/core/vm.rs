@@ -132,7 +132,7 @@ pub(crate) struct ArrayIterator {
 }
 
 /// Struct instance data stored in the heap
-pub(crate) struct StructData {
+pub struct StructData {
     pub type_id: u32, // Struct type ID (index into struct definitions)
     pub fields: Vec<Value>, // Field values in order
 }

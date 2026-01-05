@@ -285,6 +285,7 @@ pub type ImportTable = HashMap<String, u32>; // symbol_name -> function_id
 
 /// Represents a module that can be imported from.
 /// A module is a collection of functions, constants, and structs identified by dot-separated paths.
+/// Each module has its own import scope to avoid collisions across files.
 #[derive(Debug, Clone, Serialize)]
 pub struct Module {
     /// Functions in this module: function_name -> function_id
@@ -293,6 +294,9 @@ pub struct Module {
     pub constants: HashMap<String, u32>,
     /// Structs in this module: struct_name -> StructDef
     pub structs: HashMap<String, StructDef>,
+    /// Imported symbols in this module: symbol_name -> function_id
+    /// This is per-module to avoid collisions when the same symbol is imported in different files.
+    pub imports: HashMap<String, u32>,
 }
 
 /// Compiler state containing all semantic information from compilation.

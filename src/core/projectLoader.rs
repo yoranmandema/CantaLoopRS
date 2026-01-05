@@ -1,12 +1,14 @@
 use std::path::{Path, PathBuf};
 
 use crate::core::engine::MelonProject;
+use crate::core::native_module_loader;
 
 pub struct ProjectLoader {
 
 }
 
 impl ProjectLoader {
+    /// Load project configuration from melon.json
     pub fn load_project(project_path: &Path) -> Result<MelonProject, std::io::Error> {
         let config_path = project_path.join("melon.json");
         let config_data = std::fs::read_to_string(config_path)?;
@@ -35,5 +37,12 @@ impl ProjectLoader {
             scripts,
             dependencies: deps,
         })
+    }
+
+    /// Load native Rust modules from a project's native/ directory into an engine.
+    ///
+    /// This is a convenience wrapper around `native_module_loader::load_native_modules`.
+    pub fn load_native_modules(engine: &mut crate::core::engine::Engine, project_root: &Path) -> Result<(), Box<dyn std::error::Error>> {
+        native_module_loader::load_native_modules(engine, project_root)
     }
 }

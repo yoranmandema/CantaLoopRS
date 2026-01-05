@@ -69,6 +69,8 @@ fn finish_project_creation(project_name: String) {
     println!("Next:");
     println!("  cd {}", project_name);
     println!("  melon run");
+    println!();
+    println!("💡 Tip: Edit native/modules.rs to add custom Rust functions!");
     println!("Happy coding! 🍉");
 }
 
@@ -82,6 +84,7 @@ fn create_new_project(
 
     std::fs::create_dir_all(project_path.join("src"))?;
     std::fs::create_dir_all(project_path.join("tests"))?;
+    std::fs::create_dir_all(project_path.join("native"))?;
 
     std::fs::write(
         project_path.join("melon.json"),
@@ -97,9 +100,166 @@ fn create_new_project(
 
     std::fs::write(
         project_path.join("src/main.mln"),
-        r#"use std.print;
+        r#"use print from std;
 
 print("Hello, world! 🍉")!;
+"#,
+    )?;
+
+    // Create native/Cargo.toml template
+    std::fs::write(
+        project_path.join("native/Cargo.toml"),
+        format!(
+            r#"# Native modules for your Melon project
+#
+# This Cargo.toml defines your native Rust modules as a separate crate.
+# Configure the cantaloop dependency based on your setup:
+#
+# Option 1: If cantaloop is published to crates.io:
+#   cantaloop = "0.1.0"
+#
+# Option 2: If using from a local path (e.g., during development):
+#   cantaloop = {{ path = "../../cantaloop" }}
+#
+# Option 3: If using from git:
+#   cantaloop = {{ git = "https://github.com/yourusername/cantaloop" }}
+
+[package]
+name = "{}-native"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "native_modules"
+path = "lib.rs"
+crate-type = ["cdylib"]
+
+[dependencies]
+# Configure cantaloop dependency - uncomment and adjust as needed:
+# cantaloop = "0.1.0"  # If published
+# cantaloop = {{ path = "../../cantaloop" }}  # If local path
+# cantaloop = {{ git = "https://github.com/yourusername/cantaloop" }}  # If git
+lazy_static = "1.5.0"
+"#,
+            project_name
+        ),
+    )?;
+
+    // Create native/lib.rs
+    std::fs::write(
+        project_path.join("native/lib.rs"),
+        r#"// Auto-generated lib.rs for native modules
+#[macro_use]
+extern crate lazy_static;
+
+pub mod modules;
+pub use modules::*;
+"#,
+    )?;
+
+    // Create native/modules.rs template
+    std::fs::write(
+        project_path.join("native/modules.rs"),
+        r#"// Native Rust modules for your Melon project
+//
+// This file contains native Rust functions that can be used in your Melon code.
+// Use the melon_module! macro to define modules declaratively.
+//
+// Example:
+//   use mymath.hypot;
+//   let result = hypot(3, 4);  // 5.0
+
+use cantaloop::core::engine::StdModule;
+use cantaloop::core::vm::Value;
+use cantaloop::melon_module;
+
+// Define your native modules here
+lazy_static::lazy_static! {
+    pub static ref MYMATH_MODULE: StdModule = melon_module! {
+        module mymath {
+            fn hypot(a: num, b: num) -> num {
+                |args, _heap| {
+                    let a = args[0].as_number().expect("expected number");
+                    let b = args[1].as_number().expect("expected number");
+                    Value::number((a*a + b*b).sqrt())
+                }
+            }
+        }
+    };
+}
+
+// Export a registration function that can be called from the melon runtime
+#[no_mangle]
+pub extern "C" fn register_native_modules(engine: *mut cantaloop::core::engine::Engine) {
+    unsafe {
+        if let Some(engine_ref) = engine.as_mut() {
+            // Register modules directly (can't use const array with lazy_static)
+            engine_ref.register_module(&*MYMATH_MODULE, "");
+        }
+    }
+}
+"#,
+    )?;
+
+    // Create native/README.md with instructions
+    std::fs::write(
+        project_path.join("native/README.md"),
+        r#"# Native Modules
+
+This directory contains native Rust modules for your Melon project.
+
+## Quick Start
+
+1. **Configure the dependency**: Edit `Cargo.toml` and uncomment/configure the `cantaloop` dependency
+   - If cantaloop is published: `cantaloop = "0.1.0"`
+   - If using local path: `cantaloop = { path = "../../cantaloop" }`
+   - If using git: `cantaloop = { git = "https://github.com/..." }`
+
+2. **Define your modules**: Edit `modules.rs` to add your native functions using the `melon_module!` macro
+
+3. **Run your project**: `melon run` will automatically compile and load your native modules
+
+## Example Usage in Melon
+
+```melon
+use hypot from mymath;
+
+let result = hypot(3, 4);  // 5.0
+```
+
+## How It Works
+
+1. Configure `cantaloop` dependency in `Cargo.toml`
+2. Define modules in `modules.rs` using the `melon_module!` macro
+3. The `register_native_modules` function exports them for the melon runtime
+4. Run `melon run` - it automatically compiles and loads your native modules
+5. Import and use them in your Melon code
+
+## Adding More Modules
+
+Just add more module definitions to `modules.rs` and register them in `register_native_modules`:
+
+```rust
+lazy_static::lazy_static! {
+    pub static ref MYUTILS_MODULE: StdModule = melon_module! {
+        module myutils {
+            // ... functions ...
+        }
+    };
+}
+
+#[no_mangle]
+pub extern "C" fn register_native_modules(engine: *mut cantaloop::core::engine::Engine) {
+    unsafe {
+        if let Some(engine_ref) = engine.as_mut() {
+            engine_ref.register_module(&*MYMATH_MODULE, "");
+            engine_ref.register_module(&*MYUTILS_MODULE, "");  // Add more here
+        }
+    }
+}
+```
+
+See NATIVE_MODULES.md for detailed documentation.
 "#,
     )?;
 
@@ -138,6 +298,12 @@ fn run_once(project_root: &Path, debug: bool) {
 
     let mut engine = Engine::new();
     stdlib::load_stdlib_runtime(&mut engine);
+    
+    // Load project-native Rust bindings (if any)
+    // This must happen before wrapping engine in Arc, as it mutates the engine
+    if let Err(e) = ProjectLoader::load_native_modules(&mut engine, project_root) {
+        eprintln!("Warning: Failed to load project native modules: {}", e);
+    }
 
     let main_path = project.entry.to_str().unwrap();
     println!("{}", main_path);

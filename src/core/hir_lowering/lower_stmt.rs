@@ -192,9 +192,21 @@ impl HirBuilder {
     }
 
     /// Resolve an imported symbol in the current module
+    /// 
+    /// Checks both module_imports (primary) and Module.imports (for consistency).
+    /// This ensures per-module import scoping works correctly.
     fn resolve_import_in_current_module(&self, name: &str) -> Option<u32> {
-        self.get_current_imports()
-            .and_then(|imports| imports.get(name).copied())
+        // First check module_imports (primary storage)
+        if let Some(id) = self.get_current_imports()
+            .and_then(|imports| imports.get(name).copied()) {
+            return Some(id);
+        }
+        
+        // Also check Module.imports for consistency
+        self.current_module
+            .as_ref()
+            .and_then(|module_name| self.modules.get(module_name))
+            .and_then(|module| module.imports.get(name).copied())
     }
 
     /// Add a symbol to the current module's import table
@@ -203,6 +215,7 @@ impl HirBuilder {
             HirError::TypeError("Cannot import symbols without a module declaration".to_string())
         })?;
 
+        // Store in module_imports (for backward compatibility and LSP)
         self.module_imports
             .entry(module_name.clone())
             .or_insert_with(HashMap::new)
@@ -211,9 +224,15 @@ impl HirBuilder {
         // Also update the HirAst for LSP access
         self.ast
             .module_imports
-            .entry(module_name)
+            .entry(module_name.clone())
             .or_insert_with(HashMap::new)
-            .insert(name, id);
+            .insert(name.clone(), id);
+
+        // Store in Module.imports for per-module import scoping
+        // This ensures each module has its own import scope, avoiding collisions
+        if let Some(module) = self.modules.get_mut(&module_name) {
+            module.imports.insert(name, id);
+        }
 
         Ok(())
     }
@@ -870,6 +889,7 @@ impl HirBuilder {
                 functions,
                 constants,
                 structs,
+                imports: HashMap::new(),
             },
         );
     }
@@ -885,6 +905,7 @@ impl HirBuilder {
                     functions: module.functions.clone(),
                     constants: module.constants.clone(),
                     structs: module.structs.clone(),
+                    imports: module.imports.clone(),
                 },
             );
         }
@@ -1543,6 +1564,7 @@ impl HirBuilder {
                         functions: HashMap::new(),
                         constants: HashMap::new(),
                         structs: HashMap::new(),
+                        imports: HashMap::new(),
                     })
                     .constants
                     .insert(identifier.clone(), const_id);
@@ -2028,6 +2050,7 @@ impl HirBuilder {
                         functions: HashMap::new(),
                         constants: HashMap::new(),
                         structs: HashMap::new(),
+                        imports: HashMap::new(),
                     })
                     .functions
                     .insert(identifier.clone(), func_id);
@@ -3424,6 +3447,7 @@ impl HirBuilder {
                         functions: HashMap::new(),
                         constants: HashMap::new(),
                         structs: HashMap::new(),
+                        imports: HashMap::new(),
                     })
                     .structs
                     .insert(name.clone(), struct_def);

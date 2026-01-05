@@ -1,0 +1,6 @@
+let app = bevy.app()
+    |> bevy.with_default_plugins
+    |> bevy.with_window("My Game", 1280, 720)
+    |> bevy.with_clear_color(0.1, 0.1, 0.1);
+
+bevy.run(app)!;

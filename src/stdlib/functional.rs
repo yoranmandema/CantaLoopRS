@@ -1,11 +1,10 @@
 use crate::core::engine::{Arity, StdFunction, StdModule};
 use crate::core::hir_lowering::{FunctionSignature, ValueKind};
-use crate::core::vm::Value;
 use std::sync::Arc;
 
 /// Standard functional module.
 /// 
-/// This is pure declarative metadata describing the string module.
+/// This is pure declarative metadata describing the functional module.
 /// It does not mutate the Engine - it's compiler input, not runtime behavior.
 lazy_static::lazy_static! {
     pub static ref FUNCTIONAL_MODULE: StdModule = StdModule {

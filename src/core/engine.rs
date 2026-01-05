@@ -70,6 +70,9 @@ pub struct StdStruct {
     pub name: &'static str,
     /// The fields of the struct: (field_name, field_type)
     pub fields: Vec<(&'static str, crate::core::hir_lowering::ValueKind)>,
+    /// Methods defined on this struct (for future use)
+    /// Currently not exposed in syntax, but reserved for future member function support
+    pub methods: Vec<StdFunction>,
 }
 
 /// Standard library module descriptor.
@@ -204,6 +207,111 @@ macro_rules! add_variadic_number_fn {
     }};
 }
 
+/// Helper macro for type conversion (internal use only).
+#[macro_export]
+macro_rules! __melon_type_kind {
+    (num) => { $crate::core::hir_lowering::ValueKind::Number };
+    (str) => { $crate::core::hir_lowering::ValueKind::String };
+    (bool) => { $crate::core::hir_lowering::ValueKind::Boolean };
+    (any) => { $crate::core::hir_lowering::ValueKind::Any };
+    (void) => { $crate::core::hir_lowering::ValueKind::Void };
+    // Array types: [num], [str], [bool], [any]
+    ([num]) => { $crate::core::hir_lowering::ValueKind::Array(Box::new($crate::core::hir_lowering::ValueKind::Number)) };
+    ([str]) => { $crate::core::hir_lowering::ValueKind::Array(Box::new($crate::core::hir_lowering::ValueKind::String)) };
+    ([bool]) => { $crate::core::hir_lowering::ValueKind::Array(Box::new($crate::core::hir_lowering::ValueKind::Boolean)) };
+    ([any]) => { $crate::core::hir_lowering::ValueKind::Array(Box::new($crate::core::hir_lowering::ValueKind::Any)) };
+}
+
+/// Helper macro for counting parameters (internal use only).
+#[macro_export]
+macro_rules! __melon_count {
+    () => { 0 };
+    ($first:ident) => { 1 };
+    ($first:ident $($rest:ident)*) => { 1 + $crate::__melon_count!($($rest)*) };
+}
+
+/// Macro to create a native module declaratively.
+///
+/// This macro reduces boilerplate when defining native modules by automatically
+/// constructing StdModule, StdFunction, and FunctionSignature structures.
+///
+/// # Supported Types
+/// - `num` - Number (f64)
+/// - `str` - String
+/// - `bool` - Boolean
+/// - `any` - Any type
+/// - `[num]`, `[str]`, `[bool]`, `[any]` - Array types
+///
+/// # Usage:
+/// ```ignore
+/// pub static NUMBER_MODULE: StdModule = melon_module! {
+///     module number {
+///         fn add(a: num, b: num) -> num {
+///             |args, _heap| {
+///                 let a = args[0].as_number().expect("expected number");
+///                 let b = args[1].as_number().expect("expected number");
+///                 Value::number(a + b)
+///             }
+///         }
+///     }
+/// };
+/// ```
+///
+/// # Native Function Rules (Guardrails)
+///
+/// Native functions must follow these rules to ensure determinism and safety:
+///
+/// 1. **No State Storage**: Do not store `Value` outside the call scope
+/// 2. **No Heap References**: Do not keep references to `ValueHeap` after the call
+/// 3. **No VM Mutation**: Do not mutate VM state (only use the heap for temporary allocations)
+/// 4. **Pure Effects**: All effects must happen via return values
+///
+/// These rules ensure:
+/// - Determinism (same inputs = same outputs)
+/// - Replayability (functions can be re-executed safely)
+/// - Debuggability (no hidden state)
+///
+/// The function body should be a closure that takes `&[Value], &mut ValueHeap` and returns `Value`.
+#[macro_export]
+macro_rules! melon_module {
+    (
+        module $module_name:ident {
+            $(
+                fn $fn_name:ident($($param_name:ident: $param_type:ident),*) -> $return_type:ident {
+                    $impl:expr
+                }
+            )*
+        }
+    ) => {{
+        use $crate::core::engine::{Arity, StdFunction, StdModule};
+        use $crate::core::hir_lowering::FunctionSignature;
+        use std::sync::Arc;
+
+        StdModule {
+            name: stringify!($module_name),
+            functions: vec![
+                $(
+                    StdFunction {
+                        name: stringify!($fn_name),
+                        signature: FunctionSignature {
+                            params: vec![
+                                $(
+                                    $crate::__melon_type_kind!($param_type)
+                                ),*
+                            ],
+                            return_type: Box::new($crate::__melon_type_kind!($return_type)),
+                        },
+                        arity: Arity::Fixed($crate::__melon_count!($($param_name)*)),
+                        impl_fn: Arc::new($impl),
+                    }
+                ),*
+            ],
+            structs: vec![],
+            submodules: vec![],
+        }
+    }};
+}
+
 #[derive(Clone)]
 pub struct RunArtifacts {
     pub ast: Program,
@@ -222,9 +330,17 @@ pub struct RunArtifacts {
 /// - Bytecode compilation
 /// - VM execution
 /// - Built-in function registration
+/// Struct information for compile-time registration
+struct ModuleStructInfo {
+    name: String,
+    fields: Vec<(String, crate::core::hir_lowering::ValueKind)>,
+}
+
 pub struct Engine {
     pub functions: HashMap<u32, NativeFunction>,
     pub native_descriptors: Vec<NativeFunctionDescriptor>,
+    /// Registered structs by module (for compile-time registration)
+    registered_structs: HashMap<String, Vec<ModuleStructInfo>>,
 }
 
 impl Engine {
@@ -232,6 +348,7 @@ impl Engine {
         Self {
             functions: HashMap::new(),
             native_descriptors: vec![],
+            registered_structs: HashMap::new(),
         }
     }
 
@@ -355,6 +472,122 @@ impl Engine {
         }
     }
 
+    /// Register a native module into the engine.
+    ///
+    /// This is the unified entry point for registering native modules (stdlib, project-local, or extensions).
+    /// It recursively registers the module and all its submodules, making functions available for compilation.
+    ///
+    /// # Arguments
+    /// * `module` - The native module descriptor to register
+    /// * `base_path` - The base path prefix for this module (empty for top-level)
+    ///
+    /// # Important
+    /// - This happens before parsing user code
+    /// - Modules are immutable afterward
+    /// - HIR sees everything up front
+    /// - Import resolution becomes deterministic
+    pub fn register_module(&mut self, module: &StdModule, base_path: &str) {
+        // Store struct information for compile-time registration
+        let module_path = if base_path.is_empty() {
+            module.name.to_string()
+        } else {
+            format!("{}.{}", base_path, module.name)
+        };
+        
+        // Extract struct information
+        let structs: Vec<ModuleStructInfo> = module.structs.iter().map(|s| {
+            ModuleStructInfo {
+                name: s.name.to_string(),
+                fields: s.fields.iter().map(|(n, k)| (n.to_string(), k.clone())).collect(),
+            }
+        }).collect();
+        if !structs.is_empty() {
+            self.registered_structs.insert(module_path.clone(), structs);
+        }
+        
+        // Delegate to the existing implementation for runtime registration
+        self.load_stdlib(module, base_path);
+    }
+
+    /// Register multiple native modules at once.
+    ///
+    /// This is a convenience function for registering multiple modules,
+    /// useful when loading project-native modules.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// use cantaloop::core::engine::Engine;
+    /// use my_project_native::{MYMATH_MODULE, MYUTILS_MODULE};
+    ///
+    /// let mut engine = Engine::new();
+    /// engine.register_modules(&[&MYMATH_MODULE, &MYUTILS_MODULE]);
+    /// ```
+    pub fn register_modules(&mut self, modules: &[&StdModule]) {
+        for module in modules {
+            self.register_module(module, "");
+        }
+    }
+
+    /// Load project-local native modules from a project directory.
+    ///
+    /// **Deprecated**: Use `ProjectLoader::load_native_modules` instead.
+    /// This method is kept for backward compatibility and delegates to ProjectLoader.
+    #[deprecated(note = "Use ProjectLoader::load_native_modules instead")]
+    pub fn load_project_native_modules(&mut self, project_root: &Path) -> Result<(), Box<dyn std::error::Error>> {
+        crate::core::projectLoader::ProjectLoader::load_native_modules(self, project_root)
+    }
+
+    /// Register native modules (including project-native modules) in a CompileSession.
+    ///
+    /// This builds module maps from native_descriptors and registers them in the session,
+    /// similar to how stdlib modules are registered. This ensures native modules are
+    /// available for compile-time resolution.
+    fn register_native_modules_for_compile(engine: &Engine, session: &mut CompileSession) {
+        use std::collections::HashMap;
+        use crate::core::hir_lowering::StructDef;
+        
+        // Build module maps from native_descriptors
+        // Functions are registered with qualified names like "std.print", "math.round", "mymath.hypot"
+        let mut native_modules: HashMap<String, (HashMap<String, u32>, HashMap<String, StructDef>)> = HashMap::new();
+        
+        for native in engine.native_function_descriptors() {
+            // Look for qualified names (e.g., "std.print", "math.round", "mymath.hypot")
+            if let Some(dot_pos) = native.name.find('.') {
+                let module_name = &native.name[..dot_pos];
+                let function_name = &native.name[dot_pos + 1..];
+                
+                let (functions, _) = native_modules
+                    .entry(module_name.to_string())
+                    .or_insert_with(|| (HashMap::new(), HashMap::new()));
+                functions.insert(function_name.to_string(), native.id);
+            }
+        }
+        
+        // Add structs from registered modules
+        for (module_name, struct_infos) in &engine.registered_structs {
+            if let Some((_, structs_map)) = native_modules.get_mut(module_name) {
+                for struct_info in struct_infos {
+                    let struct_def = StructDef {
+                        name: struct_info.name.clone(),
+                        fields: struct_info.fields.clone(),
+                    };
+                    structs_map.insert(struct_info.name.clone(), struct_def);
+                }
+            }
+        }
+        
+        // Register native modules with their functions and structs
+        // Note: stdlib modules are already registered by load_stdlib_for_compile,
+        // so we only need to register non-stdlib modules (like project-native modules)
+        // We check if the module exists in HirBuilder's modules map to avoid duplicates
+        for (module_name, (functions, structs)) in native_modules {
+            // Check if module is already registered by checking HirBuilder's modules map
+            if !session.has_module(&module_name) {
+                session.register_module_with_structs(&module_name, functions, structs);
+            }
+        }
+    }
+
     /// Load a standard library module into the engine.
     ///
     /// This method recursively loads a module and all its submodules,
@@ -363,6 +596,9 @@ impl Engine {
     /// # Arguments
     /// * `module` - The standard library module descriptor to load
     /// * `base_path` - The base path prefix for this module (empty for top-level)
+    ///
+    /// # Deprecated
+    /// Use `register_module` instead. This method is kept for backward compatibility.
     pub fn load_stdlib(&mut self, module: &StdModule, base_path: &str) {
         // Build the full module path
         let module_path = if base_path.is_empty() {
@@ -387,7 +623,7 @@ impl Engine {
             );
 
             // Also add to native_descriptors so it's available in CompileContext for compile-time resolution
-            // Use module-qualified name (e.g., "std.print") so it can be found during compilation
+            // Use module-qualified name (e.g., "std.print", "mymath.hypot") so it can be found during compilation
             let qualified_name = format!("{}.{}", module_path, func.name);
             self.native_descriptors.push(NativeFunctionDescriptor {
                 id: func_id,
@@ -413,9 +649,9 @@ impl Engine {
         // Note: Module registration with HirBuilder happens when CompileSession is created
         // For now, we just track modules in Engine's native_descriptors
 
-        // Recursively load submodules
+        // Recursively register submodules
         for submodule in &module.submodules {
-            self.load_stdlib(submodule, &module_path);
+            self.register_module(submodule, &module_path);
         }
     }
 
@@ -469,8 +705,13 @@ impl Engine {
         // Load stdlib modules for compile-time resolution
         crate::stdlib::load_stdlib_for_compile(&mut session);
 
+        // Register native modules (including project-native modules) in CompileSession
+        // Build module maps from native_descriptors (similar to compile_for_lsp)
+        Self::register_native_modules_for_compile(self, &mut session);
+
         // Load project modules if project_root is provided
         if let Some(project_root) = project_root {
+            // Load project Melon modules
             if let Err(e) = session.load_project_modules(project_root) {
                 eprintln!("Warning: Failed to load project modules: {}", e);
             }
@@ -554,20 +795,28 @@ impl Engine {
         // Build stdlib module maps from native_descriptors
         // Functions are registered with qualified names like "std.print", "math.round", etc.
         let mut stdlib_modules: HashMap<String, HashMap<String, u32>> = HashMap::new();
+        eprintln!("Building modules from {} native descriptors", self.native_function_descriptors().len());
         for native in self.native_function_descriptors() {
-            // Look for qualified names (e.g., "std.print", "math.round")
+            // Look for qualified names (e.g., "std.print", "math.round", "mymath.hypot")
             if let Some(dot_pos) = native.name.find('.') {
                 let module_name = &native.name[..dot_pos];
                 let function_name = &native.name[dot_pos + 1..];
+                eprintln!("  Found function: {}.{} -> module '{}'", module_name, function_name, module_name);
                 stdlib_modules
                     .entry(module_name.to_string())
                     .or_insert_with(HashMap::new)
                     .insert(function_name.to_string(), native.id);
             }
         }
+        
+        // Debug: print registered modules
+        if !stdlib_modules.is_empty() {
+            eprintln!("Registered modules: {:?}", stdlib_modules.keys().collect::<Vec<_>>());
+        }
     
         // Register stdlib modules with their functions
         for (module_name, functions) in stdlib_modules {
+            eprintln!("Registering module '{}' with {} functions", module_name, functions.len());
             hir_builder.register_module(&module_name, functions, HashMap::new(), HashMap::new());
         }
     

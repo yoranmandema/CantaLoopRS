@@ -144,6 +144,7 @@ lazy_static::lazy_static! {
                 ("z", ValueKind::Number),
                 ("w", ValueKind::Number),
             ],
+            methods: vec![],
         }
     ],
     submodules: vec![],

@@ -1,0 +1,22 @@
+# Rust build artifacts
+native/target/
+native/**/*.rs.bk
+
+# Windows build artifacts
+*.dll
+*.dll.exp
+*.dll.lib
+*.pdb
+*.exe
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+

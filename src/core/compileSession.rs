@@ -117,6 +117,11 @@ impl<'a> CompileSession<'a> {
             .register_module(path, functions, HashMap::new(), structs);
     }
 
+    /// Check if a module is already registered in the HirBuilder.
+    pub fn has_module(&self, module_name: &str) -> bool {
+        self.hir_builder.modules.contains_key(module_name)
+    }
+
     /// Get the function ID for a registered function by name.
     ///
     /// Returns None if the function is not found.
