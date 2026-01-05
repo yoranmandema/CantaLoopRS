@@ -13,7 +13,7 @@ serde_json = { version = "1.0", default-features = false }
 tokio = { version = "1.0", features = ["full"] }
 bitflags = { version = "2", features = ["serde"] }
 serde = { version = "1", default-features = false, features = ["derive"] }
-notify = "6"
+notify = "8.2.0"
 walkdir = "2.5.0"
 
 [dev-dependencies]
