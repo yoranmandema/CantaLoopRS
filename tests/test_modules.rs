@@ -3,7 +3,7 @@ mod common;
 use std::fs;
 use std::path::PathBuf;
 use tempfile::TempDir;
-use CantaLoopRS::Engine;
+use cantaloop::Engine;
 use common::helpers::run_code;
 
 /// Helper to create a temporary project directory with module files

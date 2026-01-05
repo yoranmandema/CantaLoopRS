@@ -15,11 +15,11 @@ Source Code (.mln)
     ↓
 AST (Abstract Syntax Tree)
     ↓
-[semantic_analyser.rs] - Type checking & HIR generation
+[hir_lowering/] - Type checking & HIR generation
     ↓
 HIR (High-level Intermediate Representation)
     ↓
-[bytecode_emitter.rs] - Bytecode compilation
+[bytecode/emitter.rs] - Bytecode compilation
     ↓
 Bytecode (OpCode instructions)
     ↓
@@ -31,35 +31,43 @@ Output
 ## Core Components
 
 ### parser.rs
+- **Location**: `src/core/parser.rs`
 - **Responsibility**: Converts source code text into an Abstract Syntax Tree (AST)
 - **Technology**: Pest parser generator with Pratt parser for operator precedence
+- **Grammar**: Defined in `src/grammar/grammar.pest`
 - **Output**: `ast::Program` containing statements and expressions
 - **Key Function**: `parse_program()` - Entry point for parsing
 
-### ast.rs / ast_enums.rs / ast_builder.rs
+### ast/ (enums.rs, builder.rs, mod.rs)
+- **Location**: `src/core/ast/`
 - **Responsibility**: AST representation and construction
-- **ast_enums.rs**: Core AST data structures (Expression, Statement, Program, etc.)
-- **ast_builder.rs**: Converts Pest parse tree pairs into typed AST nodes
+- **enums.rs**: Core AST data structures (Expression, Statement, Program, etc.)
+- **builder.rs**: Converts Pest parse tree pairs into typed AST nodes
 - **Key Types**: `Expression`, `Statement`, `Program`, `Block`
 
-### semantic_analyser.rs
+### hir_lowering/ (mod.rs, lower_expr.rs, lower_stmt.rs, scopes.rs, symbols.rs, project_semantic_items.rs)
+- **Location**: `src/core/hir_lowering/`
 - **Responsibility**: Type checking and High-level Intermediate Representation (HIR) generation
 - **Process**:
   1. Traverses AST
   2. Resolves variable types and scope
   3. Validates type correctness
   4. Generates HIR with typed expressions and variable slots
-- **Key Types**: `HirBuilder`, `HirAst`, `HirExpression`, `ValueKind`
+  5. Manages symbol tables and module resolution
+- **Key Types**: `HirBuilder`, `HirAst`, `HirExpression`, `ValueKind`, `CompilerState`, `Symbol`, `SymbolTable`
 - **No allocations during type checking** - Uses arena-style scope management
+- **Module System**: Handles dot-path imports and module resolution
 
-### bytecode.rs / bytecode_opcode.rs / bytecode_emitter.rs
+### bytecode/ (opcode.rs, emitter.rs, mod.rs)
+- **Location**: `src/core/bytecode/`
 - **Responsibility**: Compiles HIR to bytecode instructions
-- **bytecode_opcode.rs**: Defines the instruction set (OpCode enum)
-- **bytecode_emitter.rs**: Emits bytecode from HIR AST
+- **opcode.rs**: Defines the instruction set (OpCode enum)
+- **emitter.rs**: Emits bytecode from HIR AST
 - **Key Types**: `OpCode`, `ByteCodeEmitter`
 - **Optimizations**: Static number operations (AddNum, MulNum, etc.)
 
 ### vm.rs
+- **Location**: `src/core/vm.rs`
 - **Responsibility**: Executes bytecode instructions
 - **Technology**: Stack-based virtual machine with NaN-boxed values
 - **Key Features**:
@@ -67,26 +75,39 @@ Output
   - Stack-based execution model
   - Function calls with frame management
   - Thunk evaluation for lazy function application
+  - Composed thunk support for function composition
 - **Key Types**: `VM`, `Value`, `ValueHeap`
 - **No heap allocations during execution** - Uses pre-allocated heap for strings/thunks
 
 ### engine.rs
+- **Location**: `src/core/engine.rs`
 - **Responsibility**: Orchestrates the entire compilation and execution pipeline
 - **Process**:
   1. Parses source file
   2. Builds HIR with type checking
   3. Emits bytecode
   4. Executes in VM
-- **Key Types**: `Engine`, `BytecodeFunction`
+- **Key Types**: `Engine`, `BytecodeFunction`, `RunArtifacts`
 - **Built-in Functions**: Registers native functions (e.g., `print`)
+- **Module Registration**: Supports registering modules for import system
 
-### lsp.rs / lsp_server.rs
+### projectLoader.rs
+- **Location**: `src/core/projectLoader.rs`
+- **Responsibility**: Loads melon projects from `melon.json` files
+- **Features**:
+  - Resolves project entry point
+  - Handles project dependencies
+  - Manages project structure
+
+### lsp/ (main.rs, server.rs, compiler_state.rs, diagnostics.rs, hover.rs, completion.rs, semantic_tokens.rs)
+- **Location**: `src/lsp/`
 - **Responsibility**: Language Server Protocol implementation for IDE support
 - **Features**:
   - Real-time diagnostics (parse errors, type errors)
   - Hover information (variable types, function signatures)
   - Code completion
-- **Key Types**: `CantaLoopLSPServer`
+  - Semantic tokens for syntax highlighting
+- **Key Types**: `CantaLoopLSPServer`, `CompilerState`
 - **Technology**: tower-lsp async framework
 
 ## Data Flow
@@ -94,18 +115,19 @@ Output
 ### Compilation Phase
 
 1. **Parse**: Source → AST
-   - `parse_program()` in parser.rs
+   - `parse_program()` in `src/core/parser.rs`
    - Uses Pest grammar from `src/grammar/grammar.pest`
-   - Builds AST via `ast_builder.rs`
+   - Builds AST via `src/core/ast/builder.rs`
 
 2. **Analyze**: AST → HIR
-   - `HirBuilder::build()` in semantic_analyser.rs
+   - `HirBuilder::build()` in `src/core/hir_lowering/mod.rs`
    - Performs type inference and checking
    - Creates variable slots and function IDs
    - Generates HIR AST with typed expressions
+   - Resolves imports and module symbols
 
 3. **Compile**: HIR → Bytecode
-   - `ByteCodeEmitter::emit_program()` in bytecode_emitter.rs
+   - `ByteCodeEmitter::emit_program()` in `src/core/bytecode/emitter.rs`
    - Traverses HIR and emits OpCode instructions
    - Handles control flow (loops, conditionals, jumps)
 
@@ -152,13 +174,27 @@ Values use NaN boxing for efficient type tagging:
 4. **NaN boxing**: Efficient value representation without heap allocation for primitives
 5. **Dispatch table**: Fast opcode execution using function pointer table
 
+## Project Management
+
+### Melon Tool
+
+The `melon` binary (`src/melon/main.rs`) provides project management:
+
+- **`melon new [name]`**: Creates a new project with `melon.json` configuration
+- **`melon run [--watch|-w] [--debug]`**: Runs a project with optional watch mode and debug output
+- **Project Structure**: Projects use `melon.json` to define entry point and dependencies
+- **Watch Mode**: Automatically rebuilds and reruns on file changes
+- **Debug Output**: Generates `ast.json`, `hir.json`, and `bytecode.txt` in `.melon/debug/`
+
 ## Testing
 
 Tests are located in `tests/` directory:
 - `test_parser.rs`: Parser correctness
 - `test_ast.rs`: AST construction
-- `test_semantic.rs`: Type checking
+- `test_semantic.rs`: Type checking and HIR lowering
 - `test_bytecode.rs`: Bytecode emission
 - `test_vm.rs`: VM execution
 - `test_integration.rs`: End-to-end tests
+- `test_modules.rs`: Module system and imports
+- `test_pub_fn_*.rs`: Public function and import testing
 

@@ -1,6 +1,6 @@
 mod common;
 
-use CantaLoopRS::{
+use cantaloop::{
     parse_program,
     OpCode,
     FunctionSignature,
@@ -103,7 +103,7 @@ fn test_bytecode_emit_logical_operations() {
 
 #[test]
 fn test_thunk_collapse_full_args() {
-    use CantaLoopRS::{ByteCodeEmitter, HirBuilder};
+    use cantaloop::{ByteCodeEmitter, HirBuilder};
     
     let mut engine = common::helpers::create_test_engine();
     let program = parse_program(r#"
@@ -153,7 +153,7 @@ add(5, 10)!;
 
 #[test]
 fn test_thunk_created_partial_application() {
-    use CantaLoopRS::{ByteCodeEmitter, HirBuilder};
+    use cantaloop::{ByteCodeEmitter, HirBuilder};
     
     let mut engine = common::helpers::create_test_engine();
     let program = parse_program(r#"

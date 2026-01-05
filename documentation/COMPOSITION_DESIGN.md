@@ -84,7 +84,7 @@ For `f |> g` where both are partially applied:
 **Solution**: Ensure all optimized arithmetic opcodes force values.
 
 **Files to modify**:
-- `src/vm.rs`: `op_mul_num()`, `op_sub_num()` - add `force_value()` calls
+- `src/core/vm.rs`: `op_mul_num()`, `op_sub_num()` - add `force_value()` calls
 
 **Current state**:
 - `op_add_num()` already forces values (line 464-465)
@@ -97,7 +97,7 @@ For `f |> g` where both are partially applied:
 **Solution**: Ensure `invoke_thunk_value_recursive()` properly forces intermediate results in composition.
 
 **Files to modify**:
-- `src/vm.rs`: `invoke_thunk_value_recursive()` - ensure composed thunk evaluation forces intermediate results
+- `src/core/vm.rs`: `invoke_thunk_value_recursive()` - ensure composed thunk evaluation forces intermediate results
 
 **Current state**:
 - `invoke_thunk_value_recursive()` handles composed thunks (line 1024-1049)
@@ -110,7 +110,7 @@ For `f |> g` where both are partially applied:
 **Solution**: Ensure `execute_prepare_call()` correctly handles composed thunks with new arguments.
 
 **Files to modify**:
-- `src/vm.rs`: `execute_prepare_call()` - verify composed thunk argument handling
+- `src/core/vm.rs`: `execute_prepare_call()` - verify composed thunk argument handling
 
 **Current state**:
 - `execute_prepare_call()` handles composed thunks (line 1158-1192)
@@ -121,7 +121,7 @@ For `f |> g` where both are partially applied:
 **Enhancement**: Add semantic analysis to verify composition compatibility.
 
 **Files to modify**:
-- `src/semantic_analyser.rs`: Add type checking for `ComposeThunk` nodes
+- `src/core/hir_lowering/mod.rs`: Add type checking for `ComposeThunk` nodes
 
 ## Detailed Execution Flow
 

@@ -1,6 +1,6 @@
 mod common;
 
-use CantaLoopRS::{
+use cantaloop::{
     core::ast::{Expression, Statement, Literal, BinaryOp, UnaryOp},
     parse_program,
 };

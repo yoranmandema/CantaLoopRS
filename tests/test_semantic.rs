@@ -1,6 +1,6 @@
 mod common;
 
-use CantaLoopRS::{
+use cantaloop::{
     Engine,
     parse_program,
     FunctionSignature,

@@ -29,7 +29,7 @@ VS Code/Cursor supports an "Extension Development Host" mode that allows you to 
 
 ### Development Workflow
 
-1. Make changes to LSP code in `src/lsp_server.rs` or other files
+1. Make changes to LSP code in `src/lsp/` (server.rs, diagnostics.rs, hover.rs, etc.)
 2. Rebuild the LSP binary:
    - Run the task: `Ctrl+Shift+P` → "Tasks: Run Task" → "Quick Rebuild LSP (Dev)"
    - Or run `.\rebuild-lsp-dev.ps1` manually

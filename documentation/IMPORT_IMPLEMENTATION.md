@@ -28,7 +28,7 @@ The `use` keyword was also added to the keyword list to prevent it from being us
 
 ## AST Changes
 
-### `src/ast_enums.rs`
+### `src/core/ast/enums.rs`
 
 Added `Statement::Use` variant:
 
@@ -54,7 +54,7 @@ pub enum ImportSelector {
 
 ## AST Builder Changes
 
-### `src/ast_builder.rs`
+### `src/core/ast/builder.rs`
 
 Added `build_use_statement()` function that:
 1. Parses the import path (dot-separated identifiers)
@@ -67,7 +67,7 @@ This handles the syntax `use math.utils.square;` correctly by splitting it into:
 
 ## Semantic Analysis Changes
 
-### `src/semantic_analyser.rs`
+### `src/core/hir_lowering/mod.rs` and related files
 
 #### ImportTable Type
 
@@ -179,7 +179,7 @@ if let Some(function_id) = imported_func_id.or(regular_func_id) {
 
 ## Engine Changes
 
-### `src/engine.rs`
+### `src/core/engine.rs`
 
 Added `register_module()` method:
 
@@ -215,7 +215,7 @@ This makes it easier to register modules by looking up function IDs after regist
 
 ```rust
 use std::collections::HashMap;
-use CantaLoopRS::Engine;
+use cantaloop::Engine;
 
 let mut engine = Engine::new();
 

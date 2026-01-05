@@ -4,7 +4,7 @@
 
 ### 1. Fixed Arithmetic Opcodes to Force Thunks
 
-**File**: `src/vm.rs`
+**File**: `src/core/vm.rs`
 
 **Changes**:
 - `op_mul_num()`: Added `force_value()` calls for both operands before multiplication
@@ -87,9 +87,9 @@ The following test cases should be added:
 
 ## Files Modified
 
-- `src/vm.rs`: Fixed `op_mul_num()` and `op_sub_num()` to force values
-- `COMPOSITION_DESIGN.md`: Created comprehensive design document
-- `IMPLEMENTATION_SUMMARY.md`: This file
+- `src/core/vm.rs`: Fixed `op_mul_num()` and `op_sub_num()` to force values
+- `documentation/COMPOSITION_DESIGN.md`: Created comprehensive design document
+- `documentation/IMPLEMENTATION_SUMMARY.md`: This file
 
 ## Verification
 

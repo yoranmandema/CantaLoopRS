@@ -1,4 +1,4 @@
-use CantaLoopRS::parse_program;
+use cantaloop::parse_program;
 
 #[test]
 fn test_parse_struct() {

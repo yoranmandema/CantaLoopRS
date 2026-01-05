@@ -1,4 +1,4 @@
-use CantaLoopRS::core::parser::{CantaLoopParser, Rule};
+use cantaloop::core::parser::{CantaLoopParser, Rule};
 use pest::Parser;
 
 /// Test identifier parsing to understand the issue

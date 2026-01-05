@@ -1,4 +1,4 @@
-use CantaLoopRS::core::parser::{CantaLoopParser, Rule};
+use cantaloop::core::parser::{CantaLoopParser, Rule};
 use pest::Parser;
 
 /// Test that keywords cannot be used as identifiers, but identifiers starting with keywords can

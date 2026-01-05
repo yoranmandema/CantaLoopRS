@@ -7,8 +7,8 @@
 //! # Example
 //!
 //! ```rust,no_run
-//! use CantaLoopRS::{Engine, FunctionSignature, ValueKind};
-//! use CantaLoopRS::core::engine::Arity;
+//! use cantaloop::{Engine, FunctionSignature, ValueKind};
+//! use cantaloop::core::engine::Arity;
 //!
 //! let mut engine = Engine::new();
 //! engine.add_string_function("print", FunctionSignature {

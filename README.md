@@ -1,52 +1,79 @@
-# CantaLoopRS
+# CantaLoop
 
-A programmable functional programming language implementation in Rust.
+A functional programming language implementation in Rust with a complete toolchain including parser, type checker, bytecode compiler, virtual machine, and Language Server Protocol support.
 
 ## Features
 
-- Parser using Pest
-- Semantic analysis and type checking
-- Bytecode compilation
-- Virtual machine execution
-- **Language Server Protocol (LSP) support** - See [QUICKSTART.md](QUICKSTART.md) for setup
+- **Parser** using Pest with Pratt parser for operator precedence
+- **Semantic analysis and type checking** with HIR (High-level Intermediate Representation) lowering
+- **Bytecode compilation** with optimization passes
+- **Stack-based virtual machine** with NaN-boxed values for efficient execution
+- **Language Server Protocol (LSP) support** for IDE integration
+- **Project management tool** (`melon`) for creating and running projects
+- **Module system** with dot-path imports
+- **Lazy evaluation** with thunks and function composition
+- **Standard library** with math, string, array, and functional utilities
 
 ## Quick Start
 
-### Running Programs
+### Using the Melon Tool (Recommended)
+
+The `melon` tool provides project management and execution:
 
 ```bash
-cargo run --bin CantaLoopRS -- examples/helloworld.mln
+# Create a new project
+cargo run --bin melon -- new myproject
+cd myproject
+
+# Run the project
+cargo run --bin melon -- run
+
+# Run with watch mode (auto-rebuild on file changes)
+cargo run --bin melon -- run --watch
+
+# Run with debug output (AST, HIR, bytecode)
+cargo run --bin melon -- run --debug
+```
+
+### Running Individual Files
+
+```bash
+# Build the interpreter
+cargo build --release
+
+# Run a single file
+cargo run --bin melon -- run examples/language_features/helloworld.mln
 ```
 
 ### LSP Setup
 
-To use the LSP in your editor (Cursor/VS Code) for `.mln` files, see [QUICKSTART.md](QUICKSTART.md).
-
-The LSP provides:
-
-- Parse error diagnostics
-- Hover information
-- Code completion
-- Syntax highlighting (with extension)
+The LSP provides real-time diagnostics, hover information, code completion, and semantic tokens. See [BUILD.md](BUILD.md) for building and installing the VS Code/Cursor extension.
 
 ## Building
 
 ```bash
-# Build the main interpreter
+# Build all binaries
 cargo build --release
 
-# Build the LSP server
-cargo build --release --bin cantaloop-lsp
+# Build specific binaries
+cargo build --release --bin melon          # Project manager
+cargo build --release --bin cantaloop-lsp  # LSP server
 ```
 
 ## Project Structure
 
-- `src/parser.rs` - Pest-based parser
-- `src/semantic_analyser.rs` - Type checking and HIR generation
-- `src/bytecode.rs` - Bytecode emission (with `bytecode_emitter.rs`, `bytecode_opcode.rs`)
-- `src/vm.rs` - Virtual machine implementation
-- `src/lsp.rs` - Language Server Protocol implementation (with `lsp_server.rs`)
-- `src/ast.rs` - Abstract Syntax Tree (with `ast_enums.rs`, `ast_builder.rs`)
-- `examples/` - Example `.mln` files
+- `src/core/` - Core language implementation
+  - `parser.rs` - Pest-based parser
+  - `ast/` - Abstract Syntax Tree (enums, builder)
+  - `hir_lowering/` - Type checking and HIR generation
+  - `bytecode/` - Bytecode compilation (emitter, opcode)
+  - `vm.rs` - Stack-based virtual machine
+  - `engine.rs` - Compilation and execution orchestration
+  - `projectLoader.rs` - Project loading and module resolution
+- `src/lsp/` - Language Server Protocol implementation
+- `src/melon/` - Project management CLI tool
+- `src/stdlib/` - Standard library modules
+- `examples/` - Example `.mln` files and projects
+- `documentation/` - Architecture and design documentation
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for a detailed description of the system architecture.
+See [documentation/ARCHITECTURE.md](documentation/ARCHITECTURE.md) for a detailed description of the system architecture.

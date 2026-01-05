@@ -1,4 +1,4 @@
-use CantaLoopRS::core::parser::{CantaLoopParser, Rule};
+use cantaloop::core::parser::{CantaLoopParser, Rule};
 use pest::Parser;
 
 /// Test with multiple use statements to reproduce the issue

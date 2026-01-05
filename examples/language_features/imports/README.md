@@ -26,7 +26,7 @@ Example Rust code:
 
 ```rust
 use std::collections::HashMap;
-use CantaLoopRS::Engine;
+use cantaloop::Engine;
 
 let mut engine = Engine::new();
 

@@ -1,5 +1,5 @@
-use CantaLoopRS::core::parser::parse_program;
-use CantaLoopRS::core::ast::Statement;
+use cantaloop::core::parser::parse_program;
+use cantaloop::core::ast::Statement;
 
 /// Test parsing of function declarations with and without `pub`
 #[test]

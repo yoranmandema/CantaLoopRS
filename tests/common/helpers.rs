@@ -1,9 +1,9 @@
-use CantaLoopRS::{
+use cantaloop::{
     Engine,
     FunctionSignature,
     ValueKind,
 };
-use CantaLoopRS::core::engine::Arity;
+use cantaloop::core::engine::Arity;
 
 /// Helper function to create a test engine with basic functions
 pub fn create_test_engine() -> Engine {
@@ -29,14 +29,14 @@ pub fn create_empty_engine() -> Engine {
 
 /// Assert that parsing succeeds
 pub fn assert_parse_success(code: &str) {
-    use CantaLoopRS::parse_program;
+    use cantaloop::parse_program;
     let result = parse_program(code);
     assert!(result.is_ok(), "Expected parse to succeed, got: {:?}", result);
 }
 
 /// Assert that parsing fails
 pub fn assert_parse_failure(code: &str) {
-    use CantaLoopRS::parse_program;
+    use cantaloop::parse_program;
     let result = parse_program(code);
     assert!(result.is_err(), "Expected parse to fail, but it succeeded");
 }
