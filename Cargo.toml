@@ -8,7 +8,7 @@ lazy_static = "1.5.0"
 pest = "2.8.4"
 pest_derive = "2.8.4"
 tower-lsp = "0.20"
-lsp-types = "0.94"
+lsp-types = "0.97"
 serde_json = { version = "1.0", default-features = false }
 tokio = { version = "1.0", features = ["full"] }
 bitflags = { version = "2", features = ["serde"] }
