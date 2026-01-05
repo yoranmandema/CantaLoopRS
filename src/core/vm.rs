@@ -114,6 +114,10 @@ const TAG_STRUCT: u64 = 0x8;
 ///
 /// Stores strings, thunks, arrays, structs, and iterators that cannot fit in the 64-bit Value representation.
 /// Managed per VM instance to avoid global state.
+/// 
+/// NOTE: This is the desktop VM's heap implementation. For embedded systems, see `cantaloop_core::storage::FixedStorage`.
+/// Future work: This could be refactored to use `cantaloop_core::storage::DynamicStorage` internally,
+/// but for now it maintains the existing API for backward compatibility.
 pub struct ValueHeap {
     pub(crate) strings: Vec<String>,
     pub(crate) thunks: Vec<ThunkData>,

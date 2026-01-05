@@ -1,9 +1,14 @@
+[workspace]
+members = ["cantaloop-core", "."]
+resolver = "2"
+
 [package]
 name = "cantaloop"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+cantaloop-core = { path = "cantaloop-core" }
 lazy_static = "1.5.0"
 pest = "2.8.4"
 pest_derive = "2.8.4"

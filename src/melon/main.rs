@@ -7,12 +7,12 @@ use std::time::Instant;
 
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use serde::Serialize;
-use CantaLoopRS::core::projectLoader::ProjectLoader;
+use cantaloop::core::projectLoader::ProjectLoader;
 
-use CantaLoopRS::core::ast::Program;
-use CantaLoopRS::core::engine::RunArtifacts;
-use CantaLoopRS::core::hir_lowering::HirAst;
-use CantaLoopRS::{stdlib, Engine};
+use cantaloop::core::ast::Program;
+use cantaloop::core::engine::RunArtifacts;
+use cantaloop::core::hir_lowering::HirAst;
+use cantaloop::{stdlib, Engine};
 
 fn main() {
     env::set_var("RUST_BACKTRACE", "1");

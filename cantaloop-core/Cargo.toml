@@ -1,0 +1,21 @@
+[package]
+name = "cantaloop-core"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "cantaloop_core"
+path = "src/lib.rs"
+
+[features]
+default = ["std"]
+std = []
+heapless = ["dep:heapless"]
+
+[dependencies]
+heapless = { version = "0.8", optional = true }
+
+[[example]]
+name = "embedded_vm"
+path = "examples/embedded_vm.rs"
+

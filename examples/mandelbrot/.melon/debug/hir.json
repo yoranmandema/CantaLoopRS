@@ -503,9 +503,9 @@
     ]
   },
   "functions": {
-    "6": {
-      "id": 6,
-      "name": "<closure_6>",
+    "3": {
+      "id": 3,
+      "name": "<closure_3>",
       "signature": {
         "params": [
           "Any"
@@ -514,34 +514,34 @@
       },
       "definition": {
         "body": {
-          "scope": 15,
+          "scope": 8,
           "statements": [
             {
               "Return": {
                 "value": {
-                  "FunctionCall": {
-                    "function_id": 10012,
-                    "args": [
-                      {
-                        "Reducer": {
-                          "array": {
-                            "Identifier": 33
+                  "Reducer": {
+                    "array": {
+                      "FunctionCall": {
+                        "function_id": 10025,
+                        "args": [
+                          {
+                            "Number": 0.0
                           },
-                          "reducer_type": "Map",
-                          "reducer_args": [
-                            {
-                              "Closure": {
-                                "function_id": 7
-                              }
-                            }
-                          ]
-                        }
-                      },
-                      {
-                        "String": ""
+                          {
+                            "Identifier": 4
+                          }
+                        ],
+                        "invoke": true
                       }
-                    ],
-                    "invoke": true
+                    },
+                    "reducer_type": "Map",
+                    "reducer_args": [
+                      {
+                        "Closure": {
+                          "function_id": 4
+                        }
+                      }
+                    ]
                   }
                 }
               }
@@ -549,9 +549,9 @@
           ]
         },
         "param_var_ids": [
-          33
+          24
         ],
-        "scope_id": 15
+        "scope_id": 8
       }
     },
     "4": {
@@ -700,140 +700,6 @@
           20
         ],
         "scope_id": 7
-      }
-    },
-    "0": {
-      "id": 0,
-      "name": "<closure_0>",
-      "signature": {
-        "params": [
-          "Number",
-          "Number"
-        ],
-        "return_type": "Any"
-      },
-      "definition": {
-        "body": {
-          "scope": 2,
-          "statements": [
-            {
-              "Assign": {
-                "slot": 15,
-                "value": {
-                  "Reducer": {
-                    "array": {
-                      "FunctionCall": {
-                        "function_id": 10025,
-                        "args": [
-                          {
-                            "Number": 0.0
-                          },
-                          {
-                            "Identifier": 6
-                          }
-                        ],
-                        "invoke": true
-                      }
-                    },
-                    "reducer_type": "Fold",
-                    "reducer_args": [
-                      {
-                        "StructInit": {
-                          "struct_name": "State",
-                          "fields": [
-                            [
-                              "zx",
-                              {
-                                "Number": 0.0
-                              }
-                            ],
-                            [
-                              "zy",
-                              {
-                                "Number": 0.0
-                              }
-                            ],
-                            [
-                              "iter",
-                              {
-                                "Number": 0.0
-                              }
-                            ],
-                            [
-                              "escaped",
-                              {
-                                "Boolean": false
-                              }
-                            ]
-                          ]
-                        }
-                      },
-                      {
-                        "Closure": {
-                          "function_id": 1
-                        }
-                      }
-                    ]
-                  }
-                }
-              }
-            },
-            {
-              "Return": {
-                "value": {
-                  "FieldAccess": {
-                    "base": {
-                      "Identifier": 15
-                    },
-                    "field_name": "iter"
-                  }
-                }
-              }
-            }
-          ]
-        },
-        "param_var_ids": [
-          7,
-          8
-        ],
-        "scope_id": 1
-      }
-    },
-    "7": {
-      "id": 7,
-      "name": "<closure_7>",
-      "signature": {
-        "params": [
-          "Any"
-        ],
-        "return_type": "Any"
-      },
-      "definition": {
-        "body": {
-          "scope": 16,
-          "statements": [
-            {
-              "Return": {
-                "value": {
-                  "PostfixInvoke": {
-                    "operand": {
-                      "Identifier": 32
-                    },
-                    "args": [
-                      {
-                        "Identifier": 34
-                      }
-                    ]
-                  }
-                }
-              }
-            }
-          ]
-        },
-        "param_var_ids": [
-          34
-        ],
-        "scope_id": 16
       }
     },
     "1": {
@@ -1090,9 +956,9 @@
         "scope_id": 3
       }
     },
-    "3": {
-      "id": 3,
-      "name": "<closure_3>",
+    "6": {
+      "id": 6,
+      "name": "<closure_6>",
       "signature": {
         "params": [
           "Any"
@@ -1101,10 +967,63 @@
       },
       "definition": {
         "body": {
-          "scope": 8,
+          "scope": 15,
           "statements": [
             {
               "Return": {
+                "value": {
+                  "FunctionCall": {
+                    "function_id": 10012,
+                    "args": [
+                      {
+                        "Reducer": {
+                          "array": {
+                            "Identifier": 33
+                          },
+                          "reducer_type": "Map",
+                          "reducer_args": [
+                            {
+                              "Closure": {
+                                "function_id": 7
+                              }
+                            }
+                          ]
+                        }
+                      },
+                      {
+                        "String": ""
+                      }
+                    ],
+                    "invoke": true
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "param_var_ids": [
+          33
+        ],
+        "scope_id": 15
+      }
+    },
+    "0": {
+      "id": 0,
+      "name": "<closure_0>",
+      "signature": {
+        "params": [
+          "Number",
+          "Number"
+        ],
+        "return_type": "Any"
+      },
+      "definition": {
+        "body": {
+          "scope": 2,
+          "statements": [
+            {
+              "Assign": {
+                "slot": 15,
                 "value": {
                   "Reducer": {
                     "array": {
@@ -1115,20 +1034,63 @@
                             "Number": 0.0
                           },
                           {
-                            "Identifier": 4
+                            "Identifier": 6
                           }
                         ],
                         "invoke": true
                       }
                     },
-                    "reducer_type": "Map",
+                    "reducer_type": "Fold",
                     "reducer_args": [
                       {
+                        "StructInit": {
+                          "struct_name": "State",
+                          "fields": [
+                            [
+                              "zx",
+                              {
+                                "Number": 0.0
+                              }
+                            ],
+                            [
+                              "zy",
+                              {
+                                "Number": 0.0
+                              }
+                            ],
+                            [
+                              "iter",
+                              {
+                                "Number": 0.0
+                              }
+                            ],
+                            [
+                              "escaped",
+                              {
+                                "Boolean": false
+                              }
+                            ]
+                          ]
+                        }
+                      },
+                      {
                         "Closure": {
-                          "function_id": 4
+                          "function_id": 1
                         }
                       }
                     ]
+                  }
+                }
+              }
+            },
+            {
+              "Return": {
+                "value": {
+                  "FieldAccess": {
+                    "base": {
+                      "Identifier": 15
+                    },
+                    "field_name": "iter"
                   }
                 }
               }
@@ -1136,9 +1098,10 @@
           ]
         },
         "param_var_ids": [
-          24
+          7,
+          8
         ],
-        "scope_id": 8
+        "scope_id": 1
       }
     },
     "5": {
@@ -1251,6 +1214,43 @@
         ],
         "scope_id": 11
       }
+    },
+    "7": {
+      "id": 7,
+      "name": "<closure_7>",
+      "signature": {
+        "params": [
+          "Any"
+        ],
+        "return_type": "Any"
+      },
+      "definition": {
+        "body": {
+          "scope": 16,
+          "statements": [
+            {
+              "Return": {
+                "value": {
+                  "PostfixInvoke": {
+                    "operand": {
+                      "Identifier": 32
+                    },
+                    "args": [
+                      {
+                        "Identifier": 34
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "param_var_ids": [
+          34
+        ],
+        "scope_id": 16
+      }
     }
   },
   "structs": {
@@ -1299,11 +1299,11 @@
   },
   "module_imports": {
     "__main__": {
-      "fold": 10041,
-      "map": 10039,
-      "print": 10009,
       "reduce": 10042,
-      "filter": 10040
+      "filter": 10040,
+      "print": 10009,
+      "map": 10039,
+      "fold": 10041
     }
   },
   "imported_constant_values": {}
