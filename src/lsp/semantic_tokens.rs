@@ -8,6 +8,7 @@ const TOKEN_VARIABLE: u32 = 1;
 const TOKEN_TYPE: u32 = 2;
 const TOKEN_OPERATOR: u32 = 3;
 const TOKEN_KEYWORD: u32 = 4;
+const TOKEN_NAMESPACE: u32 = 5;
 
 // Token modifiers are now carried in SemanticItem.modifiers and projected directly
 
@@ -71,7 +72,7 @@ pub fn generate_semantic_tokens(_text: &str, state: &CompilerState) -> Vec<Seman
             SemanticItemKind::Keyword => TOKEN_KEYWORD,
             SemanticItemKind::Operator => TOKEN_OPERATOR,
             SemanticItemKind::Type => TOKEN_TYPE,
-            SemanticItemKind::Module => TOKEN_TYPE,
+            SemanticItemKind::Module => TOKEN_NAMESPACE,
         };
         
         // Use modifiers from semantic item - pure projection, no computation

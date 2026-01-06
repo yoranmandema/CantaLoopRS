@@ -3,10 +3,6 @@ use crate::core::hir_lowering::{FunctionSignature, ValueKind};
 use crate::core::vm::Value;
 use std::sync::Arc;
 
-/// Standard string module.
-///
-/// This is pure declarative metadata describing the string module.
-/// It does not mutate the Engine - it's compiler input, not runtime behavior.
 lazy_static::lazy_static! {
     pub static ref STRING_MODULE: StdModule = StdModule {
     name: "string",
@@ -17,6 +13,7 @@ lazy_static::lazy_static! {
             signature: FunctionSignature {
                 params: vec![ValueKind::String],
                 return_type: Box::new(ValueKind::Number),
+                is_effectful: false,
             },
             arity: Arity::Fixed(1),
             impl_fn: Arc::new(|args, heap| {
@@ -33,6 +30,7 @@ lazy_static::lazy_static! {
                 // join(array, separator)
                 params: vec![ ValueKind::Array(Box::new(ValueKind::Any)), ValueKind::String],
                 return_type: Box::new(ValueKind::String),
+                is_effectful: false,
             },
             arity: Arity::Fixed(2),
             impl_fn: Arc::new(|args, heap| {
@@ -59,6 +57,7 @@ lazy_static::lazy_static! {
                 // Accepts a variable length argument list, all strings
                 params: vec![ValueKind::Array(Box::new(ValueKind::String))],
                 return_type: Box::new(ValueKind::String),
+                is_effectful: false,
             },
             arity: Arity::Fixed(1),
             impl_fn: Arc::new(|args, heap| {

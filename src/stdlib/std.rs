@@ -1,14 +1,10 @@
 use crate::core::engine::StdModule;
 use crate::core::vm::Value;
 
-/// Standard library I/O module.
-/// 
-/// This is pure declarative metadata describing the std module.
-/// It does not mutate the Engine - it's compiler input, not runtime behavior.
 lazy_static::lazy_static! {
     pub static ref STD_MODULE: StdModule = crate::melon_module! {
     module std {
-        fn print(s: str) -> str {
+        fn print(s: str) ~> str {
             |args, heap| {
                 let s = args[0].value_to_string(heap);
                 println!("{}", s);

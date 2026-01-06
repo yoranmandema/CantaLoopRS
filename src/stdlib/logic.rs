@@ -1,10 +1,6 @@
 use crate::core::engine::StdModule;
 use crate::core::vm::Value;
 
-/// Standard logic module.
-///
-/// This is pure declarative metadata describing the logic module.
-/// It does not mutate the Engine - it's compiler input, not runtime behavior.
 lazy_static::lazy_static! {
     pub static ref LOGIC_MODULE: StdModule = crate::melon_module! {
     module logic {

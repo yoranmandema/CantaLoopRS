@@ -121,6 +121,7 @@ add(5, 10)!;
     let print_sig = FunctionSignature {
         params: vec![ValueKind::String],
         return_type: Box::new(ValueKind::String),
+        is_effectful: true, // print is effectful
     };
     hir_builder.register_builtin_function("print", print_sig, 10000);
     
@@ -169,6 +170,7 @@ add(5);
     let print_sig = FunctionSignature {
         params: vec![ValueKind::String],
         return_type: Box::new(ValueKind::String),
+        is_effectful: true, // print is effectful
     };
     hir_builder.register_builtin_function("print", print_sig, 10000);
     

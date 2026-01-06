@@ -159,7 +159,11 @@ impl CantaLoopLSPServer {
                             if let Some(start) = error_msg.find("Module '") {
                                 let module_start = start + 8;
                                 if let Some(end) = error_msg[module_start..].find("' not found") {
-                                    let module_name = &error_msg[module_start..module_start + end];
+                                    // Safe string slicing - use get() to handle multi-byte characters
+                                    let module_name = match error_msg.get(module_start..module_start + end) {
+                                        Some(s) => s,
+                                        None => return, // Skip if invalid char boundary
+                                    };
                                     if module_name == current_module {
                                         // This file IS the module, so skip this error
                                         // It's likely from another file trying to import it
@@ -170,7 +174,7 @@ impl CantaLoopLSPServer {
                         }
                     }
                     
-                    let (found_line, found_col) = diagnostics::find_error_location(&text, error);
+                    let (found_line, found_col) = diagnostics::find_error_location(error, &state);
                     
                     // Check if this is a nested invoke pattern error - these should be warnings, not errors
                     let is_nested_invoke_error = error_msg.contains("Confusing nested invoke pattern") ||
@@ -309,6 +313,7 @@ impl LanguageServer for CantaLoopLSPServer {
                                     SemanticTokenType::TYPE,
                                     SemanticTokenType::OPERATOR,
                                     SemanticTokenType::KEYWORD,
+                                    SemanticTokenType::NAMESPACE,
                                 ],
                                 token_modifiers: vec![
                                     SemanticTokenModifier::DECLARATION,

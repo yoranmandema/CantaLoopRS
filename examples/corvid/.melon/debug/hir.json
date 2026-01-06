@@ -1,0 +1,977 @@
+{
+  "constants": [],
+  "blocks": [
+    {
+      "scope": 0,
+      "statements": [
+        "Nop",
+        "Nop",
+        {
+          "Expression": {
+            "Constant": 0
+          }
+        },
+        {
+          "Expression": {
+            "Constant": 0
+          }
+        },
+        {
+          "Expression": {
+            "Constant": 0
+          }
+        },
+        {
+          "Assign": {
+            "slot": 5,
+            "value": {
+              "FunctionCall": {
+                "function_id": 0,
+                "args": [
+                  {
+                    "Number": 5.0
+                  },
+                  {
+                    "Number": 4.0
+                  }
+                ],
+                "invoke": true
+              }
+            }
+          }
+        },
+        {
+          "Expression": {
+            "FunctionCall": {
+              "function_id": 10009,
+              "args": [
+                {
+                  "Identifier": 5
+                }
+              ],
+              "invoke": true
+            }
+          }
+        },
+        {
+          "Assign": {
+            "slot": 6,
+            "value": {
+              "PartialCall": {
+                "func_id": 0,
+                "bound": [
+                  null,
+                  {
+                    "Number": 5.0
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "Expression": {
+            "FunctionCall": {
+              "function_id": 10009,
+              "args": [
+                {
+                  "PostfixInvoke": {
+                    "operand": {
+                      "Identifier": 6
+                    },
+                    "args": [
+                      {
+                        "Number": 10.0
+                      }
+                    ]
+                  }
+                }
+              ],
+              "invoke": true
+            }
+          }
+        },
+        {
+          "Assign": {
+            "slot": 7,
+            "value": {
+              "Array": [
+                {
+                  "Number": 1.0
+                },
+                {
+                  "Number": 2.0
+                },
+                {
+                  "Number": 3.0
+                },
+                {
+                  "Number": 4.0
+                }
+              ]
+            }
+          }
+        },
+        {
+          "Assign": {
+            "slot": 9,
+            "value": {
+              "Reducer": {
+                "array": {
+                  "Identifier": 7
+                },
+                "reducer_type": "Map",
+                "reducer_args": [
+                  {
+                    "Closure": {
+                      "function_id": 3
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "Expression": {
+            "FunctionCall": {
+              "function_id": 10009,
+              "args": [
+                {
+                  "Identifier": 9
+                }
+              ],
+              "invoke": true
+            }
+          }
+        },
+        {
+          "Assign": {
+            "slot": 10,
+            "value": {
+              "Reducer": {
+                "array": {
+                  "Identifier": 7
+                },
+                "reducer_type": "Map",
+                "reducer_args": [
+                  {
+                    "PartialCall": {
+                      "func_id": 0,
+                      "bound": [
+                        null,
+                        {
+                          "Number": 2.0
+                        }
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "Expression": {
+            "FunctionCall": {
+              "function_id": 10009,
+              "args": [
+                {
+                  "Identifier": 10
+                }
+              ],
+              "invoke": true
+            }
+          }
+        },
+        {
+          "Assign": {
+            "slot": 11,
+            "value": {
+              "FunctionCall": {
+                "function_id": 10046,
+                "args": [
+                  {
+                    "FunctionCall": {
+                      "function_id": 10045,
+                      "args": [
+                        {
+                          "FunctionCall": {
+                            "function_id": 10044,
+                            "args": [
+                              {
+                                "FunctionCall": {
+                                  "function_id": 10043,
+                                  "args": [],
+                                  "invoke": true
+                                }
+                              }
+                            ],
+                            "invoke": true
+                          }
+                        },
+                        {
+                          "String": "My Game"
+                        },
+                        {
+                          "Number": 1280.0
+                        },
+                        {
+                          "Number": 720.0
+                        }
+                      ],
+                      "invoke": true
+                    }
+                  },
+                  {
+                    "Number": 0.1
+                  },
+                  {
+                    "Number": 0.1
+                  },
+                  {
+                    "Number": 0.1
+                  }
+                ],
+                "invoke": true
+              }
+            }
+          }
+        },
+        {
+          "Expression": {
+            "FunctionCall": {
+              "function_id": 10047,
+              "args": [
+                {
+                  "Identifier": 11
+                }
+              ],
+              "invoke": true
+            }
+          }
+        },
+        {
+          "Expression": {
+            "Constant": 0
+          }
+        },
+        {
+          "Assign": {
+            "slot": 14,
+            "value": {
+              "ComposeThunk": {
+                "first": {
+                  "PartialCall": {
+                    "func_id": 0,
+                    "bound": [
+                      null,
+                      {
+                        "Number": 5.0
+                      }
+                    ]
+                  }
+                },
+                "second": {
+                  "PartialCall": {
+                    "func_id": 4,
+                    "bound": [
+                      null,
+                      {
+                        "Number": 2.0
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "Assign": {
+            "slot": 15,
+            "value": {
+              "PostfixInvoke": {
+                "operand": {
+                  "Identifier": 14
+                },
+                "args": [
+                  {
+                    "Number": 10.0
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "Expression": {
+            "FunctionCall": {
+              "function_id": 10009,
+              "args": [
+                {
+                  "Identifier": 15
+                }
+              ],
+              "invoke": true
+            }
+          }
+        },
+        {
+          "Expression": {
+            "Constant": 0
+          }
+        },
+        {
+          "Assign": {
+            "slot": 17,
+            "value": {
+              "ComposeThunk": {
+                "first": {
+                  "PartialCall": {
+                    "func_id": 5,
+                    "bound": [
+                      null
+                    ]
+                  }
+                },
+                "second": {
+                  "PartialCall": {
+                    "func_id": 10009,
+                    "bound": [
+                      null
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "Expression": {
+            "PostfixInvoke": {
+              "operand": {
+                "Identifier": 17
+              },
+              "args": [
+                {
+                  "String": "https://www.google.com/"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "Assign": {
+            "slot": 18,
+            "value": {
+              "ComposeThunk": {
+                "first": {
+                  "FunctionCall": {
+                    "function_id": 10046,
+                    "args": [
+                      {
+                        "FunctionCall": {
+                          "function_id": 10045,
+                          "args": [
+                            {
+                              "ComposeThunk": {
+                                "first": {
+                                  "FunctionCall": {
+                                    "function_id": 10043,
+                                    "args": [],
+                                    "invoke": false
+                                  }
+                                },
+                                "second": {
+                                  "FunctionCall": {
+                                    "function_id": 10044,
+                                    "args": [],
+                                    "invoke": false
+                                  }
+                                }
+                              }
+                            },
+                            {
+                              "String": "My Game"
+                            },
+                            {
+                              "Number": 1280.0
+                            },
+                            {
+                              "Number": 720.0
+                            }
+                          ],
+                          "invoke": true
+                        }
+                      },
+                      {
+                        "Number": 0.1
+                      },
+                      {
+                        "Number": 0.1
+                      },
+                      {
+                        "Number": 0.1
+                      }
+                    ],
+                    "invoke": true
+                  }
+                },
+                "second": {
+                  "FunctionCall": {
+                    "function_id": 10047,
+                    "args": [],
+                    "invoke": false
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "Expression": {
+            "PostfixInvoke": {
+              "operand": {
+                "Identifier": 18
+              },
+              "args": null
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "scopes": {
+    "scopes": [
+      {
+        "vars": [
+          {
+            "id": 5,
+            "name": "resultOf5add4",
+            "kind": "Number"
+          },
+          {
+            "id": 6,
+            "name": "add5",
+            "kind": {
+              "Thunk": "num -> num"
+            }
+          },
+          {
+            "id": 7,
+            "name": "xs",
+            "kind": {
+              "Array": "Number"
+            }
+          },
+          {
+            "id": 9,
+            "name": "mapped",
+            "kind": {
+              "Array": "Number"
+            }
+          },
+          {
+            "id": 10,
+            "name": "mappedComposit",
+            "kind": {
+              "Array": "Number"
+            }
+          },
+          {
+            "id": 11,
+            "name": "app",
+            "kind": "Unknown"
+          },
+          {
+            "id": 14,
+            "name": "add5andMul2",
+            "kind": {
+              "Thunk": "num -> num"
+            }
+          },
+          {
+            "id": 15,
+            "name": "res",
+            "kind": "Number"
+          },
+          {
+            "id": 17,
+            "name": "effectfulPipeline",
+            "kind": {
+              "Thunk": "Any ~> Any"
+            }
+          },
+          {
+            "id": 18,
+            "name": "runApp",
+            "kind": {
+              "Thunk": "Any ~> Any"
+            }
+          }
+        ],
+        "parent": null
+      },
+      {
+        "vars": [
+          {
+            "id": 0,
+            "name": "a",
+            "kind": "Number"
+          },
+          {
+            "id": 1,
+            "name": "b",
+            "kind": "Number"
+          }
+        ],
+        "parent": 0
+      },
+      {
+        "vars": [],
+        "parent": 1
+      },
+      {
+        "vars": [
+          {
+            "id": 2,
+            "name": "name",
+            "kind": "String"
+          }
+        ],
+        "parent": 0
+      },
+      {
+        "vars": [],
+        "parent": 3
+      },
+      {
+        "vars": [
+          {
+            "id": 3,
+            "name": "a",
+            "kind": "Number"
+          },
+          {
+            "id": 4,
+            "name": "b",
+            "kind": "Number"
+          }
+        ],
+        "parent": 0
+      },
+      {
+        "vars": [],
+        "parent": 5
+      },
+      {
+        "vars": [
+          {
+            "id": 8,
+            "name": "x",
+            "kind": "Number"
+          }
+        ],
+        "parent": 0
+      },
+      {
+        "vars": [
+          {
+            "id": 12,
+            "name": "a",
+            "kind": "Number"
+          },
+          {
+            "id": 13,
+            "name": "b",
+            "kind": "Number"
+          }
+        ],
+        "parent": 0
+      },
+      {
+        "vars": [],
+        "parent": 8
+      },
+      {
+        "vars": [
+          {
+            "id": 16,
+            "name": "url",
+            "kind": "String"
+          }
+        ],
+        "parent": 0
+      },
+      {
+        "vars": [],
+        "parent": 10
+      }
+    ]
+  },
+  "functions": {
+    "4": {
+      "id": 4,
+      "name": "mul",
+      "signature": {
+        "params": [
+          "Number",
+          "Number"
+        ],
+        "return_type": "Number",
+        "is_effectful": false
+      },
+      "definition": {
+        "body": {
+          "scope": 9,
+          "statements": [
+            {
+              "Return": {
+                "value": {
+                  "Binary": {
+                    "lhs": {
+                      "Identifier": 12
+                    },
+                    "rhs": {
+                      "Identifier": 13
+                    },
+                    "operator": "Mul"
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "param_var_ids": [
+          12,
+          13
+        ],
+        "scope_id": 8
+      }
+    },
+    "3": {
+      "id": 3,
+      "name": "<closure_3>",
+      "signature": {
+        "params": [
+          "Number"
+        ],
+        "return_type": "Number",
+        "is_effectful": false
+      },
+      "definition": {
+        "body": {
+          "scope": 7,
+          "statements": [
+            {
+              "Return": {
+                "value": {
+                  "FunctionCall": {
+                    "function_id": 0,
+                    "args": [
+                      {
+                        "Identifier": 8
+                      },
+                      {
+                        "Number": 2.0
+                      }
+                    ],
+                    "invoke": true
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "param_var_ids": [
+          8
+        ],
+        "scope_id": 7
+      }
+    },
+    "1": {
+      "id": 1,
+      "name": "printHello",
+      "signature": {
+        "params": [
+          "String"
+        ],
+        "return_type": "Void",
+        "is_effectful": true
+      },
+      "definition": {
+        "body": {
+          "scope": 4,
+          "statements": [
+            {
+              "Expression": {
+                "FunctionCall": {
+                  "function_id": 10009,
+                  "args": [
+                    {
+                      "Binary": {
+                        "lhs": {
+                          "Binary": {
+                            "lhs": {
+                              "String": "Hello "
+                            },
+                            "rhs": {
+                              "Identifier": 2
+                            },
+                            "operator": "Add"
+                          }
+                        },
+                        "rhs": {
+                          "String": "!"
+                        },
+                        "operator": "Add"
+                      }
+                    }
+                  ],
+                  "invoke": true
+                }
+              }
+            }
+          ]
+        },
+        "param_var_ids": [
+          2
+        ],
+        "scope_id": 3
+      }
+    },
+    "0": {
+      "id": 0,
+      "name": "add",
+      "signature": {
+        "params": [
+          "Number",
+          "Number"
+        ],
+        "return_type": "Number",
+        "is_effectful": false
+      },
+      "definition": {
+        "body": {
+          "scope": 2,
+          "statements": [
+            {
+              "Return": {
+                "value": {
+                  "Binary": {
+                    "lhs": {
+                      "Identifier": 0
+                    },
+                    "rhs": {
+                      "Identifier": 1
+                    },
+                    "operator": "Add"
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "param_var_ids": [
+          0,
+          1
+        ],
+        "scope_id": 1
+      }
+    },
+    "2": {
+      "id": 2,
+      "name": "printAdd",
+      "signature": {
+        "params": [
+          "Number",
+          "Number"
+        ],
+        "return_type": "Number",
+        "is_effectful": true
+      },
+      "definition": {
+        "body": {
+          "scope": 6,
+          "statements": [
+            {
+              "Expression": {
+                "FunctionCall": {
+                  "function_id": 10009,
+                  "args": [
+                    {
+                      "Binary": {
+                        "lhs": {
+                          "Binary": {
+                            "lhs": {
+                              "Binary": {
+                                "lhs": {
+                                  "String": "Adding "
+                                },
+                                "rhs": {
+                                  "Identifier": 3
+                                },
+                                "operator": "Add"
+                              }
+                            },
+                            "rhs": {
+                              "String": " + "
+                            },
+                            "operator": "Add"
+                          }
+                        },
+                        "rhs": {
+                          "Identifier": 4
+                        },
+                        "operator": "Add"
+                      }
+                    }
+                  ],
+                  "invoke": true
+                }
+              }
+            },
+            {
+              "Return": {
+                "value": {
+                  "Binary": {
+                    "lhs": {
+                      "Identifier": 3
+                    },
+                    "rhs": {
+                      "Identifier": 4
+                    },
+                    "operator": "Add"
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "param_var_ids": [
+          3,
+          4
+        ],
+        "scope_id": 5
+      }
+    },
+    "5": {
+      "id": 5,
+      "name": "fetch",
+      "signature": {
+        "params": [
+          "String"
+        ],
+        "return_type": "String",
+        "is_effectful": true
+      },
+      "definition": {
+        "body": {
+          "scope": 11,
+          "statements": [
+            {
+              "Expression": {
+                "FunctionCall": {
+                  "function_id": 10009,
+                  "args": [
+                    {
+                      "Binary": {
+                        "lhs": {
+                          "String": "Pretending to fetch "
+                        },
+                        "rhs": {
+                          "Identifier": 16
+                        },
+                        "operator": "Add"
+                      }
+                    }
+                  ],
+                  "invoke": true
+                }
+              }
+            },
+            {
+              "Return": {
+                "value": {
+                  "String": "{ \"status\": \"OK\"}"
+                }
+              }
+            }
+          ]
+        },
+        "param_var_ids": [
+          16
+        ],
+        "scope_id": 10
+      }
+    }
+  },
+  "structs": {
+    "BevyApp": {
+      "name": "BevyApp",
+      "fields": [
+        [
+          "has_default_plugins",
+          "Boolean"
+        ],
+        [
+          "window_title",
+          "String"
+        ],
+        [
+          "window_width",
+          "Number"
+        ],
+        [
+          "window_height",
+          "Number"
+        ],
+        [
+          "has_clear_color",
+          "Boolean"
+        ],
+        [
+          "clear_color_r",
+          "Number"
+        ],
+        [
+          "clear_color_g",
+          "Number"
+        ],
+        [
+          "clear_color_b",
+          "Number"
+        ]
+      ]
+    },
+    "Matrix4": {
+      "name": "Matrix4",
+      "fields": [
+        [
+          "x",
+          "Number"
+        ],
+        [
+          "y",
+          "Number"
+        ],
+        [
+          "z",
+          "Number"
+        ],
+        [
+          "w",
+          "Number"
+        ]
+      ]
+    }
+  },
+  "module_imports": {
+    "__main__": {
+      "print": 10009,
+      "map": 10039
+    }
+  },
+  "imported_constant_values": {}
+}

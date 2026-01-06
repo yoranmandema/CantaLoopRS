@@ -1,10 +1,6 @@
 use crate::core::engine::StdModule;
 use crate::core::vm::Value;
 
-/// Standard comparison module.
-/// 
-/// This is pure declarative metadata describing the comparison module.
-/// It does not mutate the Engine - it's compiler input, not runtime behavior.
 lazy_static::lazy_static! {
     pub static ref COMPARISON_MODULE: StdModule = crate::melon_module! {
     module comparison {

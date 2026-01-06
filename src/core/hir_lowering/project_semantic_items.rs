@@ -217,9 +217,15 @@ pub fn collect_semantic_items(ast: &crate::core::ast::Program, source: &str, hir
                             items.push(SemanticItem::r#type(span));
                         }
                     }
-                    // Return type annotation
+                    // Return type annotation - handle both -> and ~>
                     if let Some(return_type_str) = return_type {
-                        if let Some(arrow_span) = find_operator_span("->", current_pos) {
+                        // Check for ~> first (effectful), then ->
+                        if let Some(arrow_span) = find_operator_span("~>", current_pos) {
+                            items.push(SemanticItem::operator(arrow_span));
+                            if let Some(span) = find_type_annotation_span(return_type_str, source, arrow_span.end) {
+                                items.push(SemanticItem::r#type(span));
+                            }
+                        } else if let Some(arrow_span) = find_operator_span("->", current_pos) {
                             items.push(SemanticItem::operator(arrow_span));
                             if let Some(span) = find_type_annotation_span(return_type_str, source, arrow_span.end) {
                                 items.push(SemanticItem::r#type(span));
@@ -443,14 +449,36 @@ fn find_identifier_span(identifier: &str, source: &str, start_from: usize) -> Op
 }
 
 /// Helper to find type annotation span in source text.
+/// Extracts all type names from the type string (handles primitives, arrays, custom types, etc.)
 fn find_type_annotation_span(type_str: &str, source: &str, start_from: usize) -> Option<Span> {
-    // Find type keywords in the type string
-    let type_keywords = ["num", "string", "bool", "void", "any"];
+    // Find type keywords in the type string - check for primitives first
+    let type_keywords = ["num", "str", "bool", "void", "any", "string"];
     for keyword in type_keywords {
         if type_str.contains(keyword) {
             if let Some(span) = find_identifier_span(keyword, source, start_from) {
                 return Some(span);
             }
+        }
+    }
+    // If no primitive found, try to find the first identifier (custom type)
+    // This is a simple heuristic - in practice, the type string should contain the type name
+    let trimmed = type_str.trim();
+    // Skip array brackets and extract the inner type
+    let inner_type = if trimmed.starts_with('[') && trimmed.ends_with(']') {
+        &trimmed[1..trimmed.len()-1].trim()
+    } else {
+        trimmed
+    };
+    // Try to find the first word (type name)
+    if let Some(first_space) = inner_type.find(|c: char| c.is_whitespace() || c == '-' || c == '~') {
+        let type_name = &inner_type[..first_space];
+        if let Some(span) = find_identifier_span(type_name, source, start_from) {
+            return Some(span);
+        }
+    } else {
+        // No spaces - the whole thing might be a type name
+        if let Some(span) = find_identifier_span(inner_type, source, start_from) {
+            return Some(span);
         }
     }
     None
@@ -577,23 +605,70 @@ fn collect_expression_operators(
             Expression::PartialCall { func, args, .. } => {
                 walk_expr(func, source, items, current_pos, var_types, function_names, constant_names);
                 for arg in args {
-                    if let crate::core::ast::CallArgument::Expr(e) = arg {
-                        walk_expr(e, source, items, current_pos, var_types, function_names, constant_names);
+                    match arg {
+                        crate::core::ast::CallArgument::Expr(e) => {
+                            walk_expr(e, source, items, current_pos, var_types, function_names, constant_names);
+                        }
+                        crate::core::ast::CallArgument::Hole => {
+                            // Highlight ? placeholder token
+                            if let Some(span) = find_op_span_in_expr("?", source, *current_pos) {
+                                items.push(SemanticItem::operator(span));
+                                *current_pos = span.end;
+                            }
+                        }
                     }
                 }
             }
-            Expression::MemberAccess { object, member: _, .. } => {
-                walk_expr(object, source, items, current_pos, var_types, function_names, constant_names);
+            Expression::MemberAccess { object, member, .. } => {
+                // Highlight the module/namespace part (object) as a module
+                if let Expression::Identifier(module_name) = object.as_ref() {
+                    if let Some(span) = find_identifier_span_in_expr(module_name, source, *current_pos) {
+                        items.push(SemanticItem::module(span));
+                        *current_pos = span.end;
+                    }
+                } else {
+                    // If object is not a simple identifier, walk it normally
+                    walk_expr(object, source, items, current_pos, var_types, function_names, constant_names);
+                }
+                // Highlight the dot
                 if let Some(span) = find_op_span_in_expr(".", source, *current_pos) {
                     items.push(SemanticItem::operator(span));
                     *current_pos = span.end;
                 }
-                // Member name would be an identifier, but we handle identifiers separately
+                // Highlight the member name as a function
+                if let Some(span) = find_identifier_span_in_expr(member, source, *current_pos) {
+                    items.push(SemanticItem::function(span));
+                    *current_pos = span.end;
+                }
             }
             Expression::ArrayIndex { array, .. } => {
                 // Recurse into array expression
                 walk_expr(array, source, items, current_pos, var_types, function_names, constant_names);
                 // TODO: Handle index expressions for semantic highlighting
+            }
+            Expression::Closure { arguments, return_type, .. } => {
+                // Handle closure arguments with type annotations
+                for arg in arguments {
+                    if let Some(colon_span) = find_op_span_in_expr(":", source, *current_pos) {
+                        if let Some(type_span) = find_type_annotation_span(&arg.kind, source, colon_span.end) {
+                            items.push(SemanticItem::r#type(type_span));
+                        }
+                    }
+                }
+                // Handle return type annotation (-> or ~>)
+                if let Some(return_type_str) = return_type {
+                    if let Some(arrow_span) = find_op_span_in_expr("~>", source, *current_pos) {
+                        items.push(SemanticItem::operator(arrow_span));
+                        if let Some(span) = find_type_annotation_span(return_type_str, source, arrow_span.end) {
+                            items.push(SemanticItem::r#type(span));
+                        }
+                    } else if let Some(arrow_span) = find_op_span_in_expr("->", source, *current_pos) {
+                        items.push(SemanticItem::operator(arrow_span));
+                        if let Some(span) = find_type_annotation_span(return_type_str, source, arrow_span.end) {
+                            items.push(SemanticItem::r#type(span));
+                        }
+                    }
+                }
             }
             _ => {}
         }

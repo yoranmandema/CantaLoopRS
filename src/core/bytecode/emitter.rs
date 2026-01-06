@@ -1413,7 +1413,7 @@ impl ByteCodeEmitter {
         // We need to find which struct this is and get the field index
         // For now, we'll search all structs to find the one with this field
         let mut field_index = None;
-        for (struct_name, struct_def) in &program.structs {
+        for (_struct_name, struct_def) in &program.structs {
             if let Some(idx) = struct_def.fields.iter().position(|(name, _)| name == field_name) {
                 field_index = Some(idx as u32);
                 break;

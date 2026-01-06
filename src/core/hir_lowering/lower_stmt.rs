@@ -184,13 +184,6 @@ impl HirBuilder {
             .and_then(|m| self.module_imports.get(m))
     }
 
-    /// Get a mutable reference to the current module's import table
-    fn get_current_imports_mut(&mut self) -> Option<&mut ImportTable> {
-        self.current_module
-            .as_ref()
-            .and_then(|module_name| self.module_imports.get_mut(module_name))
-    }
-
     /// Resolve an imported symbol in the current module
     /// 
     /// Checks both module_imports (primary) and Module.imports (for consistency).
@@ -355,6 +348,12 @@ impl HirBuilder {
             }
             _ => None,
         }
+    }
+
+    /// Check if a function/thunk type string is effectful (uses ~>) or pure (uses ->)
+    /// Returns true if effectful, false if pure
+    fn is_effectful_type_string(type_str: &str) -> bool {
+        type_str.trim().contains("~>")
     }
 
     fn format_value_kind(kind: &ValueKind) -> String {
@@ -540,7 +539,12 @@ impl HirBuilder {
         }
     }
 
-    fn infer_compose_thunk_kind(&self, first: &HirExpression, second: &HirExpression) -> ValueKind {
+    fn infer_compose_thunk_kind(
+        &self,
+        _ctx: Option<&crate::core::compileSession::CompileContext>,
+        first: &HirExpression,
+        second: &HirExpression,
+    ) -> ValueKind {
         // Composition f |> g means g(f(x))
         // Input type = input type of f
         // Output type = output type of g
@@ -582,13 +586,52 @@ impl HirBuilder {
                 // f |> g means g(f(x)), so:
                 // - Input type = input type of f
                 // - Output type = output type of g
-                let thunk_type = format!("{} ~> {}", f_in, g_out);
+                // - Effectfulness: composition is effectful if either function is effectful
+                let first_is_effectful = match &first_kind {
+                    ValueKind::Function(ty) | ValueKind::Thunk(ty) => {
+                        Self::is_effectful_type_string(ty)
+                    }
+                    _ => false,
+                };
+                let second_is_effectful = match &second_kind {
+                    ValueKind::Function(ty) | ValueKind::Thunk(ty) => {
+                        Self::is_effectful_type_string(ty)
+                    }
+                    _ => false,
+                };
+                
+                // Composition is effectful if either function is effectful
+                let arrow = if first_is_effectful || second_is_effectful { "~>" } else { "->" };
+                let thunk_type = format!("{} {} {}", f_in, arrow, g_out);
                 ValueKind::Thunk(thunk_type)
             }
             _ => {
-                // If we can't infer, return Unknown
-                // This could happen if one of the expressions isn't a function/thunk
-                ValueKind::Unknown
+                // If we can't infer from types, check if both expressions are callable
+                // In that case, we can still infer it's a thunk even if we don't know the exact types
+                let first_is_callable = matches!(
+                    first,
+                    HirExpression::PartialCall { .. } |
+                    HirExpression::FunctionCall { .. } |
+                    HirExpression::ComposeThunk { .. } |
+                    HirExpression::PostfixInvoke { .. }
+                );
+                let second_is_callable = matches!(
+                    second,
+                    HirExpression::PartialCall { .. } |
+                    HirExpression::FunctionCall { .. } |
+                    HirExpression::ComposeThunk { .. } |
+                    HirExpression::PostfixInvoke { .. }
+                );
+                
+                if first_is_callable && second_is_callable {
+                    // Both are callable - composition is a thunk, even if we can't infer exact types
+                    // Use a generic type
+                    ValueKind::Thunk("Any ~> Any".to_string())
+                } else {
+                    // If we can't infer, return Unknown
+                    // This could happen if one of the expressions isn't a function/thunk
+                    ValueKind::Unknown
+                }
             }
         }
     }
@@ -598,6 +641,7 @@ impl HirBuilder {
         func_id: &u32,
         bound: &Vec<Option<HirExpression>>,
     ) -> ValueKind {
+        // Try to get function signature from ast.functions first
         if let Some(func) = self.ast.functions.get(func_id) {
             let return_type_str = Self::format_value_kind_for_type(&func.signature.return_type);
 
@@ -625,9 +669,14 @@ impl HirBuilder {
                 format!("({})", hole_types.join(","))
             };
 
-            let thunk_type = format!("{} ~> {}", param_types, return_type_str);
+            // Use -> for pure functions, ~> for effectful functions
+            // A thunk created from a pure function should also be pure
+            let arrow = if func.signature.is_effectful { "~>" } else { "->" };
+            let thunk_type = format!("{} {} {}", param_types, arrow, return_type_str);
             ValueKind::Thunk(thunk_type)
         } else {
+            // Function not in ast.functions - might be a native function
+            // Return Unknown and let the fallback in function call processing handle it
             ValueKind::Unknown
         }
     }
@@ -676,7 +725,7 @@ impl HirBuilder {
             },
             HirExpression::PostfixInvoke { operand, .. } => self.infer_postfix_invoke_kind(operand),
             HirExpression::ComposeThunk { first, second } => {
-                self.infer_compose_thunk_kind(first, second)
+                self.infer_compose_thunk_kind(None, first, second)
             }
             HirExpression::PartialCall { func_id, bound } => {
                 self.infer_partial_call_kind(func_id, bound)
@@ -693,7 +742,7 @@ impl HirBuilder {
             HirExpression::StructInit { struct_name, .. } => {
                 ValueKind::Struct(struct_name.clone())
             }
-            HirExpression::FieldAccess { base, field_name } => {
+            HirExpression::FieldAccess { base, field_name: _ } => {
                 // Infer the struct type from the base expression
                 let base_type = self.infer_variable_kind(base);
                 match base_type {
@@ -832,6 +881,30 @@ impl HirBuilder {
 
         // 5. Local or built-in function
         Some(*func_id)
+    }
+
+    /// Check if a function should be eagerly invoked (i.e., it's pure and has all arguments).
+    /// This checks both user-defined functions and native functions.
+    fn should_eagerly_invoke(
+        &self,
+        ctx: &crate::core::compileSession::CompileContext,
+        function_id: u32,
+        arg_count: usize,
+    ) -> bool {
+        // First check if it's a native function
+        if (ctx.is_native_function)(function_id) {
+            if let Some(native_func) = ctx.native_functions.iter().find(|f| f.id == function_id) {
+                return !native_func.signature.is_effectful && arg_count == native_func.signature.params.len();
+            }
+        }
+        
+        // Otherwise check user-defined functions
+        if let Some(func) = self.ast.functions.get(&function_id) {
+            return !func.signature.is_effectful && arg_count == func.signature.params.len();
+        }
+        
+        // Unknown function - don't eagerly invoke
+        false
     }
 
     pub fn register_builtin_function(&mut self, name: &str, signature: FunctionSignature, id: u32) {
@@ -1267,6 +1340,14 @@ impl HirBuilder {
     /// Check if two callable types (function or thunk) are structurally compatible
     /// This does proper structural comparison instead of string equality
     fn check_callable_type_compatibility(expected: &str, actual: &str) -> bool {
+        // Special case: if expected is "Any ~> Any" or contains "Any", accept any callable type
+        if expected.contains("Any") {
+            // Check if actual is a valid callable type (function or thunk)
+            if actual.contains("->") || actual.contains("~>") {
+                return true;
+            }
+        }
+        
         let expected_parsed = Self::parse_callable_type(expected);
         let actual_parsed = Self::parse_callable_type(actual);
 
@@ -1986,16 +2067,26 @@ impl HirBuilder {
         }
 
         // Parse return type (default to Void if not specified)
-        let return_kind = if let Some(return_type_str) = return_type {
-            self.parse_type_string(&return_type_str)
+        // Check if return type string starts with ~> (effectful) or -> (pure)
+        let (return_kind, is_effectful) = if let Some(return_type_str) = &return_type {
+            let trimmed = return_type_str.trim();
+            let is_effectful = trimmed.starts_with("~>");
+            // Remove the arrow prefix if present to parse the type
+            let type_str = if trimmed.starts_with("~>") || trimmed.starts_with("->") {
+                trimmed[2..].trim()
+            } else {
+                trimmed
+            };
+            (self.parse_type_string(type_str), is_effectful)
         } else {
-            ValueKind::Void
+            (ValueKind::Void, false)
         };
 
         // Create function signature
         let signature = FunctionSignature {
             params: param_types,
             return_type: Box::new(return_kind),
+            is_effectful,
         };
 
         // Assign a function ID
@@ -2897,6 +2988,10 @@ impl HirBuilder {
                 let var_kind = self.infer_variable_kind(&var_expr);
                 match var_kind {
                     ValueKind::Function(func_type_str) | ValueKind::Thunk(func_type_str) => {
+                        // Check if it's a generic thunk type - still treat as callable
+                        if func_type_str == "Any ~> Any" || func_type_str.starts_with("Any ~>") || func_type_str.ends_with("~> Any") {
+                            // Generic thunk - still callable, just with less type information
+                        }
                         // Variable contains a function value - process arguments first
                         let processed_args = arguments
                             .into_iter()
@@ -2940,6 +3035,32 @@ impl HirBuilder {
                             args: Some(processed_args),
                         });
                     }
+                    ValueKind::Unknown => {
+                        // Variable exists but type is unknown - check if it was assigned a callable expression
+                        // by looking at the assigned expression
+                        if let Some(assigned_expr) = self.ast.get_var_assigned_expression(var_id) {
+                            match assigned_expr {
+                                HirExpression::ComposeThunk { .. } |
+                                HirExpression::PartialCall { .. } |
+                                HirExpression::FunctionCall { .. } |
+                                HirExpression::PostfixInvoke { .. } => {
+                                    // Variable contains a callable expression - treat as callable
+                                    let processed_args = arguments
+                                        .into_iter()
+                                        .map(|arg| self.process_expression(ctx, arg))
+                                        .collect::<Result<Vec<_>, _>>()?;
+                                    return Ok(HirExpression::PostfixInvoke {
+                                        operand: Box::new(var_expr),
+                                        args: Some(processed_args),
+                                    });
+                                }
+                                _ => {
+                                    // Not a callable expression - fall through
+                                }
+                            }
+                        }
+                        // Not a function type - fall through to check if it's a function name
+                    }
                     _ => {
                         // Not a function type - fall through to check if it's a function name
                     }
@@ -2953,10 +3074,13 @@ impl HirBuilder {
                     .map(|arg| self.process_expression(ctx, arg))
                     .collect::<Result<Vec<_>, _>>()?;
 
+                // Check if function is pure and has all arguments - if so, eagerly invoke
+                let should_invoke = self.should_eagerly_invoke(ctx, function_id, args.len());
+
                 return Ok(HirExpression::FunctionCall {
                     function_id,
                     args,
-                    invoke: false,
+                    invoke: should_invoke,
                 });
             }
             
@@ -3001,10 +3125,13 @@ impl HirBuilder {
                 .map(|arg| self.process_expression(ctx, arg))
                 .collect::<Result<Vec<_>, _>>()?;
 
+            // Check if function is pure and has all arguments - if so, eagerly invoke
+            let should_invoke = self.should_eagerly_invoke(ctx, function_id, args.len());
+
             return Ok(HirExpression::FunctionCall {
                 function_id,
                 args,
-                invoke: false,
+                invoke: should_invoke,
             });
         }
 
@@ -3024,14 +3151,16 @@ impl HirBuilder {
             HirExpression::FunctionCall {
                 function_id,
                 args: existing_args,
-                invoke: false,
+                invoke: _,
             } => {
                 let mut combined = existing_args;
                 combined.extend(processed_args);
+                // Check if function is pure and has all arguments - if so, eagerly invoke
+                let should_invoke = self.should_eagerly_invoke(ctx, function_id, combined.len());
                 Ok(HirExpression::FunctionCall {
                     function_id,
                     args: combined,
-                    invoke: false,
+                    invoke: should_invoke,
                 })
             }
             _ => Ok(HirExpression::PostfixInvoke {
@@ -3187,6 +3316,9 @@ impl HirBuilder {
 
     /// Process a compose expression
     /// Detects reducer patterns structurally: if RHS is a reducer application, treat as reducer pipeline
+    /// 
+    /// Pipeline semantics: x |> f(a, b) desugars to f(x, a, b)
+    /// The |> operator implicitly supplies the first argument to the right-hand callable.
     fn process_compose_expression(
         &mut self,
         ctx: &crate::core::compileSession::CompileContext,
@@ -3196,7 +3328,65 @@ impl HirBuilder {
     ) -> Result<HirExpression, HirError> {
         // Only for forward pipe (|>), not reverse (<|)
         if !reverse {
-            // Process both sides first
+            // Check if RHS is a function call at AST level - if so, prepend LHS as first argument
+            // BUT: skip this transformation for reducers (map, filter, fold, reduce, sum)
+            // Reducers need special handling and should fall through to reducer detection
+            if let Expression::FunctionCall { callee, arguments } = &rhs {
+                // Check if this is a reducer function - if so, don't transform, let it be handled by reducer detection
+                let is_reducer = self.is_ast_reducer(callee, arguments.len());
+                
+                if !is_reducer {
+                    // x |> f(a, b) should become f(x, a, b)
+                    // If LHS is a function reference, call it first
+                    // bevy.app |> bevy.with_window("My Game", 1280, 720) should become bevy.with_window(bevy.app(), "My Game", 1280, 720)
+                    let lhs_value = if let Expression::Identifier(_) | Expression::MemberAccess { .. } = &lhs {
+                        // LHS is a function reference - call it with no arguments first
+                        Expression::FunctionCall {
+                            callee: Box::new(lhs.clone()),
+                            arguments: vec![],
+                        }
+                    } else {
+                        // LHS is already a value - use it directly
+                        lhs
+                    };
+                    
+                    // Prepend processed LHS to the arguments list
+                    let mut new_args = vec![lhs_value];
+                    new_args.extend(arguments.clone());
+                    
+                    // Process the transformed function call
+                    return self.process_expression(ctx, Expression::FunctionCall {
+                        callee: callee.clone(),
+                        arguments: new_args,
+                    });
+                }
+                // If it's a reducer, fall through to let reducer detection handle it
+            }
+            
+            // Check if RHS is an identifier or member access (function reference)
+            // x |> f should become f(x)
+            if let Expression::Identifier(_) | Expression::MemberAccess { .. } = &rhs {
+                // If LHS is also a function reference (identifier or member access), call it first
+                // bevy.app |> bevy.with_default_plugins should become bevy.with_default_plugins(bevy.app())
+                let lhs_value = if let Expression::Identifier(_) | Expression::MemberAccess { .. } = &lhs {
+                    // LHS is a function reference - call it with no arguments first
+                    Expression::FunctionCall {
+                        callee: Box::new(lhs.clone()),
+                        arguments: vec![],
+                    }
+                } else {
+                    // LHS is already a value - use it directly
+                    lhs
+                };
+                
+                // Create a function call with the processed LHS as the first argument
+                return self.process_expression(ctx, Expression::FunctionCall {
+                    callee: Box::new(rhs.clone()),
+                    arguments: vec![lhs_value],
+                });
+            }
+            
+            // Process both sides first (for other cases like compositions, thunks, etc.)
             let first_expr = self.process_expression(ctx, lhs)?;
             let second_expr = self.process_expression(ctx, rhs)?;
 
@@ -3213,23 +3403,120 @@ impl HirBuilder {
                 });
             }
 
-            // If not a reducer, treat as normal composition
+            // If not a reducer and not a direct function call, treat as composition
+            // This handles cases like x |> f |> g where f and g are thunks or composed functions
             // f |> g means g(f(x)), so process f first, then g
+            
+            // Type checking: ensure output type of first matches input type of second
+            let first_kind = self.infer_variable_kind(&first_expr);
+            let second_kind = self.infer_variable_kind(&second_expr);
+            
+            let first_output = Self::get_function_output_type(&first_kind);
+            let second_input = Self::get_function_input_type(&second_kind);
+            
+            // If we can determine both types, check compatibility
+            if let (Some(f_out), Some(g_in)) = (first_output, second_input) {
+                // Parse the types to check compatibility
+                let f_out_kind = self.parse_type_string(&f_out);
+                let g_in_kind = self.parse_type_string(&g_in);
+                
+                // Check if types are compatible (allowing for Unknown/Any)
+                if !Self::check_type_compatibility(&g_in_kind, &f_out_kind) {
+                    return Err(HirError::TypeError(format!(
+                        "Type mismatch in composition: first function returns {}, but second function expects {}",
+                        Self::format_value_kind(&f_out_kind),
+                        Self::format_value_kind(&g_in_kind)
+                    )));
+                }
+            }
+            
             Ok(HirExpression::ComposeThunk {
                 first: Box::new(first_expr),
                 second: Box::new(second_expr),
             })
         } else {
+            // For reverse composition (<|)
+            // f <| x means f(x), so if LHS is a function call, append RHS as first argument
+            // f(a, b) <| x should become f(x, a, b) (same semantics as |>)
+            
+            // Check if LHS is a function call at AST level - if so, prepend RHS as first argument
+            if let Expression::FunctionCall { callee, arguments } = lhs {
+                // f(a, b) <| x should become f(x, a, b)
+                // Prepend RHS to the arguments list
+                let mut new_args = vec![rhs];
+                new_args.extend(arguments);
+                
+                // Process the transformed function call
+                return self.process_expression(ctx, Expression::FunctionCall {
+                    callee,
+                    arguments: new_args,
+                });
+            }
+            
+            // Check if LHS is an identifier or member access (function reference)
+            // f <| x should become f(x)
+            if let Expression::Identifier(_) | Expression::MemberAccess { .. } = lhs {
+                // Create a function call with RHS as the first argument
+                return self.process_expression(ctx, Expression::FunctionCall {
+                    callee: Box::new(lhs),
+                    arguments: vec![rhs],
+                });
+            }
+            
             // For reverse composition, process both sides normally
             let first_expr = self.process_expression(ctx, lhs)?;
             let second_expr = self.process_expression(ctx, rhs)?;
 
             // For reverse composition (<|), swap the operands
             // f <| g means f(g(x)), so we want to process g first, then f
+            
+            // Type checking: ensure output type of second (g) matches input type of first (f)
+            let first_kind = self.infer_variable_kind(&first_expr);
+            let second_kind = self.infer_variable_kind(&second_expr);
+            
+            let second_output = Self::get_function_output_type(&second_kind);
+            let first_input = Self::get_function_input_type(&first_kind);
+            
+            // If we can determine both types, check compatibility
+            if let (Some(g_out), Some(f_in)) = (second_output, first_input) {
+                // Parse the types to check compatibility
+                let g_out_kind = self.parse_type_string(&g_out);
+                let f_in_kind = self.parse_type_string(&f_in);
+                
+                // Check if types are compatible (allowing for Unknown/Any)
+                if !Self::check_type_compatibility(&f_in_kind, &g_out_kind) {
+                    return Err(HirError::TypeError(format!(
+                        "Type mismatch in reverse composition: second function returns {}, but first function expects {}",
+                        Self::format_value_kind(&g_out_kind),
+                        Self::format_value_kind(&f_in_kind)
+                    )));
+                }
+            }
+            
             Ok(HirExpression::ComposeThunk {
                 first: Box::new(second_expr),
                 second: Box::new(first_expr),
             })
+        }
+    }
+
+    /// Check if an AST expression is a reducer function call
+    /// This checks the function name and argument count at the AST level
+    fn is_ast_reducer(&self, callee: &Expression, arg_count: usize) -> bool {
+        // Extract the function name from the callee
+        let func_name = match callee {
+            Expression::Identifier(name) => name.as_str(),
+            Expression::MemberAccess { member, .. } => member.as_str(),
+            _ => return false, // Not an identifier or member access, can't be a reducer
+        };
+        
+        // Check if it's a reducer function and if the argument count matches
+        match func_name {
+            "map" | "filter" => arg_count == 1,      // map(fn) or filter(pred)
+            "fold" => arg_count == 2,                // fold(init, fn)
+            "reduce" => arg_count == 1,             // reduce(fn)
+            "sum" => true,                           // sum can have any number of args
+            _ => false,
         }
     }
 
@@ -3513,6 +3800,7 @@ impl HirBuilder {
         let signature = FunctionSignature {
             params: param_types,
             return_type: Box::new(return_kind),
+            is_effectful: false, // Closures are pure by default
         };
 
         // Assign a function ID

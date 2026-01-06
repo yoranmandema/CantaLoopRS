@@ -68,6 +68,7 @@ lazy_static::lazy_static! {
             signature: FunctionSignature {
                 params: vec![],
                 return_type: Box::new(ValueKind::Struct("BevyApp".into())),
+                is_effectful: false,
             },
             arity: Arity::Fixed(0),
             impl_fn: Arc::new(|_args, heap| {
@@ -107,13 +108,12 @@ lazy_static::lazy_static! {
             signature: FunctionSignature {
                 params: vec![ValueKind::Struct("BevyApp".into())],
                 return_type: Box::new(ValueKind::Struct("BevyApp".into())),
+                is_effectful: false,
             },
             arity: Arity::Fixed(1),
             impl_fn: Arc::new(|args, heap| {
                 let (_, window_title, window_width, window_height, has_clear_color, clear_color_r, clear_color_g, clear_color_b) =
                     extract_bevy_app_fields(&args[0], heap);
-
-                println!("{:?}", &args[0]);
 
                 create_bevy_app(
                     true, // has_default_plugins = true
@@ -140,6 +140,7 @@ lazy_static::lazy_static! {
                     ValueKind::Number,
                 ],
                 return_type: Box::new(ValueKind::Struct("BevyApp".into())),
+                is_effectful: false,
             },
             arity: Arity::Fixed(4),
             impl_fn: Arc::new(|args, heap| {
@@ -172,6 +173,7 @@ lazy_static::lazy_static! {
                     ValueKind::Number,
                 ],
                 return_type: Box::new(ValueKind::Struct("BevyApp".into())),
+                is_effectful: false,
             },
             arity: Arity::Fixed(4),
             impl_fn: Arc::new(|args, heap| {
@@ -200,6 +202,7 @@ lazy_static::lazy_static! {
             signature: FunctionSignature {
                 params: vec![ValueKind::Struct("BevyApp".into())],
                 return_type: Box::new(ValueKind::Void),
+                is_effectful: true, // run is effectful
             },
             arity: Arity::Fixed(1),
             impl_fn: Arc::new(|args, heap| {

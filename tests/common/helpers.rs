@@ -13,6 +13,7 @@ pub fn create_test_engine() -> Engine {
     let print_sig = FunctionSignature {
         params: vec![ValueKind::String],
         return_type: Box::new(ValueKind::String),
+        is_effectful: true, // print is effectful
     };
     engine.add_string_function("print", print_sig, Arity::Fixed(1), |args| {
         println!("{}", args[0]);

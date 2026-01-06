@@ -59,7 +59,7 @@ struct_statement = ${
 struct_fields = { struct_field ~ (WHITESPACE* ~ "," ~ WHITESPACE* ~ struct_field)* }
 struct_field = { identifier ~ WHITESPACE* ~ ":" ~ WHITESPACE* ~ type_annotation }
 
-return_type_annotation = { "->" ~ WHITESPACE+ ~ type_annotation }
+return_type_annotation = { ("->" | "~>") ~ WHITESPACE+ ~ type_annotation }
 
 function_args = { argument ~ ("," ~ WHITESPACE* ~ argument)* }
 
@@ -174,7 +174,9 @@ array_literal = ${ "[" ~ WHITESPACE* ~ expression_list? ~ WHITESPACE* ~ "]" }
 identifier = @{ !("fn" ~ (WHITESPACE | !(ASCII_ALPHANUMERIC | "_"))) ~ !("if" ~ (WHITESPACE | !(ASCII_ALPHANUMERIC | "_"))) ~ !("else" ~ (WHITESPACE | !(ASCII_ALPHANUMERIC | "_"))) ~ !("elseif" ~ (WHITESPACE | !(ASCII_ALPHANUMERIC | "_"))) ~ !("match" ~ (WHITESPACE | !(ASCII_ALPHANUMERIC | "_"))) ~ !("return" ~ (WHITESPACE | !(ASCII_ALPHANUMERIC | "_"))) ~ !("let" ~ (WHITESPACE | !(ASCII_ALPHANUMERIC | "_"))) ~ !("true" ~ (WHITESPACE | !(ASCII_ALPHANUMERIC | "_"))) ~ !("false" ~ (WHITESPACE | !(ASCII_ALPHANUMERIC | "_"))) ~ !("loop" ~ (WHITESPACE | !(ASCII_ALPHANUMERIC | "_"))) ~ !("while" ~ (WHITESPACE | !(ASCII_ALPHANUMERIC | "_"))) ~ !("for" ~ (WHITESPACE | !(ASCII_ALPHANUMERIC | "_"))) ~ !("in" ~ (WHITESPACE | !(ASCII_ALPHANUMERIC | "_"))) ~ !("break" ~ (WHITESPACE | !(ASCII_ALPHANUMERIC | "_"))) ~ !("continue" ~ (WHITESPACE | !(ASCII_ALPHANUMERIC | "_"))) ~ !("use" ~ (WHITESPACE | !(ASCII_ALPHANUMERIC | "_"))) ~ !("mod" ~ (WHITESPACE | !(ASCII_ALPHANUMERIC | "_"))) ~ !("pub" ~ (WHITESPACE | !(ASCII_ALPHANUMERIC | "_"))) ~ !("const" ~ (WHITESPACE | !(ASCII_ALPHANUMERIC | "_"))) ~ !("struct" ~ (WHITESPACE | !(ASCII_ALPHANUMERIC | "_"))) ~ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
 
 number = { digit+ ~ ("." ~ digit*)? }
-string = @{ "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
+string = @{ "\"" ~ string_char* ~ "\"" }
+string_char = { escape | (!"\\" ~ !"\"" ~ ANY) }
+escape = { "\\" ~ ("\"" | "\\" | "n" | "t" | "r" | "b" | "f" | "0") }
 boolean = { true | false }
 
 true = { "true" }

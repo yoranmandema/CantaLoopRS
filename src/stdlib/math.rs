@@ -3,10 +3,6 @@ use crate::core::hir_lowering::{FunctionSignature, ValueKind};
 use crate::core::vm::Value;
 use std::sync::Arc;
 
-/// Standard library math module.
-///
-/// This is pure declarative metadata describing the math module.
-/// It does not mutate the Engine - it's compiler input, not runtime behavior.
 lazy_static::lazy_static! {
     pub static ref MATH_MODULE: StdModule = {
         // Use macro for simple fixed-arity functions
@@ -60,6 +56,7 @@ lazy_static::lazy_static! {
                 signature: FunctionSignature {
                     params: vec![ValueKind::Number, ValueKind::Number],
                     return_type: Box::new(ValueKind::Number),
+                    is_effectful: false,
                 },
                 arity: Arity::Variadic { min: 2 },
                 impl_fn: Arc::new(|args, _heap| {
@@ -75,6 +72,7 @@ lazy_static::lazy_static! {
                 signature: FunctionSignature {
                     params: vec![ValueKind::Number, ValueKind::Number],
                     return_type: Box::new(ValueKind::Number),
+                    is_effectful: false,
                 },
                 arity: Arity::Variadic { min: 2 },
                 impl_fn: Arc::new(|args, _heap| {
@@ -90,6 +88,7 @@ lazy_static::lazy_static! {
                 signature: FunctionSignature {
                     params: vec![ValueKind::Number, ValueKind::Number],
                     return_type: Box::new(ValueKind::Number),
+                    is_effectful: false,
                 },
                 arity: Arity::Variadic { min: 2 },
                 impl_fn: Arc::new(|args, _heap| {

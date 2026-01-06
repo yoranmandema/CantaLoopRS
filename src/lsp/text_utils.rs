@@ -2,7 +2,8 @@ use tower_lsp::lsp_types::{Position, Range};
 
 /// Convert a byte position in text to (line, column) coordinates.
 pub fn byte_position_to_line_col(text: &str, pos: usize) -> (usize, usize) {
-    let text_before = &text[..pos];
+    // Safe string slicing - use get() to handle multi-byte characters
+    let text_before = text.get(..pos).unwrap_or("");
     let line = text_before.matches('\n').count();
     let col = text_before
         .rfind('\n')
@@ -13,6 +14,7 @@ pub fn byte_position_to_line_col(text: &str, pos: usize) -> (usize, usize) {
 
 /// Extract identifier at a given position in text.
 /// Returns (identifier, start_col, end_col) if found.
+/// Note: col is a character position, not a byte position.
 pub fn extract_identifier_at_position(text: &str, line: usize, col: usize) -> Option<(String, usize, usize)> {
     let lines: Vec<&str> = text.lines().collect();
     if line >= lines.len() {
@@ -20,27 +22,52 @@ pub fn extract_identifier_at_position(text: &str, line: usize, col: usize) -> Op
     }
 
     let line_text = lines[line];
-    if col >= line_text.len() {
+    
+    // Convert character position to byte position
+    let char_indices: Vec<(usize, char)> = line_text.char_indices().collect();
+    if col >= char_indices.len() {
         return None;
     }
 
-    // Find start of identifier
-    let mut start = col;
-    while start > 0 && (line_text.chars().nth(start - 1).map_or(false, |c| c.is_alphanumeric() || c == '_')) {
-        start -= 1;
+    // Find start of identifier (working with character positions)
+    let mut start_char_pos = col;
+    while start_char_pos > 0 {
+        let (_, ch) = char_indices[start_char_pos - 1];
+        if ch.is_alphanumeric() || ch == '_' {
+            start_char_pos -= 1;
+        } else {
+            break;
+        }
     }
 
-    // Find end of identifier
-    let mut end = col;
-    while end < line_text.len() && (line_text.chars().nth(end).map_or(false, |c| c.is_alphanumeric() || c == '_')) {
-        end += 1;
+    // Find end of identifier (working with character positions)
+    let mut end_char_pos = col;
+    while end_char_pos < char_indices.len() {
+        let (_, ch) = char_indices[end_char_pos];
+        if ch.is_alphanumeric() || ch == '_' {
+            end_char_pos += 1;
+        } else {
+            break;
+        }
     }
 
-    if start >= end {
+    if start_char_pos >= end_char_pos {
         return None;
     }
 
-    Some((line_text[start..end].to_string(), start, end))
+    // Convert character positions to byte positions for slicing
+    let start_byte = char_indices[start_char_pos].0;
+    let end_byte = if end_char_pos < char_indices.len() {
+        char_indices[end_char_pos].0
+    } else {
+        line_text.len()
+    };
+
+    // Safe string slicing - use get() to handle multi-byte characters
+    match line_text.get(start_byte..end_byte) {
+        Some(s) => Some((s.to_string(), start_byte, end_byte)),
+        None => None, // Invalid char boundary
+    }
 }
 
 /// Create an LSP Range from line, column, and length.
@@ -62,19 +89,23 @@ pub fn create_range(line: usize, col: usize, length: usize) -> Range {
 pub fn extract_variable_name_from_message(msg: &str) -> String {
     if let Some(start) = msg.find('\'') {
         // Extract from "Variable 'b' is not declared..."
-        let after_quote = &msg[start + 1..];
+        // Safe string slicing - use get() to handle multi-byte characters
+        let after_quote = match msg.get(start + 1..) {
+            Some(s) => s,
+            None => return msg.to_string(), // Fallback if invalid char boundary
+        };
         if let Some(end) = after_quote.find('\'') {
-            after_quote[..end].to_string()
+            after_quote.get(..end).unwrap_or(after_quote).to_string()
         } else if let Some(end) = after_quote.find(' ') {
             // Handle case where there's no closing quote
-            after_quote[..end].to_string()
+            after_quote.get(..end).unwrap_or(after_quote).to_string()
         } else {
             after_quote.to_string()
         }
     } else {
         // Extract from "b is not a variable..."
         if let Some(end) = msg.find(' ') {
-            msg[..end].to_string()
+            msg.get(..end).unwrap_or(msg).to_string()
         } else {
             msg.to_string()
         }

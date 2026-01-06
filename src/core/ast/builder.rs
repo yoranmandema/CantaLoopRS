@@ -111,18 +111,25 @@ fn parse_type_annotation_from_text(
     }
 }
 
-/// Extracts return type annotation from text after "->"
-fn extract_return_type(text: &str, span: pest::Span) -> Result<Option<String>, pest::error::Error<Rule>> {
-    if !text.trim_start().starts_with("->") {
+/// Extracts return type annotation from text after "->" or "~>"
+/// Returns (type_string, is_effectful) where is_effectful is true for ~>
+fn extract_return_type(text: &str, span: pest::Span) -> Result<Option<(String, bool)>, pest::error::Error<Rule>> {
+    let trimmed = text.trim_start();
+    let is_effectful = trimmed.starts_with("~>");
+    let is_pure = trimmed.starts_with("->");
+    
+    if !is_pure && !is_effectful {
         return Ok(None);
     }
     
-    let arrow_pos = text.find("->").unwrap();
-    let after_arrow = text[arrow_pos + 2..].trim_start();
+    let arrow = if is_effectful { "~>" } else { "->" };
+    let arrow_pos = trimmed.find(arrow).unwrap();
+    let after_arrow = trimmed[arrow_pos + 2..].trim_start();
     let brace_pos = after_arrow.find('{').unwrap_or(after_arrow.len());
     let type_text = after_arrow[..brace_pos].trim();
     
-    parse_type_annotation_from_text(type_text, span)
+    let type_string = parse_type_annotation_from_text(type_text, span)?;
+    Ok(type_string.map(|s| (s, is_effectful)))
 }
 
 /// Extracts return type annotation from closure text after "->" (handles both => and { delimiters)
@@ -347,7 +354,13 @@ fn build_function_declaration(pair: Pair<Rule>) -> Result<Statement, pest::error
     
     // Extract return type and find brace
     let after_paren = &text[paren_end..];
-    let return_type = extract_return_type(after_paren, span)?;
+    let return_type = if let Some((type_str, is_effectful)) = extract_return_type(after_paren, span)? {
+        // Prepend the arrow to preserve pure/effectful information
+        let arrow = if is_effectful { "~>" } else { "->" };
+        Some(format!("{} {}", arrow, type_str))
+    } else {
+        None
+    };
     
     // Find opening brace
     let brace_start_offset = find_opening_brace(after_paren, span, "Function")?;
@@ -481,7 +494,38 @@ fn build_string(pair: Pair<Rule>) -> Result<Expression, pest::error::Error<Rule>
     let str_with_quotes = pair.as_str();
 
     // Strip the surrounding quotes
-    let string_value = str_with_quotes[1..str_with_quotes.len() - 1].to_string();
+    let string_with_escapes = &str_with_quotes[1..str_with_quotes.len() - 1];
+    
+    // Unescape the string
+    let mut string_value = String::new();
+    let mut chars = string_with_escapes.chars().peekable();
+    
+    while let Some(ch) = chars.next() {
+        if ch == '\\' {
+            if let Some(escaped) = chars.next() {
+                match escaped {
+                    '"' => string_value.push('"'),
+                    '\\' => string_value.push('\\'),
+                    'n' => string_value.push('\n'),
+                    't' => string_value.push('\t'),
+                    'r' => string_value.push('\r'),
+                    'b' => string_value.push('\x08'), // backspace
+                    'f' => string_value.push('\x0C'), // form feed
+                    '0' => string_value.push('\0'),
+                    _ => {
+                        // Unknown escape sequence - keep as is (e.g., \x, \u)
+                        string_value.push('\\');
+                        string_value.push(escaped);
+                    }
+                }
+            } else {
+                // Backslash at end of string - keep it
+                string_value.push('\\');
+            }
+        } else {
+            string_value.push(ch);
+        }
+    }
 
     Ok(Expression::Literal(Literal::String(string_value)))
 }
@@ -529,47 +573,6 @@ fn build_value(pair: Pair<Rule>) -> Result<Expression, pest::error::Error<Rule>>
         Rule::boolean => build_boolean(inner_pair),
         Rule::array_literal => build_array_literal(inner_pair),
         _ => unreachable!(),
-    }
-}
-
-fn build_call_expression(pair: Pair<Rule>) -> Result<Expression, pest::error::Error<Rule>> {
-    let span = pair.as_span();
-    let text = pair.as_str();
-    
-    // Find opening paren
-    let paren_start = text.find('(')
-        .ok_or_else(|| error_at_span(span, "Call expression missing opening paren".to_string()))?;
-    let identifier = text[..paren_start].trim().to_string();
-    
-    // Find closing paren
-    let paren_end = text.rfind(')')
-        .ok_or_else(|| error_at_span(span, "Call expression missing closing paren".to_string()))?;
-    
-    // Extract and parse arguments
-    let args_text = text[paren_start + 1..paren_end].trim();
-    let call_args = if args_text.is_empty() {
-        Vec::new()
-    } else {
-        parse_call_argument_list_from_text(args_text, span)?
-    };
-    
-    // Convert to appropriate call type
-    if call_args.iter().any(|arg| matches!(arg, CallArgument::Hole)) {
-        Ok(Expression::PartialCall {
-            func: Box::new(Expression::Identifier(identifier)),
-            args: call_args,
-        })
-    } else {
-        let arguments: Vec<Expression> = call_args.into_iter()
-            .map(|arg| match arg {
-                CallArgument::Expr(expr) => expr,
-                CallArgument::Hole => unreachable!("No holes should exist here"),
-            })
-            .collect();
-        Ok(Expression::FunctionCall {
-            callee: Box::new(Expression::Identifier(identifier)),
-            arguments,
-        })
     }
 }
 

@@ -1,0 +1,30 @@
+# Native modules for your Melon project
+#
+# This Cargo.toml defines your native Rust modules as a separate crate.
+# Configure the cantaloop dependency based on your setup:
+#
+# Option 1: If cantaloop is published to crates.io:
+#   cantaloop = "0.1.0"
+#
+# Option 2: If using from a local path (e.g., during development):
+#   cantaloop = { path = "../../cantaloop" }
+#
+# Option 3: If using from git:
+#   cantaloop = { git = "https://github.com/yourusername/cantaloop" }
+
+[package]
+name = "watermelon-native"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "native_modules"
+path = "lib.rs"
+crate-type = ["cdylib"]
+
+[dependencies]
+# Configure cantaloop dependency - uncomment and adjust as needed:
+# cantaloop = "0.1.0"  # If published
+# cantaloop = { path = "../../cantaloop" }  # If local path
+# cantaloop = { git = "https://github.com/yourusername/cantaloop" }  # If git
+lazy_static = "1.5.0"

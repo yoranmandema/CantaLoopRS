@@ -1,0 +1,180 @@
+
+[Function 0]
+  0000: LdVar(0)
+  0001: LdVar(1)
+  0002: AddNum
+  0003: Ret
+
+[Function 1]
+  0000: LdStr("Hello ")
+  0001: LdVar(2)
+  0002: Add
+  0003: LdStr("!")
+  0004: Add
+  0005: LdFunc(10009)
+  0006: Thunk(1)
+  0007: Invoke
+  0008: Pop
+
+[Function 2]
+  0000: LdStr("Adding ")
+  0001: LdVar(3)
+  0002: Add
+  0003: LdStr(" + ")
+  0004: Add
+  0005: LdVar(4)
+  0006: Add
+  0007: LdFunc(10009)
+  0008: Thunk(1)
+  0009: Invoke
+  0010: Pop
+  0011: LdVar(3)
+  0012: LdVar(4)
+  0013: AddNum
+  0014: Ret
+
+[Function 3]
+  0000: LdVar(8)
+  0001: LdNum(2.0)
+  0002: LdFunc(0)
+  0003: Thunk(2)
+  0004: RetInvoke
+
+[Function 4]
+  0000: LdVar(12)
+  0001: LdVar(13)
+  0002: MulNum
+  0003: Ret
+
+[Function 5]
+  0000: LdStr("Pretending to fetch ")
+  0001: LdVar(16)
+  0002: Add
+  0003: LdFunc(10009)
+  0004: Thunk(1)
+  0005: Invoke
+  0006: Pop
+  0007: LdStr("{ \"status\": \"OK\"}")
+  0008: Ret
+
+[Main]
+  0000: LdNum(5.0)
+  0001: LdNum(4.0)
+  0002: LdFunc(0)
+  0003: Thunk(2)
+  0004: Invoke
+  0005: StVar(5)
+  0006: LdVar(5)
+  0007: LdFunc(10009)
+  0008: Thunk(1)
+  0009: Invoke
+  0010: Pop
+  0011: LdNum(5.0)
+  0012: MakePartial { func_id: 0, bound_mask: 2, hole_count: 1 }
+  0013: StVar(6)
+  0014: LdNum(10.0)
+  0015: LdVar(6)
+  0016: Thunk(1)
+  0017: Invoke
+  0018: LdFunc(10009)
+  0019: Thunk(1)
+  0020: Invoke
+  0021: Pop
+  0022: LdNum(1.0)
+  0023: LdNum(2.0)
+  0024: LdNum(3.0)
+  0025: LdNum(4.0)
+  0026: MakeArray(4)
+  0027: StVar(7)
+  0028: LdVar(7)
+  0029: LdFunc(3)
+  0030: Map
+  0031: StVar(9)
+  0032: LdVar(9)
+  0033: LdFunc(10009)
+  0034: Thunk(1)
+  0035: Invoke
+  0036: Pop
+  0037: LdVar(7)
+  0038: LdNum(2.0)
+  0039: MakePartial { func_id: 0, bound_mask: 2, hole_count: 1 }
+  0040: Map
+  0041: StVar(10)
+  0042: LdVar(10)
+  0043: LdFunc(10009)
+  0044: Thunk(1)
+  0045: Invoke
+  0046: Pop
+  0047: LdFunc(10043)
+  0048: Thunk(0)
+  0049: Invoke
+  0050: LdFunc(10044)
+  0051: Thunk(1)
+  0052: Invoke
+  0053: LdStr("My Game")
+  0054: LdNum(1280.0)
+  0055: LdNum(720.0)
+  0056: LdFunc(10045)
+  0057: Thunk(4)
+  0058: Invoke
+  0059: LdNum(0.1)
+  0060: LdNum(0.1)
+  0061: LdNum(0.1)
+  0062: LdFunc(10046)
+  0063: Thunk(4)
+  0064: Invoke
+  0065: StVar(11)
+  0066: LdVar(11)
+  0067: LdFunc(10047)
+  0068: Thunk(1)
+  0069: Invoke
+  0070: Pop
+  0071: LdNum(2.0)
+  0072: MakePartial { func_id: 4, bound_mask: 2, hole_count: 1 }
+  0073: LdNum(5.0)
+  0074: MakePartial { func_id: 0, bound_mask: 2, hole_count: 1 }
+  0075: ComposeThunk
+  0076: StVar(14)
+  0077: LdNum(10.0)
+  0078: LdVar(14)
+  0079: Thunk(1)
+  0080: Invoke
+  0081: StVar(15)
+  0082: LdVar(15)
+  0083: LdFunc(10009)
+  0084: Thunk(1)
+  0085: Invoke
+  0086: Pop
+  0087: MakePartial { func_id: 10009, bound_mask: 0, hole_count: 1 }
+  0088: MakePartial { func_id: 5, bound_mask: 0, hole_count: 1 }
+  0089: ComposeThunk
+  0090: StVar(17)
+  0091: LdStr("https://www.google.com/")
+  0092: LdVar(17)
+  0093: Thunk(1)
+  0094: Invoke
+  0095: Pop
+  0096: LdFunc(10047)
+  0097: Thunk(0)
+  0098: LdFunc(10044)
+  0099: Thunk(0)
+  0100: LdFunc(10043)
+  0101: Thunk(0)
+  0102: ComposeThunk
+  0103: LdStr("My Game")
+  0104: LdNum(1280.0)
+  0105: LdNum(720.0)
+  0106: LdFunc(10045)
+  0107: Thunk(4)
+  0108: Invoke
+  0109: LdNum(0.1)
+  0110: LdNum(0.1)
+  0111: LdNum(0.1)
+  0112: LdFunc(10046)
+  0113: Thunk(4)
+  0114: Invoke
+  0115: ComposeThunk
+  0116: StVar(18)
+  0117: LdVar(18)
+  0118: Invoke
+  0119: Pop

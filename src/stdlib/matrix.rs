@@ -26,8 +26,9 @@ lazy_static::lazy_static! {
                         ValueKind::Number, ValueKind::Number,
                         ValueKind::Number, ValueKind::Number,
                     ],
-                    return_type: Box::new(ValueKind::Struct("Matrix4".into())),
-                },
+                return_type: Box::new(ValueKind::Struct("Matrix4".into())),
+                is_effectful: false,
+            },
                 arity: Arity::Fixed(4),
                 impl_fn: Arc::new(|args, heap| {
                     Value::struct_with_heap(
@@ -46,8 +47,9 @@ lazy_static::lazy_static! {
                 name: "identity",
                 signature: FunctionSignature {
                     params: vec![],
-                    return_type: Box::new(ValueKind::Struct("Matrix4".into())),
-                },
+                return_type: Box::new(ValueKind::Struct("Matrix4".into())),
+                is_effectful: false,
+            },
                 arity: Arity::Fixed(0),
                 impl_fn: Arc::new(|_, heap| {
                     Value::struct_with_heap(
@@ -69,8 +71,9 @@ lazy_static::lazy_static! {
                         ValueKind::Struct("Matrix4".into()),
                         ValueKind::Struct("Matrix4".into()),
                     ],
-                    return_type: Box::new(ValueKind::Struct("Matrix4".into())),
-                },
+                return_type: Box::new(ValueKind::Struct("Matrix4".into())),
+                is_effectful: false,
+            },
                 arity: Arity::Fixed(2),
                 impl_fn: Arc::new(|args, heap| {
                     let a = args[0].as_struct(heap).unwrap();
@@ -94,8 +97,9 @@ lazy_static::lazy_static! {
                         ValueKind::Struct("Matrix4".into()),
                         ValueKind::Number,
                     ],
-                    return_type: Box::new(ValueKind::Struct("Matrix4".into())),
-                },
+                return_type: Box::new(ValueKind::Struct("Matrix4".into())),
+                is_effectful: false,
+            },
                 arity: Arity::Fixed(2),
                 impl_fn: Arc::new(|args, heap| {
                     let m = args[0].as_struct(heap).unwrap();
@@ -115,8 +119,9 @@ lazy_static::lazy_static! {
                         ValueKind::Struct("Matrix4".into()),
                         ValueKind::String,
                     ],
-                    return_type: Box::new(ValueKind::Number),
-                },
+                return_type: Box::new(ValueKind::Number),
+                is_effectful: false,
+            },
                 arity: Arity::Fixed(2),
                 impl_fn: Arc::new(|args, heap| {
                     let m = args[0].as_struct(heap).unwrap();

@@ -1,3 +1,6 @@
+use print from std;
+use map from functional;
+
 // Effectfulness
 // This code serves to give syntax and semantic explanation about effect and value functions
 
@@ -25,13 +28,22 @@ fn printAdd (a: num, b: num) ~> num {
 
 
 let resultOf5add4 = add(5,4); // 5 + 4 = 10 Eagerly invoked since all arguments are met and function is value function and has no effects
-let add5 = add(?,5); // Produces thunk (x: num) ~> num as b has already been consumed by '5'
+print(resultOf5add4)!;
+
+let add5 = add(?,5); // Produces thunk (x: num) -> num as b has already been consumed by '5'
+
+print(add5(10))!;
 
 // Value composition examples; 
 let xs = [1,2,3,4]; 
 
 let mapped = xs |> map(fn (x: num) -> num => add(x, 2)); // Should be valid since arguments of add and map are met. No ! needed as there's no side effects
-let mappedComposit = xs |> map(add(?, 5)); // Clean way of doing the same; passing a thunk to map
+
+print(mapped)!;
+
+let mappedComposit = xs |> map(add(?, 2)); // Clean way of doing the same; passing a thunk to map
+
+print(mappedComposit)!;
 
 let app = bevy.app() // Produces a value
     |> bevy.with_default_plugins() // Value gets piped into with_default_plugins, which returns a new value
@@ -42,7 +54,7 @@ bevy.run(app)!; // since run has an effect it has to be called explicitly
 
 
 // Function composition:
-fn mul (a: num, b: num) -> {
+fn mul (a: num, b: num) -> num {
     return a * b;
 }
 
@@ -50,22 +62,27 @@ let add5andMul2 = add(?,5) |> mul(?,2); // Produces a thunk (x: num) ~> num that
 
 let res = add5andMul2(10); // Should be eagerly invoked as there's no side effects. Results in (10 + 5) * 2 = 30
 
-let invalidPipeline = add(1,3) |> mul(?, 2); // Invalid -> no arguments to pass through?
+print(res)!;
 
+// let invalidPipeline = add(1,3) |> mul(?, 2); // Invalid -> no arguments to pass through?
+
+fn fetch (url: str) ~> str {
+    print("Pretending to fetch " + url)!;
+
+    return "{ \"status\": \"OK\"}";
+}
 
 // Effectful pipeline
-let effectfulPipeline =
-    fetch(?)        // effectful callable
-    |> parse        // pure callable
-    |> store(?);    // effectful callable
+let effectfulPipeline = fetch(?) |> print(?);   
 
-effectfulPipeline(url)!;
+effectfulPipeline("https://www.google.com/")!;
 
 // Pipeline with no args
+/*
 let config =
     default_config()
     |> with_logging()
-    |> with_cache();
+    |> with_cache();*/
 
 
 /*
@@ -86,6 +103,8 @@ Execution → only at !
 
 This is exactly what pipelines are for.
 */
+
+
 
 let runApp =
     bevy.app

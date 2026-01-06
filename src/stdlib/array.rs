@@ -39,6 +39,7 @@ lazy_static::lazy_static! {
             signature: FunctionSignature {
                 params: vec![ValueKind::Array(Box::new(ValueKind::Any))],
                 return_type: Box::new(ValueKind::Number),
+                is_effectful: false,
             },
             arity: Arity::Fixed(1),
             impl_fn: Arc::new(|args, heap| {
@@ -57,6 +58,7 @@ lazy_static::lazy_static! {
                     ValueKind::Number,
                 ],
                 return_type: Box::new(ValueKind::Any),
+                is_effectful: false,
             },
             arity: Arity::Fixed(2),
             impl_fn: Arc::new(|args, heap| {
@@ -77,6 +79,7 @@ lazy_static::lazy_static! {
                     ValueKind::Any,
                 ],
                 return_type: Box::new(ValueKind::Any),
+                is_effectful: false,
             },
             arity: Arity::Fixed(3),
             impl_fn: Arc::new(|args, heap| {
@@ -98,6 +101,7 @@ lazy_static::lazy_static! {
                     ValueKind::Number,
                 ],
                 return_type: Box::new(ValueKind::Array(Box::new(ValueKind::Any))),
+                is_effectful: false,
             },
             arity: Arity::Fixed(3),
             impl_fn: Arc::new(|args, heap| {
@@ -140,6 +144,7 @@ lazy_static::lazy_static! {
                     ValueKind::Any,
                 ],
                 return_type: Box::new(ValueKind::Array(Box::new(ValueKind::Any))),
+                is_effectful: false,
             },
             arity: Arity::Fixed(2),
             impl_fn: Arc::new(|args, heap| {
@@ -159,6 +164,7 @@ lazy_static::lazy_static! {
                     ValueKind::Array(Box::new(ValueKind::Any)),
                 ],
                 return_type: Box::new(ValueKind::Array(Box::new(ValueKind::Any))),
+                is_effectful: false,
             },
             arity: Arity::Fixed(2),
             impl_fn: Arc::new(|args, heap| {
@@ -182,6 +188,7 @@ lazy_static::lazy_static! {
                     ValueKind::Number, ValueKind::Number
                 ],
                 return_type: Box::new(ValueKind::Array(Box::new(ValueKind::Number))),
+                is_effectful: false
             },
             arity: Arity::Fixed(2),
             impl_fn: Arc::new(|args, heap| {

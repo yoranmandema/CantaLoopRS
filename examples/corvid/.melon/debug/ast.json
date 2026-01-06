@@ -1,0 +1,956 @@
+{
+  "blocks": [
+    {
+      "statements": [
+        {
+          "Use": {
+            "path": [
+              "std"
+            ],
+            "selector": {
+              "Single": "print"
+            }
+          }
+        },
+        {
+          "Use": {
+            "path": [
+              "functional"
+            ],
+            "selector": {
+              "Single": "map"
+            }
+          }
+        },
+        {
+          "FunctionDeclaration": {
+            "identifier": "add",
+            "arguments": [
+              {
+                "identifier": "a",
+                "kind": "num"
+              },
+              {
+                "identifier": "b",
+                "kind": "num"
+              }
+            ],
+            "return_type": "-> num",
+            "body": {
+              "statements": [
+                {
+                  "Return": {
+                    "expression": {
+                      "Infix": {
+                        "lhs": {
+                          "Identifier": "a"
+                        },
+                        "op": "Add",
+                        "rhs": {
+                          "Identifier": "b"
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            },
+            "pub_visibility": false
+          }
+        },
+        {
+          "FunctionDeclaration": {
+            "identifier": "printHello",
+            "arguments": [
+              {
+                "identifier": "name",
+                "kind": "str"
+              }
+            ],
+            "return_type": "~> void",
+            "body": {
+              "statements": [
+                {
+                  "Expression": {
+                    "Postfix": {
+                      "lhs": {
+                        "FunctionCall": {
+                          "callee": {
+                            "Identifier": "print"
+                          },
+                          "arguments": [
+                            {
+                              "Infix": {
+                                "lhs": {
+                                  "Infix": {
+                                    "lhs": {
+                                      "Literal": {
+                                        "String": "Hello "
+                                      }
+                                    },
+                                    "op": "Add",
+                                    "rhs": {
+                                      "Identifier": "name"
+                                    }
+                                  }
+                                },
+                                "op": "Add",
+                                "rhs": {
+                                  "Literal": {
+                                    "String": "!"
+                                  }
+                                }
+                              }
+                            }
+                          ]
+                        }
+                      },
+                      "op": "Invoke",
+                      "args": null
+                    }
+                  }
+                }
+              ]
+            },
+            "pub_visibility": false
+          }
+        },
+        {
+          "FunctionDeclaration": {
+            "identifier": "printAdd",
+            "arguments": [
+              {
+                "identifier": "a",
+                "kind": "num"
+              },
+              {
+                "identifier": "b",
+                "kind": "num"
+              }
+            ],
+            "return_type": "~> num",
+            "body": {
+              "statements": [
+                {
+                  "Expression": {
+                    "Postfix": {
+                      "lhs": {
+                        "FunctionCall": {
+                          "callee": {
+                            "Identifier": "print"
+                          },
+                          "arguments": [
+                            {
+                              "Infix": {
+                                "lhs": {
+                                  "Infix": {
+                                    "lhs": {
+                                      "Infix": {
+                                        "lhs": {
+                                          "Literal": {
+                                            "String": "Adding "
+                                          }
+                                        },
+                                        "op": "Add",
+                                        "rhs": {
+                                          "Identifier": "a"
+                                        }
+                                      }
+                                    },
+                                    "op": "Add",
+                                    "rhs": {
+                                      "Literal": {
+                                        "String": " + "
+                                      }
+                                    }
+                                  }
+                                },
+                                "op": "Add",
+                                "rhs": {
+                                  "Identifier": "b"
+                                }
+                              }
+                            }
+                          ]
+                        }
+                      },
+                      "op": "Invoke",
+                      "args": null
+                    }
+                  }
+                },
+                {
+                  "Return": {
+                    "expression": {
+                      "Infix": {
+                        "lhs": {
+                          "Identifier": "a"
+                        },
+                        "op": "Add",
+                        "rhs": {
+                          "Identifier": "b"
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            },
+            "pub_visibility": false
+          }
+        },
+        {
+          "Let": {
+            "identifier": "resultOf5add4",
+            "type_annotation": null,
+            "expression": {
+              "FunctionCall": {
+                "callee": {
+                  "Identifier": "add"
+                },
+                "arguments": [
+                  {
+                    "Literal": {
+                      "Number": 5.0
+                    }
+                  },
+                  {
+                    "Literal": {
+                      "Number": 4.0
+                    }
+                  }
+                ]
+              }
+            },
+            "pub_visibility": false
+          }
+        },
+        {
+          "Expression": {
+            "Postfix": {
+              "lhs": {
+                "FunctionCall": {
+                  "callee": {
+                    "Identifier": "print"
+                  },
+                  "arguments": [
+                    {
+                      "Identifier": "resultOf5add4"
+                    }
+                  ]
+                }
+              },
+              "op": "Invoke",
+              "args": null
+            }
+          }
+        },
+        {
+          "Let": {
+            "identifier": "add5",
+            "type_annotation": null,
+            "expression": {
+              "PartialCall": {
+                "func": {
+                  "Identifier": "add"
+                },
+                "args": [
+                  "Hole",
+                  {
+                    "Expr": {
+                      "Literal": {
+                        "Number": 5.0
+                      }
+                    }
+                  }
+                ]
+              }
+            },
+            "pub_visibility": false
+          }
+        },
+        {
+          "Expression": {
+            "Postfix": {
+              "lhs": {
+                "FunctionCall": {
+                  "callee": {
+                    "Identifier": "print"
+                  },
+                  "arguments": [
+                    {
+                      "FunctionCall": {
+                        "callee": {
+                          "Identifier": "add5"
+                        },
+                        "arguments": [
+                          {
+                            "Literal": {
+                              "Number": 10.0
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              },
+              "op": "Invoke",
+              "args": null
+            }
+          }
+        },
+        {
+          "Let": {
+            "identifier": "xs",
+            "type_annotation": null,
+            "expression": {
+              "Array": [
+                {
+                  "Literal": {
+                    "Number": 1.0
+                  }
+                },
+                {
+                  "Literal": {
+                    "Number": 2.0
+                  }
+                },
+                {
+                  "Literal": {
+                    "Number": 3.0
+                  }
+                },
+                {
+                  "Literal": {
+                    "Number": 4.0
+                  }
+                }
+              ]
+            },
+            "pub_visibility": false
+          }
+        },
+        {
+          "Let": {
+            "identifier": "mapped",
+            "type_annotation": null,
+            "expression": {
+              "Compose": {
+                "lhs": {
+                  "Identifier": "xs"
+                },
+                "rhs": {
+                  "FunctionCall": {
+                    "callee": {
+                      "Identifier": "map"
+                    },
+                    "arguments": [
+                      {
+                        "Closure": {
+                          "arguments": [
+                            {
+                              "identifier": "x",
+                              "kind": "num"
+                            }
+                          ],
+                          "return_type": "num",
+                          "body": {
+                            "Expression": {
+                              "FunctionCall": {
+                                "callee": {
+                                  "Identifier": "add"
+                                },
+                                "arguments": [
+                                  {
+                                    "Identifier": "x"
+                                  },
+                                  {
+                                    "Literal": {
+                                      "Number": 2.0
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                },
+                "reverse": false
+              }
+            },
+            "pub_visibility": false
+          }
+        },
+        {
+          "Expression": {
+            "Postfix": {
+              "lhs": {
+                "FunctionCall": {
+                  "callee": {
+                    "Identifier": "print"
+                  },
+                  "arguments": [
+                    {
+                      "Identifier": "mapped"
+                    }
+                  ]
+                }
+              },
+              "op": "Invoke",
+              "args": null
+            }
+          }
+        },
+        {
+          "Let": {
+            "identifier": "mappedComposit",
+            "type_annotation": null,
+            "expression": {
+              "Compose": {
+                "lhs": {
+                  "Identifier": "xs"
+                },
+                "rhs": {
+                  "FunctionCall": {
+                    "callee": {
+                      "Identifier": "map"
+                    },
+                    "arguments": [
+                      {
+                        "PartialCall": {
+                          "func": {
+                            "Identifier": "add"
+                          },
+                          "args": [
+                            "Hole",
+                            {
+                              "Expr": {
+                                "Literal": {
+                                  "Number": 2.0
+                                }
+                              }
+                            }
+                          ]
+                        }
+                      }
+                    ]
+                  }
+                },
+                "reverse": false
+              }
+            },
+            "pub_visibility": false
+          }
+        },
+        {
+          "Expression": {
+            "Postfix": {
+              "lhs": {
+                "FunctionCall": {
+                  "callee": {
+                    "Identifier": "print"
+                  },
+                  "arguments": [
+                    {
+                      "Identifier": "mappedComposit"
+                    }
+                  ]
+                }
+              },
+              "op": "Invoke",
+              "args": null
+            }
+          }
+        },
+        {
+          "Let": {
+            "identifier": "app",
+            "type_annotation": null,
+            "expression": {
+              "Compose": {
+                "lhs": {
+                  "Compose": {
+                    "lhs": {
+                      "Compose": {
+                        "lhs": {
+                          "FunctionCall": {
+                            "callee": {
+                              "FieldAccess": {
+                                "object": {
+                                  "Identifier": "bevy"
+                                },
+                                "field": "app"
+                              }
+                            },
+                            "arguments": []
+                          }
+                        },
+                        "rhs": {
+                          "FunctionCall": {
+                            "callee": {
+                              "FieldAccess": {
+                                "object": {
+                                  "Identifier": "bevy"
+                                },
+                                "field": "with_default_plugins"
+                              }
+                            },
+                            "arguments": []
+                          }
+                        },
+                        "reverse": false
+                      }
+                    },
+                    "rhs": {
+                      "FunctionCall": {
+                        "callee": {
+                          "FieldAccess": {
+                            "object": {
+                              "Identifier": "bevy"
+                            },
+                            "field": "with_window"
+                          }
+                        },
+                        "arguments": [
+                          {
+                            "Literal": {
+                              "String": "My Game"
+                            }
+                          },
+                          {
+                            "Literal": {
+                              "Number": 1280.0
+                            }
+                          },
+                          {
+                            "Literal": {
+                              "Number": 720.0
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    "reverse": false
+                  }
+                },
+                "rhs": {
+                  "FunctionCall": {
+                    "callee": {
+                      "FieldAccess": {
+                        "object": {
+                          "Identifier": "bevy"
+                        },
+                        "field": "with_clear_color"
+                      }
+                    },
+                    "arguments": [
+                      {
+                        "Literal": {
+                          "Number": 0.1
+                        }
+                      },
+                      {
+                        "Literal": {
+                          "Number": 0.1
+                        }
+                      },
+                      {
+                        "Literal": {
+                          "Number": 0.1
+                        }
+                      }
+                    ]
+                  }
+                },
+                "reverse": false
+              }
+            },
+            "pub_visibility": false
+          }
+        },
+        {
+          "Expression": {
+            "Postfix": {
+              "lhs": {
+                "FunctionCall": {
+                  "callee": {
+                    "FieldAccess": {
+                      "object": {
+                        "Identifier": "bevy"
+                      },
+                      "field": "run"
+                    }
+                  },
+                  "arguments": [
+                    {
+                      "Identifier": "app"
+                    }
+                  ]
+                }
+              },
+              "op": "Invoke",
+              "args": null
+            }
+          }
+        },
+        {
+          "FunctionDeclaration": {
+            "identifier": "mul",
+            "arguments": [
+              {
+                "identifier": "a",
+                "kind": "num"
+              },
+              {
+                "identifier": "b",
+                "kind": "num"
+              }
+            ],
+            "return_type": "-> num",
+            "body": {
+              "statements": [
+                {
+                  "Return": {
+                    "expression": {
+                      "Infix": {
+                        "lhs": {
+                          "Identifier": "a"
+                        },
+                        "op": "Mul",
+                        "rhs": {
+                          "Identifier": "b"
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            },
+            "pub_visibility": false
+          }
+        },
+        {
+          "Let": {
+            "identifier": "add5andMul2",
+            "type_annotation": null,
+            "expression": {
+              "Compose": {
+                "lhs": {
+                  "PartialCall": {
+                    "func": {
+                      "Identifier": "add"
+                    },
+                    "args": [
+                      "Hole",
+                      {
+                        "Expr": {
+                          "Literal": {
+                            "Number": 5.0
+                          }
+                        }
+                      }
+                    ]
+                  }
+                },
+                "rhs": {
+                  "PartialCall": {
+                    "func": {
+                      "Identifier": "mul"
+                    },
+                    "args": [
+                      "Hole",
+                      {
+                        "Expr": {
+                          "Literal": {
+                            "Number": 2.0
+                          }
+                        }
+                      }
+                    ]
+                  }
+                },
+                "reverse": false
+              }
+            },
+            "pub_visibility": false
+          }
+        },
+        {
+          "Let": {
+            "identifier": "res",
+            "type_annotation": null,
+            "expression": {
+              "FunctionCall": {
+                "callee": {
+                  "Identifier": "add5andMul2"
+                },
+                "arguments": [
+                  {
+                    "Literal": {
+                      "Number": 10.0
+                    }
+                  }
+                ]
+              }
+            },
+            "pub_visibility": false
+          }
+        },
+        {
+          "Expression": {
+            "Postfix": {
+              "lhs": {
+                "FunctionCall": {
+                  "callee": {
+                    "Identifier": "print"
+                  },
+                  "arguments": [
+                    {
+                      "Identifier": "res"
+                    }
+                  ]
+                }
+              },
+              "op": "Invoke",
+              "args": null
+            }
+          }
+        },
+        {
+          "FunctionDeclaration": {
+            "identifier": "fetch",
+            "arguments": [
+              {
+                "identifier": "url",
+                "kind": "str"
+              }
+            ],
+            "return_type": "~> str",
+            "body": {
+              "statements": [
+                {
+                  "Expression": {
+                    "Postfix": {
+                      "lhs": {
+                        "FunctionCall": {
+                          "callee": {
+                            "Identifier": "print"
+                          },
+                          "arguments": [
+                            {
+                              "Infix": {
+                                "lhs": {
+                                  "Literal": {
+                                    "String": "Pretending to fetch "
+                                  }
+                                },
+                                "op": "Add",
+                                "rhs": {
+                                  "Identifier": "url"
+                                }
+                              }
+                            }
+                          ]
+                        }
+                      },
+                      "op": "Invoke",
+                      "args": null
+                    }
+                  }
+                },
+                {
+                  "Return": {
+                    "expression": {
+                      "Literal": {
+                        "String": "{ \"status\": \"OK\"}"
+                      }
+                    }
+                  }
+                }
+              ]
+            },
+            "pub_visibility": false
+          }
+        },
+        {
+          "Let": {
+            "identifier": "effectfulPipeline",
+            "type_annotation": null,
+            "expression": {
+              "Compose": {
+                "lhs": {
+                  "PartialCall": {
+                    "func": {
+                      "Identifier": "fetch"
+                    },
+                    "args": [
+                      "Hole"
+                    ]
+                  }
+                },
+                "rhs": {
+                  "PartialCall": {
+                    "func": {
+                      "Identifier": "print"
+                    },
+                    "args": [
+                      "Hole"
+                    ]
+                  }
+                },
+                "reverse": false
+              }
+            },
+            "pub_visibility": false
+          }
+        },
+        {
+          "Expression": {
+            "Postfix": {
+              "lhs": {
+                "FunctionCall": {
+                  "callee": {
+                    "Identifier": "effectfulPipeline"
+                  },
+                  "arguments": [
+                    {
+                      "Literal": {
+                        "String": "https://www.google.com/"
+                      }
+                    }
+                  ]
+                }
+              },
+              "op": "Invoke",
+              "args": null
+            }
+          }
+        },
+        {
+          "Let": {
+            "identifier": "runApp",
+            "type_annotation": null,
+            "expression": {
+              "Compose": {
+                "lhs": {
+                  "Compose": {
+                    "lhs": {
+                      "Compose": {
+                        "lhs": {
+                          "Compose": {
+                            "lhs": {
+                              "FieldAccess": {
+                                "object": {
+                                  "Identifier": "bevy"
+                                },
+                                "field": "app"
+                              }
+                            },
+                            "rhs": {
+                              "FieldAccess": {
+                                "object": {
+                                  "Identifier": "bevy"
+                                },
+                                "field": "with_default_plugins"
+                              }
+                            },
+                            "reverse": false
+                          }
+                        },
+                        "rhs": {
+                          "FunctionCall": {
+                            "callee": {
+                              "FieldAccess": {
+                                "object": {
+                                  "Identifier": "bevy"
+                                },
+                                "field": "with_window"
+                              }
+                            },
+                            "arguments": [
+                              {
+                                "Literal": {
+                                  "String": "My Game"
+                                }
+                              },
+                              {
+                                "Literal": {
+                                  "Number": 1280.0
+                                }
+                              },
+                              {
+                                "Literal": {
+                                  "Number": 720.0
+                                }
+                              }
+                            ]
+                          }
+                        },
+                        "reverse": false
+                      }
+                    },
+                    "rhs": {
+                      "FunctionCall": {
+                        "callee": {
+                          "FieldAccess": {
+                            "object": {
+                              "Identifier": "bevy"
+                            },
+                            "field": "with_clear_color"
+                          }
+                        },
+                        "arguments": [
+                          {
+                            "Literal": {
+                              "Number": 0.1
+                            }
+                          },
+                          {
+                            "Literal": {
+                              "Number": 0.1
+                            }
+                          },
+                          {
+                            "Literal": {
+                              "Number": 0.1
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    "reverse": false
+                  }
+                },
+                "rhs": {
+                  "FieldAccess": {
+                    "object": {
+                      "Identifier": "bevy"
+                    },
+                    "field": "run"
+                  }
+                },
+                "reverse": false
+              }
+            },
+            "pub_visibility": false
+          }
+        },
+        {
+          "Expression": {
+            "Postfix": {
+              "lhs": {
+                "Identifier": "runApp"
+              },
+              "op": "Invoke",
+              "args": null
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

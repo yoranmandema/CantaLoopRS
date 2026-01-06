@@ -8,11 +8,8 @@ use crate::core::ast::Program;
 use crate::core::compileSession::{CompileContext, CompileSession};
 use crate::core::hir_lowering::HirAst;
 use crate::core::{
-    ast::{Expression, Literal},
-    bytecode::{ByteCodeEmitter, OpCode},
-    hir_lowering::{
-        CompilerState, ConstantValue, FunctionSignature, HirBuilder, HirError, ValueKind,
-    },
+    bytecode::OpCode,
+    hir_lowering::{CompilerState, FunctionSignature},
     parser::parse_program,
     vm::{Value, ValueHeap, VM},
 };
@@ -132,6 +129,7 @@ macro_rules! add_number_fn {
         let sig = FunctionSignature {
             params: vec![ValueKind::Number; $arity],
             return_type: Box::new(ValueKind::Number),
+            is_effectful: false,
         };
 
         $engine.add_number_function($name, sig, Arity::Fixed($arity as usize), $body);
@@ -161,6 +159,7 @@ macro_rules! add_string_fn {
         let sig = FunctionSignature {
             params: vec![ValueKind::String; $arity],
             return_type: Box::new(ValueKind::String),
+            is_effectful: false,
         };
 
         $engine.add_string_function($name, sig, Arity::Fixed($arity as usize), $body);
@@ -190,6 +189,7 @@ macro_rules! add_variadic_number_fn {
         let sig = FunctionSignature {
             params: vec![ValueKind::Number; $min],
             return_type: Box::new(ValueKind::Number),
+            is_effectful: false,
         };
 
         $engine.add_native_function(
@@ -276,40 +276,79 @@ macro_rules! __melon_count {
 macro_rules! melon_module {
     (
         module $module_name:ident {
-            $(
-                fn $fn_name:ident($($param_name:ident: $param_type:ident),*) -> $return_type:ident {
-                    $impl:expr
-                }
-            )*
+            $($functions:tt)*
         }
     ) => {{
         use $crate::core::engine::{Arity, StdFunction, StdModule};
         use $crate::core::hir_lowering::FunctionSignature;
         use std::sync::Arc;
 
+        let mut functions_vec: Vec<StdFunction> = Vec::new();
+        $crate::__melon_parse_functions!(functions_vec $($functions)*);
+        
         StdModule {
             name: stringify!($module_name),
-            functions: vec![
-                $(
-                    StdFunction {
-                        name: stringify!($fn_name),
-                        signature: FunctionSignature {
-                            params: vec![
-                                $(
-                                    $crate::__melon_type_kind!($param_type)
-                                ),*
-                            ],
-                            return_type: Box::new($crate::__melon_type_kind!($return_type)),
-                        },
-                        arity: Arity::Fixed($crate::__melon_count!($($param_name)*)),
-                        impl_fn: Arc::new($impl),
-                    }
-                ),*
-            ],
+            functions: functions_vec,
             structs: vec![],
             submodules: vec![],
         }
     }};
+}
+
+#[macro_export]
+macro_rules! __melon_parse_functions {
+    // Effectful function with ~>
+    (
+        $vec:ident
+        fn $fn_name:ident($($param_name:ident: $param_type:ident),*) ~> $return_type:ident {
+            $impl:expr
+        }
+        $($rest:tt)*
+    ) => {
+        $vec.push(StdFunction {
+            name: stringify!($fn_name),
+            signature: FunctionSignature {
+                params: vec![
+                    $(
+                        $crate::__melon_type_kind!($param_type)
+                    ),*
+                ],
+                return_type: Box::new($crate::__melon_type_kind!($return_type)),
+                is_effectful: true,
+            },
+            arity: Arity::Fixed($crate::__melon_count!($($param_name)*)),
+            impl_fn: Arc::new($impl),
+        });
+        $crate::__melon_parse_functions!($vec $($rest)*);
+    };
+    
+    // Pure function with ->
+    (
+        $vec:ident
+        fn $fn_name:ident($($param_name:ident: $param_type:ident),*) -> $return_type:ident {
+            $impl:expr
+        }
+        $($rest:tt)*
+    ) => {
+        $vec.push(StdFunction {
+            name: stringify!($fn_name),
+            signature: FunctionSignature {
+                params: vec![
+                    $(
+                        $crate::__melon_type_kind!($param_type)
+                    ),*
+                ],
+                return_type: Box::new($crate::__melon_type_kind!($return_type)),
+                is_effectful: false,
+            },
+            arity: Arity::Fixed($crate::__melon_count!($($param_name)*)),
+            impl_fn: Arc::new($impl),
+        });
+        $crate::__melon_parse_functions!($vec $($rest)*);
+    };
+    
+    // End of functions
+    ($vec:ident) => {};
 }
 
 #[derive(Clone)]
@@ -396,7 +435,7 @@ impl Engine {
     /// Used for module functions that should only be accessible via their full path or imports.
     fn add_native_function_no_register(
         &mut self,
-        signature: FunctionSignature,
+        _signature: FunctionSignature,
         arity: Arity,
         func: Box<dyn Fn(Vec<Value>, &mut ValueHeap) -> Value + Send + Sync>,
     ) -> u32 {
@@ -458,19 +497,6 @@ impl Engine {
         self.add_native_function(name, signature, arity, func_box);
     }
 
-
-    /// Extract constant value from an expression if it's a literal.
-    /// Returns None for complex expressions.
-    fn extract_constant_value_from_expr(expr: &Expression) -> Option<ConstantValue> {
-        match expr {
-            Expression::Literal(lit) => Some(match lit {
-                Literal::Number(n) => ConstantValue::Number(*n),
-                Literal::String(s) => ConstantValue::String(s.clone()),
-                Literal::Boolean(b) => ConstantValue::Boolean(*b),
-            }),
-            _ => None, // Complex expressions - can't extract value statically
-        }
-    }
 
     /// Register a native module into the engine.
     ///

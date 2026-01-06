@@ -170,7 +170,7 @@ pub(crate) enum ThunkData {
 impl Callable {
     /// Create a Callable from a Value.
     /// The Value must be a function, thunk, or closure.
-    pub fn from_value(value: Value, heap: &ValueHeap) -> Result<Self, String> {
+    pub fn from_value(value: Value, _heap: &ValueHeap) -> Result<Self, String> {
         if value.as_function().is_some() || value.is_thunk() {
             Ok(Callable { value })
         } else {
@@ -379,8 +379,9 @@ impl Value {
         }
     }
 
+    #[allow(dead_code)]
     #[inline(always)]
-    pub fn as_array_iter_mut<'a>(&self, heap: &'a mut ValueHeap) -> Option<&'a mut ArrayIterator> {
+    pub(crate) fn as_array_iter_mut<'a>(&self, heap: &'a mut ValueHeap) -> Option<&'a mut ArrayIterator> {
         if self.tag() == TAG_ARRAY_ITER {
             let idx = (self.raw & PAYLOAD_MASK) as usize;
             heap.array_iters.get_mut(idx)
@@ -484,7 +485,7 @@ impl Value {
     }
 
     #[inline(always)]
-    pub fn as_thunk_ref<'a>(&self, heap: &'a ValueHeap) -> Option<&'a ThunkData> {
+    pub(crate) fn as_thunk_ref<'a>(&self, heap: &'a ValueHeap) -> Option<&'a ThunkData> {
         if self.is_thunk() {
             let idx = (self.raw & PAYLOAD_MASK) as usize;
             heap.thunks.get(idx)
@@ -655,7 +656,7 @@ pub struct VM {
     engine: std::sync::Arc<Engine>,                     // For native functions only (Arc so it can be stored in ValueHeap)
     bytecode_functions: HashMap<u32, BytecodeFunction>, // Compiled bytecode functions
     hir: HirAst,            // For constant lookups (cloned, but constants are small)
-    type_registry: HashMap<u32, (String, Vec<String>)>, // Maps type_id -> (struct_name, field_names) for pretty printing
+    _type_registry: HashMap<u32, (String, Vec<String>)>, // Maps type_id -> (struct_name, field_names) for pretty printing
     ops: &'static [OpCode], // Top-level bytecode - cached, not cloned
     stack: Vec<Value>,
     call_stack: Vec<CallFrame>,
@@ -664,7 +665,7 @@ pub struct VM {
 
 impl VM {
     pub fn new(
-        mut engine: std::sync::Arc<Engine>,
+        engine: std::sync::Arc<Engine>,
         bytecode_functions: HashMap<u32, BytecodeFunction>,
         hir: HirAst,
         ops: Vec<OpCode>,
@@ -691,7 +692,7 @@ impl VM {
             engine,
             bytecode_functions,
             hir,
-            type_registry,
+            _type_registry: type_registry,
             ops: ops_slice,
             stack: Vec::new(),
             call_stack: Vec::new(),
@@ -1445,20 +1446,19 @@ impl VM {
         let array_idx = (array_val.raw & PAYLOAD_MASK) as usize;
         let array_data: Vec<Value> = vm.heap.arrays[array_idx].iter().copied().collect();
         
-        // Get function ID
-        let func_id = if let Some(id) = func_val.as_function() {
-            id
-        } else if let Some((id, _)) = func_val.as_thunk(&vm.heap) {
-            id
-        } else {
-            panic!("Map expects function or thunk, got: {:?}", func_val);
-        };
-        
         // Map each element
         let mut result = Vec::new();
         for element in array_data.iter() {
-            // Call function with element
-            let mapped = vm.call_function(func_id, vec![*element]);
+            // Handle both functions and thunks properly
+            let mapped = if func_val.is_thunk() {
+                // For thunks, use invoke_thunk to fill holes with the element
+                vm.invoke_thunk(func_val, vec![*element])
+            } else if let Some(func_id) = func_val.as_function() {
+                // For functions, call directly with the element
+                vm.call_function(func_id, vec![*element])
+            } else {
+                panic!("Map expects function or thunk, got: {:?}", func_val);
+            };
             result.push(mapped);
         }
         
@@ -1891,15 +1891,82 @@ impl VM {
         }
     }
 
+    /// Force a thunk if it has all arguments filled (no holes).
+    /// Returns the forced value if the thunk is ready, or the original value if it's not a thunk or still has holes.
+    fn force_thunk_if_ready(&mut self, val: Value) -> Value {
+        if !val.is_thunk() {
+            return val;
+        }
+
+        // Handle composed thunks: f |> g means g(f(x))
+        // For forcing, we invoke with empty args to see if it's ready
+        let (first_val, second_val) = if let Some(ThunkData::Composed { first, second }) = val.as_thunk_ref(&self.heap) {
+            (*first, *second)
+        } else {
+            // Not a composed thunk, continue with regular thunk handling
+            let (func_id, bound) = if let Some(ThunkData::Regular { func_id, bound }) = val.as_thunk_ref(&self.heap) {
+                (*func_id, bound.clone())
+            } else {
+                // Unknown thunk type - return as-is
+                return val;
+            };
+
+            // Check if all holes are filled
+            if bound.iter().any(|s| s.is_none()) {
+                // Still has holes - return as-is (it's a partial application)
+                return val;
+            }
+
+            // All holes filled - extract values
+            let final_args: Vec<Value> = bound
+                .into_iter()
+                .map(|opt| opt.expect("All holes should be filled"))
+                .collect();
+            
+            // Recursively force thunks in the arguments
+            let forced_args: Vec<Value> = final_args
+                .into_iter()
+                .map(|arg| self.force_thunk_if_ready(arg))
+                .collect();
+            
+            return self.call_function(func_id, forced_args);
+        };
+
+        // Force the first thunk first
+        let forced_first = self.force_thunk_if_ready(first_val);
+        
+        // If first is still a thunk, we can't force the composition yet
+        if forced_first.is_thunk() {
+            return val;
+        }
+        
+        // First is forced, now try to force the second with the result
+        // Create a thunk with the forced_first as the first argument
+        // We need to check if second can be invoked with this argument
+        return self.invoke_thunk(second_val, vec![forced_first]);
+    }
+
+    /// Force all thunks in arguments that are ready (have all holes filled).
+    fn force_thunks_in_args(&mut self, args: Vec<Value>) -> Vec<Value> {
+        args.into_iter()
+            .map(|arg| self.force_thunk_if_ready(arg))
+            .collect()
+    }
+
     /// Call a native function with the given arguments and return the result as a Value.
     fn call_native_function(&mut self, func_id: u32, args: Vec<Value>) -> Value {
+        // Force thunks in arguments before passing to native function
+        // This ensures that thunks with all arguments filled are evaluated
+        let forced_args = self.force_thunks_in_args(args);
+
+        // Get native function after forcing thunks (to avoid borrow conflicts)
         let native_func = self
             .engine
             .functions
             .get(&func_id)
             .expect("Native function should exist");
 
-        let result = (native_func.func)(args, &mut self.heap);
+        let result = (native_func.func)(forced_args, &mut self.heap);
         
         // Note: Execution requests from native code are queued but not processed immediately.
         // They will be processed at a safe point (e.g., after the current execution cycle completes).

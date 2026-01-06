@@ -32,6 +32,8 @@ pub struct FunctionSignature {
     pub params: Vec<ValueKind>,
     #[allow(dead_code)]
     pub return_type: Box<ValueKind>,
+    /// Whether this function is effectful (uses ~>) or pure (uses ->)
+    pub is_effectful: bool,
 }
 
 /// Represents the type of a value in the CantaLoop type system.

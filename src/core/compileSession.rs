@@ -1,7 +1,7 @@
 use std::{collections::HashMap, path::Path};
 
 use crate::{
-    ByteCodeEmitter, CompilerState, HirBuilder, OpCode, ValueKind, core::{
+    ByteCodeEmitter, HirBuilder, OpCode, ValueKind, core::{
         ast::Program,
         engine::{BytecodeFunction, NativeFunctionDescriptor, RunArtifacts},
         hir_lowering::{HirAst, HirError},
@@ -143,69 +143,6 @@ impl<'a> CompileSession<'a> {
             .map(|native| native.id)
     }
 
-    /// Formats a ValueKind for error messages, handling function/thunk types specially.
-    fn format_value_kind_for_error(kind: &ValueKind) -> String {
-        match kind {
-            ValueKind::Any => "Any".to_string(),
-            ValueKind::Number => "Number".to_string(),
-            ValueKind::String => "String".to_string(),
-            ValueKind::Boolean => "Boolean".to_string(),
-            ValueKind::Unknown => "Unknown".to_string(),
-            ValueKind::Function(ty) => ty.clone(),
-            ValueKind::Thunk(ty) => ty.clone(),
-            ValueKind::Callable => "Callable".to_string(),
-            ValueKind::Void => "Void".to_string(),
-            ValueKind::Struct(name) => name.clone(),
-            ValueKind::Array(inner) => {
-                let inner_str = Self::format_value_kind_for_error(inner);
-                format!("Array<{}>", inner_str)
-            }
-        }
-    }
-
-    /// Handles HIR errors by converting them to panic messages.
-    fn handle_hir_error(error: HirError) -> ! {
-        match error {
-            HirError::TypeError(msg) => {
-                panic!("Type error: {}", msg);
-            }
-            HirError::TypeMismatch {
-                variable,
-                expected,
-                actual,
-            } => {
-                let expected_str = Self::format_value_kind_for_error(&expected);
-                let actual_str = Self::format_value_kind_for_error(&actual);
-                panic!(
-                    "Type mismatch error: Cannot assign {} to variable '{}' which is of type {}",
-                    actual_str, variable, expected_str
-                );
-            }
-            HirError::UnknownVariable(msg) => {
-                panic!("Semantic error: {}", msg);
-            }
-            HirError::VariableAlreadyDeclared(msg) => {
-                panic!("Semantic error: {}", msg);
-            }
-            HirError::NotImplemented => {
-                panic!("Semantic error: Feature not implemented");
-            }
-            HirError::BinaryOpTypeError {
-                operator,
-                lhs_type,
-                rhs_type,
-                expected,
-            } => {
-                let lhs_str = Self::format_value_kind_for_error(&lhs_type);
-                let rhs_str = Self::format_value_kind_for_error(&rhs_type);
-                panic!(
-                    "Binary operation type error: Operator '{}' expects {}, but got {} and {}",
-                    operator, expected, lhs_str, rhs_str
-                );
-            }
-        }
-    }
-
     /// Get constant value from HIR (helper function for VM)
     pub fn get_constant_from_hir(
         hir: &HirAst,
@@ -318,101 +255,6 @@ impl<'a> CompileSession<'a> {
         }
 
         Ok(())
-    }
-
-    
-
-    /// Load project modules for LSP compilation (non-mutating version).
-    /// This loads modules into a HirBuilder without mutating the engine.
-    ///
-    /// If `current_file` is provided, that file will be skipped to avoid duplicate declarations.
-    fn load_project_modules_for_lsp(
-        hir_builder: &mut HirBuilder,
-        source_hir_builder: &HirBuilder,
-        project_root: &Path,
-        current_file: Option<&Path>,
-    ) {
-        let src_dir = project_root.join("src");
-
-        if !src_dir.exists() {
-            return; // No src directory, no modules to load
-        }
-
-        // Find all .mln files in src/
-        let entries = match std::fs::read_dir(&src_dir) {
-            Ok(entries) => entries,
-            Err(_) => return,
-        };
-
-        for entry in entries {
-            let entry = match entry {
-                Ok(e) => e,
-                Err(_) => continue,
-            };
-            let path = entry.path();
-
-            if path.extension().and_then(|s| s.to_str()) == Some("mln") {
-                // Skip the main file (it's not a module)
-                if path.file_name().and_then(|n| n.to_str()) == Some("main.mln") {
-                    continue;
-                }
-
-                // Skip the current file being compiled to avoid duplicate declarations
-                if let Some(current) = current_file {
-                    if path == current {
-                        continue;
-                    }
-                }
-
-                // Try to load this file as a module
-                if let Err(_) = Self::load_module_for_lsp(hir_builder, source_hir_builder, &path) {
-                    // Silently skip modules that fail to load (they might have errors)
-                    continue;
-                }
-            }
-        }
-    }
-
-    /// Load a single module file for LSP (non-mutating version).
-    /// Just parses AST and registers an empty module shell.
-    /// No compilation - pub items are registered during build_append().
-    fn load_module_for_lsp(
-        hir_builder: &mut HirBuilder,
-        _source_hir_builder: &HirBuilder,
-        file_path: &Path,
-    ) -> Result<String, Box<dyn std::error::Error>> {
-        use crate::core::ast::Statement;
-
-        // Read and parse the file
-        let content = std::fs::read_to_string(file_path)?;
-
-        // Quick check: if the file doesn't start with "mod", skip it
-        if !content.trim_start().starts_with("mod") {
-            return Err("File does not start with 'mod' declaration".into());
-        }
-
-        let ast = parse_program(&content)?;
-
-        // Find the mod statement to get the module name
-        let mut module_name = None;
-        for block in &ast.blocks {
-            for stmt in &block.statements {
-                if let Statement::Mod { identifier } = stmt {
-                    module_name = Some(identifier.clone());
-                    break;
-                }
-            }
-            if module_name.is_some() {
-                break;
-            }
-        }
-
-        let module_name = module_name.ok_or_else(|| "Module file missing 'mod' declaration")?;
-
-        // Register empty module shell - pub items will be registered during build_append()
-        hir_builder.register_module(&module_name, HashMap::new(), HashMap::new(), HashMap::new());
-
-        Ok(module_name)
     }
 
     /// Extract module dependencies from AST (imports)
