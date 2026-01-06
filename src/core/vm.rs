@@ -110,6 +110,24 @@ const TAG_ARRAY: u64 = 0x6;
 const TAG_ARRAY_ITER: u64 = 0x7;
 const TAG_STRUCT: u64 = 0x8;
 
+/// Represents something that can be called (function, thunk, or closure).
+///
+/// This is a handle that native code can store and use to request execution.
+/// Native code never executes callables directly - it requests execution via Invokable.
+#[derive(Clone, Copy)]
+pub struct Callable {
+    value: Value,
+}
+
+/// Represents an execution request from native code to the VM.
+///
+/// Native code creates Invokable requests to ask the VM to execute a callable.
+/// The VM processes these requests and performs the actual execution.
+pub struct Invokable {
+    callable: Value,
+    args: Vec<Value>,
+}
+
 /// Heap storage for VM-managed data structures.
 ///
 /// Stores strings, thunks, arrays, structs, and iterators that cannot fit in the 64-bit Value representation.
@@ -123,6 +141,7 @@ pub struct ValueHeap {
     pub(crate) type_registry: Option<std::collections::HashMap<u32, (String, Vec<String>)>>, // Maps type_id -> (struct_name, field_names)
     pub(crate) engine: Option<std::sync::Arc<crate::core::engine::Engine>>, // Engine reference for stdlib functions to invoke thunks
     pub(crate) bytecode_functions: std::collections::HashMap<u32, crate::core::engine::BytecodeFunction>, // Bytecode functions for invoking from stdlib
+    pub(crate) execution_requests: Vec<Invokable>, // Execution requests from native code
 }
 
 /// Array iterator state
@@ -148,6 +167,50 @@ pub(crate) enum ThunkData {
     },
 }
 
+impl Callable {
+    /// Create a Callable from a Value.
+    /// The Value must be a function, thunk, or closure.
+    pub fn from_value(value: Value, heap: &ValueHeap) -> Result<Self, String> {
+        if value.as_function().is_some() || value.is_thunk() {
+            Ok(Callable { value })
+        } else {
+            Err(format!("Value is not callable: {:?}", value))
+        }
+    }
+
+    /// Get the underlying Value.
+    pub fn value(&self) -> Value {
+        self.value
+    }
+
+    /// Check if this callable is a function.
+    pub fn is_function(&self) -> bool {
+        self.value.as_function().is_some()
+    }
+
+    /// Check if this callable is a thunk.
+    pub fn is_thunk(&self) -> bool {
+        self.value.is_thunk()
+    }
+}
+
+impl Invokable {
+    /// Create a new execution request.
+    pub fn new(callable: Value, args: Vec<Value>) -> Self {
+        Invokable { callable, args }
+    }
+
+    /// Get the callable to execute.
+    pub fn callable(&self) -> Value {
+        self.callable
+    }
+
+    /// Get the arguments to pass to the callable.
+    pub fn args(&self) -> &[Value] {
+        &self.args
+    }
+}
+
 impl ValueHeap {
     fn new() -> Self {
         Self {
@@ -159,7 +222,43 @@ impl ValueHeap {
             type_registry: None,
             engine: None,
             bytecode_functions: std::collections::HashMap::new(),
+            execution_requests: Vec::new(),
         }
+    }
+
+    /// Extract a Callable from a Value argument in native functions.
+    /// This is a convenience function for native code that receives callable arguments.
+    /// 
+    /// # Example
+    /// ```ignore
+    /// // In a native function:
+    /// let callback = heap.as_callable(&args[0])?;
+    /// heap.request_execution(callback.value(), vec![Value::number(42.0)]);
+    /// ```
+    pub fn as_callable(&self, value: &Value) -> Result<Callable, String> {
+        Callable::from_value(*value, self)
+    }
+
+    /// Request execution of a callable with the given arguments.
+    /// 
+    /// This is the primary way for native code to request execution of callables.
+    /// The VM will process these requests after the native function returns.
+    /// Native code never executes callables directly - it requests execution via this method.
+    /// 
+    /// # Example
+    /// ```ignore
+    /// // In a native function:
+    /// let callback = heap.as_callable(&args[0])?;
+    /// heap.request_execution(callback.value(), vec![Value::number(42.0)]);
+    /// ```
+    pub fn request_execution(&mut self, callable: Value, args: Vec<Value>) {
+        self.execution_requests.push(Invokable::new(callable, args));
+    }
+
+    /// Take all pending execution requests.
+    /// The VM calls this to process requests from native code.
+    pub(crate) fn take_execution_requests(&mut self) -> Vec<Invokable> {
+        std::mem::take(&mut self.execution_requests)
     }
 
     fn set_type_registry(&mut self, registry: std::collections::HashMap<u32, (String, Vec<String>)>) {
@@ -1800,7 +1899,43 @@ impl VM {
             .get(&func_id)
             .expect("Native function should exist");
 
-        (native_func.func)(args, &mut self.heap)
+        let result = (native_func.func)(args, &mut self.heap);
+        
+        // Note: Execution requests from native code are queued but not processed immediately.
+        // They will be processed at a safe point (e.g., after the current execution cycle completes).
+        // This prevents stack corruption and allows native code to request execution without
+        // interfering with the current VM state.
+        
+        result
+    }
+
+    /// Process execution requests queued by native code.
+    /// Native code can request execution of callables, and the VM performs the actual execution.
+    /// This should be called at a safe point (e.g., between execution cycles, not during native function calls).
+    /// 
+    /// For now, execution requests are queued but not automatically processed.
+    /// Future implementations may process them asynchronously or at specific safe points.
+    #[allow(dead_code)]
+    fn process_execution_requests(&mut self) {
+        let requests = self.heap.take_execution_requests();
+        for request in requests {
+            let callable = request.callable();
+            let args = request.args().to_vec();
+            
+            // Execute the callable based on its type
+            if let Some(func_id) = callable.as_function() {
+                let result = self.call_function(func_id, args);
+                // Note: Results are not automatically pushed to stack here.
+                // The caller should handle results appropriately.
+                let _ = result; // Suppress unused warning for now
+            } else if callable.is_thunk() {
+                // Invoke the thunk with the provided arguments
+                let result = self.invoke_thunk(callable, args);
+                let _ = result; // Suppress unused warning for now
+            } else {
+                panic!("Execution request for non-callable value: {:?}", callable);
+            }
+        }
     }
 
     /// Create a new call frame for a bytecode function.

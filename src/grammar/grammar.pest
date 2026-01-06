@@ -166,7 +166,7 @@ pipe_reverse = { "<|" }
 
 call_expression = ${ identifier ~ WHITESPACE* ~ "(" ~ WHITESPACE* ~ expression_list? ~ WHITESPACE* ~ ")" }
 expression_list = { (expression | placeholder) ~ (WHITESPACE* ~ "," ~ WHITESPACE* ~ (expression | placeholder))* }
-placeholder = { "_" }
+placeholder = { "?" }
 
 value = { number | string | boolean | array_literal }
 array_literal = ${ "[" ~ WHITESPACE* ~ expression_list? ~ WHITESPACE* ~ "]" }

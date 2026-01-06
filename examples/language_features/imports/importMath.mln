@@ -13,6 +13,6 @@ let a = add(1, 2)!;
 
 print(a)!;
 
-let add5 = add(_, 5);
+let add5 = add(?, 5);
 
 print(add5(10)!)!;

@@ -434,7 +434,7 @@ fn parse_closure_arguments(
                 
                 let id = match first.as_rule() {
                     Rule::identifier => first.as_str().to_string(),
-                    Rule::placeholder => "_".to_string(), // Use "_" as the identifier name for placeholders
+                    Rule::placeholder => "?".to_string(), // Use "?" as the identifier name for placeholders
                     _ => return Err(error_at_span(arg_span, "Expected identifier or placeholder".to_string())),
                 };
                 
@@ -621,7 +621,7 @@ fn parse_call_argument_list_from_text(text: &str, span: pest::Span) -> Result<Ve
 // Helper function to parse a single call argument (expression or hole)
 fn parse_call_argument_from_text(text: &str, span: pest::Span) -> Result<CallArgument, pest::error::Error<Rule>> {
     let trimmed = text.trim();
-    if trimmed == "_" {
+    if trimmed == "?" {
         Ok(CallArgument::Hole)
     } else {
         Ok(CallArgument::Expr(parse_expression_from_text(trimmed, span)?))

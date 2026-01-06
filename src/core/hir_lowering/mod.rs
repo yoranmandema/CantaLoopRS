@@ -50,6 +50,9 @@ pub enum ValueKind {
     Function(String),
     // Thunk type: stores the full type string like "num ~> num" or "(num, num) ~> num"
     Thunk(String),
+    // Callable type: represents anything that can be called (function, thunk, or closure)
+    // Used in native function signatures to accept callable arguments
+    Callable,
     // Array type: stores the inner element type
     Array(Box<ValueKind>),
     // Struct type: stores the struct name (structs are identified by name)

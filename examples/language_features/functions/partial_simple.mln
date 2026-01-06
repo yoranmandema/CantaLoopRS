@@ -5,7 +5,7 @@ fn add(a: num, b: num) -> num {
 }
 
 // Test basic partial application
-let add5 = add(_, 5);
+let add5 = add(?, 5);
 let result1 = add5(10)!;
 print(result1)!; // Should print 15
 

@@ -153,6 +153,7 @@ impl<'a> CompileSession<'a> {
             ValueKind::Unknown => "Unknown".to_string(),
             ValueKind::Function(ty) => ty.clone(),
             ValueKind::Thunk(ty) => ty.clone(),
+            ValueKind::Callable => "Callable".to_string(),
             ValueKind::Void => "Void".to_string(),
             ValueKind::Struct(name) => name.clone(),
             ValueKind::Array(inner) => {
@@ -235,6 +236,7 @@ impl<'a> CompileSession<'a> {
             (ValueKind::Unknown, _) => panic!("Constant should not have Unknown kind"),
             (ValueKind::Function(_), _) => panic!("Constant should not have Function kind"),
             (ValueKind::Thunk(_), _) => panic!("Constant should not have Thunk kind"),
+            (ValueKind::Callable, _) => panic!("Constant should not have Callable kind"),
             (ValueKind::Void, _) => panic!("Constant should not have Void kind"),
             (ValueKind::Struct(_), _) => panic!("Constant should not have Struct kind"),
             (ValueKind::Array(_), _) => panic!("Constant should not have Array kind"),

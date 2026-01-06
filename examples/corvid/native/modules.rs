@@ -112,6 +112,9 @@ lazy_static::lazy_static! {
             impl_fn: Arc::new(|args, heap| {
                 let (_, window_title, window_width, window_height, has_clear_color, clear_color_r, clear_color_g, clear_color_b) =
                     extract_bevy_app_fields(&args[0], heap);
+
+                println!("{:?}", &args[0]);
+
                 create_bevy_app(
                     true, // has_default_plugins = true
                     window_title,
@@ -123,6 +126,7 @@ lazy_static::lazy_static! {
                     clear_color_b,
                     heap,
                 )
+
             }),
         });
         

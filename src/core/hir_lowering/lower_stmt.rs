@@ -307,6 +307,7 @@ impl HirBuilder {
             ValueKind::Unknown => "unknown".to_string(),
             ValueKind::Function(ty) => ty.clone(),
             ValueKind::Thunk(ty) => ty.clone(),
+            ValueKind::Callable => "callable".to_string(),
             ValueKind::Void => "void".to_string(),
             ValueKind::Array(inner) => {
                 let inner_str = Self::format_value_kind_for_type(inner);
@@ -365,6 +366,7 @@ impl HirBuilder {
             ValueKind::Unknown => "Unknown".to_string(),
             ValueKind::Function(ty) => ty.clone(),
             ValueKind::Thunk(ty) => ty.clone(),
+            ValueKind::Callable => "Callable".to_string(),
             ValueKind::Void => "void".to_string(),
             ValueKind::Struct(name) => name.clone(),
             ValueKind::Array(inner) => {

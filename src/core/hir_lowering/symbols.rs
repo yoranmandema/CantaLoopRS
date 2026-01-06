@@ -19,6 +19,7 @@ fn format_function_type_string(sig: &FunctionSignature) -> String {
             ValueKind::Unknown => "unknown".to_string(),
             ValueKind::Function(ty) => ty.clone(),
             ValueKind::Thunk(ty) => ty.clone(),
+            ValueKind::Callable => "callable".to_string(),
             ValueKind::Void => "void".to_string(),
             ValueKind::Struct(name) => name.clone(),
             ValueKind::Array(inner) => {
