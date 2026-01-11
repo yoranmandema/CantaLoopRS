@@ -16,6 +16,10 @@ serde = { version = "1", default-features = false, features = ["derive"] }
 notify = "8.2.0"
 walkdir = "2.5.0"
 libloading = "0.8"
+log = "0.4"
+env_logger = "0.11"
+futures = "0.3"
+arc-swap = "1.6"
 
 [dev-dependencies]
 tempfile = "3.10"
@@ -30,7 +34,7 @@ opt-level = 2
 
 [[bin]]
 name = "cantaloop-lsp"
-path = "src/lsp/main.rs"
+path = "src/bin/cantaloop-lsp.rs"
 
 [[bin]]
 name = "melon"

@@ -56,6 +56,8 @@ pub struct StdFunction {
     pub arity: Arity,
     /// The function implementation
     pub impl_fn: Arc<dyn Fn(Vec<Value>, &mut ValueHeap) -> Value + Send + Sync>,
+    /// Documentation for this function
+    pub docs: Option<crate::core::cst::DocBlock>,
 }
 
 /// Standard library struct descriptor.
@@ -70,6 +72,8 @@ pub struct StdStruct {
     /// Methods defined on this struct (for future use)
     /// Currently not exposed in syntax, but reserved for future member function support
     pub methods: Vec<StdFunction>,
+    /// Documentation for this struct
+    pub docs: Option<crate::core::cst::DocBlock>,
 }
 
 /// Standard library module descriptor.
@@ -85,6 +89,8 @@ pub struct StdModule {
     pub structs: Vec<StdStruct>,
     /// Submodules nested within this module
     pub submodules: Vec<StdModule>,
+    /// Documentation for this module
+    pub docs: Option<crate::core::cst::DocBlock>,
 }
 
 /// Unified native function representation.
@@ -105,6 +111,8 @@ pub struct NativeFunctionDescriptor {
     pub name: String,
     pub signature: FunctionSignature,
     pub arity: Arity,
+    /// Documentation for this native function
+    pub docs: Option<crate::core::cst::DocBlock>,
 }
 
 /// Macro to register a number-based function.
@@ -291,6 +299,7 @@ macro_rules! melon_module {
             functions: functions_vec,
             structs: vec![],
             submodules: vec![],
+            docs: None,
         }
     }};
 }
@@ -318,6 +327,7 @@ macro_rules! __melon_parse_functions {
             },
             arity: Arity::Fixed($crate::__melon_count!($($param_name)*)),
             impl_fn: Arc::new($impl),
+            docs: None,
         });
         $crate::__melon_parse_functions!($vec $($rest)*);
     };
@@ -343,6 +353,7 @@ macro_rules! __melon_parse_functions {
             },
             arity: Arity::Fixed($crate::__melon_count!($($param_name)*)),
             impl_fn: Arc::new($impl),
+            docs: None,
         });
         $crate::__melon_parse_functions!($vec $($rest)*);
     };
@@ -426,6 +437,7 @@ impl Engine {
             name: name.to_string(),
             signature,
             arity: arity.clone(),
+            docs: None,
         });
 
         id
@@ -656,6 +668,7 @@ impl Engine {
                 name: qualified_name.clone(),
                 signature: func.signature.clone(),
                 arity: func.arity.clone(),
+                docs: func.docs.clone(),
             });
             // Also add with just the function name for backward compatibility
             self.native_descriptors.push(NativeFunctionDescriptor {
@@ -663,6 +676,7 @@ impl Engine {
                 name: func.name.to_string(),
                 signature: func.signature.clone(),
                 arity: func.arity.clone(),
+                docs: func.docs.clone(),
             });
 
             // Add to module's function map
@@ -791,17 +805,25 @@ impl Engine {
         use crate::core::compileSession::CompileContext;
         use crate::core::hir_lowering::HirBuilder;
     
-        // 1. Parse current file AST (kept for LSP features)
-        let ast = parse_program(src)?;
-        let ast_for_hir = parse_program(src)?;
+        // 1. Parse current file to CST first (preserves spans for LSP)
+        use crate::core::cst::{parse_cst_program, lower_cst_to_ast};
+        let (cst, cst_docs) = parse_cst_program(src)?;
+        
+        // 2. Lower CST to AST (for semantic analysis)
+        let (ast, lowering_docs) = lower_cst_to_ast(cst.clone(), cst_docs)
+            .map_err(|e| pest::error::Error::new_from_pos(
+                pest::error::ErrorVariant::CustomError { message: e },
+                pest::Position::from_start("")
+            ))?;
+        let ast_for_hir = ast.clone();
     
-        // 2. Build compile context from Engine
+        // 3. Build compile context from Engine
         let ctx = CompileContext {
             native_functions: self.native_function_descriptors(),
             is_native_function: &|id| self.functions.contains_key(&id),
         };
     
-        // 3. Fresh HIR builder
+        // 4. Fresh HIR builder
         let mut hir_builder = HirBuilder::new();
         let mut diagnostics = Vec::new();
     
@@ -927,8 +949,8 @@ impl Engine {
         }
     
         let hir = hir_builder.take_ast();
-    
-        Ok(CompilerState::new(ast, hir, diagnostics, Some(src)))
+        
+        Ok(CompilerState::new(cst, ast, hir, diagnostics, Some(src), lowering_docs))
     }
     
 }

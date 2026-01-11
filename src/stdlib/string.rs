@@ -23,6 +23,7 @@ lazy_static::lazy_static! {
                     panic!("len expects string argument")
                 }
             }),
+            docs: None,
         },
         StdFunction {
             name: "join",
@@ -49,6 +50,7 @@ lazy_static::lazy_static! {
                 }
                 Value::string_with_heap(strings.join(&sep), heap)
             }),
+            docs: None,
         },
 
         StdFunction {
@@ -70,10 +72,12 @@ lazy_static::lazy_static! {
                 }
                 Value::string_with_heap(result, heap)
             }),
+            docs: None,
         },
         ]
     },
     structs: vec![],
     submodules: vec![],
+    docs: None,
     };
 }

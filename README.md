@@ -9,6 +9,7 @@ A functional programming language implementation in Rust with a complete toolcha
 - **Bytecode compilation** with optimization passes
 - **Stack-based virtual machine** with NaN-boxed values for efficient execution
 - **Language Server Protocol (LSP) support** for IDE integration
+- **Documentation system** with structured tags (`@param`, `@returns`, `@effects`) and tooling support
 - **Project management tool** (`melon`) for creating and running projects
 - **Module system** with dot-path imports
 - **Lazy evaluation** with thunks and function composition
@@ -33,6 +34,9 @@ cargo run --bin melon -- run --watch
 
 # Run with debug output (AST, HIR, bytecode)
 cargo run --bin melon -- run --debug
+
+# Extract documentation from source files
+cargo run --bin melon -- docs ./src
 ```
 
 ### Running Individual Files
@@ -47,7 +51,11 @@ cargo run --bin melon -- run examples/language_features/helloworld.mln
 
 ### LSP Setup
 
-The LSP provides real-time diagnostics, hover information, code completion, and semantic tokens. See [BUILD.md](BUILD.md) for building and installing the VS Code/Cursor extension.
+The LSP provides real-time diagnostics, hover information, code completion, semantic tokens, and documentation support. See [BUILD.md](BUILD.md) for building and installing the VS Code/Cursor extension.
+
+## Documentation
+
+CantaLoop supports comprehensive documentation with structured tags. See [DOCUMENTATION.md](DOCUMENTATION.md) for complete documentation system guide.
 
 ## Building
 

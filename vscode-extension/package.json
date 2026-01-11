@@ -1,0 +1,82 @@
+{
+  "name": "cantaloop",
+  "displayName": "CantaLoop",
+  "description": "Language support for CantaLoop - an effect-aware language",
+  "version": "0.1.0",
+  "engines": {
+    "vscode": "^1.74.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "activationEvents": [
+    "onLanguage:cantaloop"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "cantaloop",
+        "aliases": [
+          "CantaLoop",
+          "cantaloop"
+        ],
+        "extensions": [
+          ".cl"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "cantaloop",
+        "scopeName": "source.cantaloop",
+        "path": "./syntaxes/cantaloop.tmLanguage.json"
+      }
+    ],
+    "semanticTokenScopes": [
+      {
+        "language": "cantaloop",
+        "scopes": {
+          "function": [
+            "entity.name.function.cantaloop"
+          ],
+          "variable": [
+            "variable.other.cantaloop"
+          ],
+          "parameter": [
+            "variable.parameter.cantaloop"
+          ],
+          "type": [
+            "entity.name.type.cantaloop"
+          ],
+          "operator": [
+            "keyword.operator.cantaloop"
+          ],
+          "string": [
+            "string.quoted.double.cantaloop"
+          ],
+          "number": [
+            "constant.numeric.cantaloop"
+          ],
+          "keyword": [
+            "keyword.control.cantaloop"
+          ]
+        }
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^18.x",
+    "@types/vscode": "^1.74.0",
+    "typescript": "^5.0.0"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.0"
+  }
+}

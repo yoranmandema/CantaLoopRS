@@ -1,0 +1,5 @@
+{
+  "deno.enable": false,
+  "typescript.preferences.useLabelDetailsInCompletionEntries": true,
+  "typescript.tsdk": "node_modules/typescript/lib"
+}

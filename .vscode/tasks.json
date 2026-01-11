@@ -72,6 +72,38 @@
             "problemMatcher": []
         },
         {
+            "label": "Update LSP (Build & Copy)",
+            "type": "shell",
+            "windows": {
+                "command": "${workspaceFolder}\\update-lsp.ps1",
+                "options": {
+                    "shell": {
+                        "executable": "powershell.exe",
+                        "args": [
+                            "-ExecutionPolicy",
+                            "Bypass",
+                            "-NoProfile",
+                            "-File"
+                        ]
+                    },
+                    "cwd": "${workspaceFolder}"
+                }
+            },
+            "osx": {
+                "command": "${workspaceFolder}/update-lsp.sh"
+            },
+            "linux": {
+                "command": "${workspaceFolder}/update-lsp.sh"
+            },
+            "group": "none",
+            "presentation": {
+                "reveal": "always",
+                "panel": "new",
+                "focus": true
+            },
+            "problemMatcher": []
+        },
+        {
             "label": "Watch: All (Auto-rebuild)",
             "type": "shell",
             "windows": {

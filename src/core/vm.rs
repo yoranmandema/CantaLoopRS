@@ -1084,7 +1084,9 @@ impl VM {
     fn op_print(_vm: &mut VM, _frame_idx: usize, _opcode: &OpCode) -> StepResult {
         let v = _vm.stack.pop().expect("Stack underflow");
         let s = v.value_to_string_with_hir(&_vm.heap, Some(&_vm.hir));
-        println!("{}", s);
+        // Use eprintln! instead of println! to avoid stdout contamination
+        // This is especially important if the VM is ever used in an LSP context
+        eprintln!("{}", s);
         StepResult::Normal
     }
 
@@ -1598,9 +1600,25 @@ impl VM {
     /// This makes binary operations strict (evaluate thunks before operating on them).
     /// Iteratively evaluates nested thunks until a non-thunk value is obtained.
     /// Uses a trampoline to avoid Rust stack overflow with deep thunk chains.
+    /// 
+    /// Note: Thunks with holes (partial applications) cannot be forced and are returned as-is.
     fn force_value(&mut self, mut v: Value) -> Value {
         loop {
             if v.is_thunk() {
+                // Check if the thunk has holes - if so, don't force it
+                if let Some(ThunkData::Regular { bound, .. }) = v.as_thunk_ref(&self.heap) {
+                    let hole_count = bound.iter().filter(|opt| opt.is_none()).count();
+                    if hole_count > 0 {
+                        // Thunk has holes - return as-is (cannot be forced without arguments)
+                        return v;
+                    }
+                } else if let Some((_, args)) = v.as_thunk(&self.heap) {
+                    let hole_count = args.iter().filter(|opt| opt.is_none()).count();
+                    if hole_count > 0 {
+                        // Thunk has holes - return as-is (cannot be forced without arguments)
+                        return v;
+                    }
+                }
                 // Recursively invoke thunk (handles both regular and composed)
                 v = self.invoke_thunk_value_recursive(v);
             } else {

@@ -1,673 +1,107 @@
-use std::collections::HashMap;
+//! Tower-LSP server implementation.
+//!
+//! This module contains the main LSP server struct and initialization logic.
+
 use std::sync::Arc;
-use tower_lsp::jsonrpc::Result;
+use tokio::sync::RwLock;
+use tower_lsp::{Client, LanguageServer, LspService, Server};
 use tower_lsp::lsp_types::*;
-use tower_lsp::{Client, LanguageServer};
 
-use crate::core::engine::Engine;
-use crate::core::hir_lowering::CompilerState;
-use crate::stdlib;
+use crate::core::source_manager::SourceManager;
+use crate::core::compiler_state::CompilerState;
 
-use super::text_utils;
-use super::hover;
-use super::diagnostics;
-use super::semantic_tokens;
-use super::completion;
 
-/// Language Server Protocol server for CantaLoop.
-/// 
-/// Provides IDE features including:
-/// - Real-time diagnostics (parse errors, type errors)
-/// - Hover information (variable types, function signatures)
-/// - Code completion
-/// 
-/// Uses the compiler's CompilerState as the single source of truth.
-/// The LSP never invents language semantics - it only consumes compiler state.
-pub struct CantaLoopLSPServer {
-    client: Client,
-    documents: Arc<tokio::sync::RwLock<HashMap<Url, String>>>,
-    compiler_state_cache: Arc<tokio::sync::RwLock<HashMap<Url, CompilerState>>>,
-    engine: Arc<Engine>, // Shared engine with built-in functions registered
-    workspace_root: Arc<tokio::sync::RwLock<Option<std::path::PathBuf>>>, // Workspace root directory
+/// CantaLoop LSP server.
+///
+/// This is a thin protocol adapter over the compiler session.
+/// All language logic lives in the compiler.
+pub struct CantaLoopServer {
+    pub(crate) client: Client,
+    /// Source file manager
+    pub(crate) source_manager: Arc<RwLock<SourceManager>>,
+    /// Compiler state manager
+    pub(crate) compiler_state: Arc<CompilerState>,
 }
 
-impl CantaLoopLSPServer {
+impl CantaLoopServer {
     pub fn new(client: Client) -> Self {
-        // Create and initialize engine with standard library
-        let mut engine = Engine::new();
+        let source_manager = Arc::new(RwLock::new(SourceManager::new()));
+        let compiler_state = Arc::new(CompilerState::new(source_manager.clone()));
         
-        // Load all standard library modules
-        stdlib::load_stdlib_runtime(&mut engine);
-
         Self {
             client,
-            documents: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
-            compiler_state_cache: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
-            engine: Arc::new(engine),
-            workspace_root: Arc::new(tokio::sync::RwLock::new(None)),
+            source_manager,
+            compiler_state,
         }
     }
 
-    fn find_project_root(uri: &Url) -> Option<std::path::PathBuf> {
-        // Convert URI to file path
-        let file_path = uri.to_file_path().ok()?;
-        
-        // Walk up the directory tree looking for project indicators
-        let mut current = file_path.parent()?;
-        loop {
-            // Check for melon.json (primary indicator)
-            let melon_json = current.join("melon.json");
-            if melon_json.exists() {
-                return Some(current.to_path_buf());
-            }
-            
-            // Fallback: check if this directory has a src/ subdirectory
-            // This helps when melon.json is missing but project structure is clear
-            let src_dir = current.join("src");
-            if src_dir.exists() && src_dir.is_dir() {
-                // Only use this as project root if the current file is in src/
-                if file_path.starts_with(&src_dir) {
-                    return Some(current.to_path_buf());
-                }
-            }
-            
-            if let Some(parent) = current.parent() {
-                current = parent;
-            } else {
-                return None;
-            }
-        }
-    }
-
-    /// Get project root for a URI, using workspace root as fallback
-    async fn get_project_root(&self, uri: &Url) -> Option<std::path::PathBuf> {
-        // First try to find project root from the file's location
-        if let Some(root) = Self::find_project_root(uri) {
-            return Some(root);
-        }
-        
-        // Fallback to workspace root if available
-        let workspace_root = self.workspace_root.read().await;
-        workspace_root.clone()
-    }
-
-    async fn rebuild_compiler_state(&self, uri: &Url, text: &str) {
-        // Find project root if this file is part of a project
-        let project_root = self.get_project_root(uri).await;
-        
-        // Get the current file path to skip it when loading modules
-        let current_file = uri.to_file_path().ok();
-        
-        // Use the compiler to build state - single source of truth
-        match self.engine.compile_for_lsp(text, project_root.as_deref(), current_file.as_deref()) {
-            Ok(state) => {
-                let mut cache = self.compiler_state_cache.write().await;
-                cache.insert(uri.clone(), state);
-                self.client
-                    .log_message(MessageType::INFO, format!("Compiler state built successfully for {}", uri))
-                    .await;
-            }
-            Err(e) => {
-                // If compilation fails, remove from cache
-                let mut cache = self.compiler_state_cache.write().await;
-                cache.remove(uri);
-                self.client
-                    .log_message(MessageType::WARNING, format!("Compilation failed: {:?}", e))
-                    .await;
-            }
-        }
-    }
-
-    async fn update_diagnostics(&self, uri: Url) {
-        let documents = self.documents.read().await;
-        let text = match documents.get(&uri) {
-            Some(text) => text.clone(),
-            None => return,
-        };
-        drop(documents);
-
-        let mut diagnostics_list = Vec::new();
-
-        // Find project root if this file is part of a project
-        let project_root = self.get_project_root(&uri).await;
-        
-        // Get the current file path to skip it when loading modules
-        let current_file = uri.to_file_path().ok();
-        
-        // Use compiler state - single source of truth
-        match self.engine.compile_for_lsp(&text, project_root.as_deref(), current_file.as_deref()) {
-            Ok(state) => {
-                // Extract current module name from AST to filter out false positives
-                let current_module_name = state.ast.blocks.iter()
-                    .flat_map(|block| &block.statements)
-                    .find_map(|stmt| {
-                        if let crate::core::ast::Statement::Mod { identifier } = stmt {
-                            Some(identifier.clone())
-                        } else {
-                            None
-                        }
-                    });
-                
-                // Add diagnostics from compiler state
-                for error in &state.diagnostics {
-                    let error_msg = diagnostics::format_hir_error(error);
-                    
-                    // Filter out "Module 'X' not found" errors when current file IS module X
-                    // This happens when the module is being compiled but other files try to import it
-                    if let Some(ref current_module) = current_module_name {
-                        if error_msg.contains("Module '") && error_msg.contains("' not found") {
-                            if let Some(start) = error_msg.find("Module '") {
-                                let module_start = start + 8;
-                                if let Some(end) = error_msg[module_start..].find("' not found") {
-                                    // Safe string slicing - use get() to handle multi-byte characters
-                                    let module_name = match error_msg.get(module_start..module_start + end) {
-                                        Some(s) => s,
-                                        None => return, // Skip if invalid char boundary
-                                    };
-                                    if module_name == current_module {
-                                        // This file IS the module, so skip this error
-                                        // It's likely from another file trying to import it
-                                        continue;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    
-                    let (found_line, found_col) = diagnostics::find_error_location(error, &state);
-                    
-                    // Check if this is a nested invoke pattern error - these should be warnings, not errors
-                    let is_nested_invoke_error = error_msg.contains("Confusing nested invoke pattern") ||
-                                                 error_msg.contains("nested invoke pattern");
-                    
-                    let diagnostic = if is_nested_invoke_error {
-                        // Convert to warning for nested invoke patterns since code is still runnable
-                        Diagnostic {
-                            range: text_utils::create_range(found_line, found_col, 1),
-                            severity: Some(DiagnosticSeverity::WARNING),
-                            code: Some(NumberOrString::String("nested_invoke".to_string())),
-                            code_description: None,
-                            source: Some("CantaLoop".to_string()),
-                            message: error_msg,
-                            related_information: None,
-                            tags: Some(vec![DiagnosticTag::UNNECESSARY]),
-                            data: None,
-                        }
-                    } else {
-                        // Regular semantic errors remain as errors
-                        diagnostics::create_diagnostic(
-                            text_utils::create_range(found_line, found_col, 1),
-                            error_msg,
-                        )
-                    };
-                    diagnostics_list.push(diagnostic);
-                }
-                
-                // Check for unused variables using compiler state
-                let unused_vars = diagnostics::find_unused_variables(&state);
-                for (var_name, line_num, col) in unused_vars {
-                    if line_num > 0 || col > 0 { // Only add if we have location info
-                        let diagnostic = Diagnostic {
-                            range: text_utils::create_range(line_num, col, var_name.len()),
-                            severity: Some(DiagnosticSeverity::WARNING),
-                            code: Some(NumberOrString::String("unused_variable".to_string())),
-                            code_description: None,
-                            source: Some("CantaLoop".to_string()),
-                            message: format!("Variable '{}' is declared but never used", var_name),
-                            related_information: None,
-                            tags: Some(vec![DiagnosticTag::UNNECESSARY]),
-                            data: None,
-                        };
-                        diagnostics_list.push(diagnostic);
-                    }
-                }
-            }
-            Err(e) => {
-                // Parse errors
-                let (line, col) = match e.location {
-                    pest::error::InputLocation::Pos(pos) => text_utils::byte_position_to_line_col(&text, pos),
-                    pest::error::InputLocation::Span((start, _end)) => text_utils::byte_position_to_line_col(&text, start),
-                };
-
-                // Improve error message for missing type annotations
-                let error_msg = format!("{}", e);
-                let improved_msg = diagnostics::improve_parse_error_message(&text, line, &error_msg);
-                let diagnostic = diagnostics::create_diagnostic(
-                    text_utils::create_range(line, col, 1),
-                    improved_msg,
-                );
-                diagnostics_list.push(diagnostic);
-            }
-        }
-
-        // Check for nested ! invoke patterns (e.g., mul2(add10(i)!)! or mul2!(add10!(i))!)
-        let nested_invoke_issues = diagnostics::find_nested_invoke_patterns(&text);
-        for (line_num, col, length) in nested_invoke_issues {
-            let diagnostic = Diagnostic {
-                range: text_utils::create_range(line_num, col, length),
-                severity: Some(DiagnosticSeverity::WARNING),
-                code: Some(NumberOrString::String("nested_invoke".to_string())),
-                code_description: None,
-                source: Some("CantaLoop".to_string()),
-                message: "Nested invoke operator (!) detected. Patterns like `mul2(add10(i)!)!` or `mul2!(add10!(i))!` can be confusing and may create unnecessary intermediate thunks. Consider extracting the inner invocation: `let temp = add10(i)!; mul2(temp)!`".to_string(),
-                related_information: None,
-                tags: Some(vec![DiagnosticTag::UNNECESSARY]),
-                data: None,
-            };
-            diagnostics_list.push(diagnostic);
-        }
-
-        self.client
-            .publish_diagnostics(uri, diagnostics_list, None)
-            .await;
-    }
 }
 
 #[tower_lsp::async_trait]
-impl LanguageServer for CantaLoopLSPServer {
-    async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
-        // Capture workspace root from initialize params
-        let workspace_root = params
-            .root_uri
-            .and_then(|uri| uri.to_file_path().ok())
-            .or_else(|| {
-                params.workspace_folders
-                    .and_then(|folders| folders.first().cloned())
-                    .and_then(|folder| folder.uri.to_file_path().ok())
-            });
+impl LanguageServer for CantaLoopServer {
+    async fn initialize(&self, params: InitializeParams) -> tower_lsp::jsonrpc::Result<InitializeResult> {
+        // CRITICAL: Clear all caches on initialize
+        // VSCode can reconnect without restarting the process, so we must treat this as a fresh world
+        self.compiler_state.clear_all_caches().await;
         
-        if let Some(root) = workspace_root {
-            let mut stored_root = self.workspace_root.write().await;
-            *stored_root = Some(root);
+        // Extract and check workspace folders
+        let workspace_folders = params.workspace_folders.as_ref()
+            .map(|folders| folders.iter().map(|f| f.uri.to_string()).collect::<Vec<_>>());
+        
+        // Update workspace folders and clear caches if they changed
+        let folders_changed = self.compiler_state.update_workspace_folders(workspace_folders).await;
+        
+        if folders_changed {
+            self.client.log_message(
+                MessageType::INFO,
+                "Workspace folders changed - all caches cleared".to_string(),
+            ).await;
         }
-        Ok(InitializeResult {
-            server_info: Some(ServerInfo {
-                name: "CantaLoop LSP".to_string(),
-                version: Some("0.1.0".to_string()),
-            }),
-            capabilities: ServerCapabilities {
-                text_document_sync: Some(TextDocumentSyncCapability::Options(
-                    TextDocumentSyncOptions {
-                        open_close: Some(true),
-                        change: Some(TextDocumentSyncKind::FULL),
-                        will_save: None,
-                        will_save_wait_until: None,
-                        save: None,
-                    },
-                )),
-                hover_provider: Some(HoverProviderCapability::Simple(true)),
-                definition_provider: Some(OneOf::Left(true)),
-                completion_provider: Some(CompletionOptions {
-                    trigger_characters: Some(vec![".", "(", "p", "r", "i", "n", "t"].iter().map(|s| s.to_string()).collect()),
-                    resolve_provider: Some(false),
-                    ..Default::default()
-                }),
-                semantic_tokens_provider: Some(
-                    SemanticTokensServerCapabilities::SemanticTokensOptions(
-                        SemanticTokensOptions {
-                            work_done_progress_options: Default::default(),
-                            legend: SemanticTokensLegend {
-                                token_types: vec![
-                                    SemanticTokenType::FUNCTION,
-                                    SemanticTokenType::VARIABLE,
-                                    SemanticTokenType::TYPE,
-                                    SemanticTokenType::OPERATOR,
-                                    SemanticTokenType::KEYWORD,
-                                    SemanticTokenType::NAMESPACE,
-                                ],
-                                token_modifiers: vec![
-                                    SemanticTokenModifier::DECLARATION,
-                                    SemanticTokenModifier::READONLY,
-                                    SemanticTokenModifier::DEPRECATED, // Reuse deprecated as "thunk" indicator
-                                ],
-                            },
-                            range: Some(true),
-                            full: Some(SemanticTokensFullOptions::Bool(true)),
-                        },
-                    ),
-                ),
-                ..Default::default()
-            },
-        })
+        
+        crate::lsp::handlers::initialize::handle_initialize(params)
     }
 
     async fn initialized(&self, _: InitializedParams) {
-        self.client
-            .log_message(MessageType::INFO, "CantaLoop LSP initialized")
-            .await;
+        self.client.log_message(MessageType::INFO, "CantaLoop LSP initialized").await;
+        self.client.log_message(MessageType::INFO, "Waiting for files to open...").await;
     }
 
-    async fn shutdown(&self) -> Result<()> {
+    async fn shutdown(&self) -> tower_lsp::jsonrpc::Result<()> {
         Ok(())
     }
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
-        let uri = params.text_document.uri;
-        let text = params.text_document.text.clone();
-
-        let mut documents = self.documents.write().await;
-        documents.insert(uri.clone(), text.clone());
-        drop(documents);
-
-        self.rebuild_compiler_state(&uri, &text).await;
-        self.update_diagnostics(uri).await;
+        // CRITICAL: Panic hook in main() will catch panics and log them
+        // Handlers should handle errors gracefully - panics will be logged but won't exit the server
+        // Note: For async functions, catch_unwind doesn't work, so we rely on the panic hook
+        crate::lsp::handlers::document::handle_did_open(self, params).await;
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
-        let uri = params.text_document.uri;
-        let mut documents = self.documents.write().await;
-        
-        if let Some(text) = params.content_changes.into_iter().next() {
-            let text_clone = text.text.clone();
-            documents.insert(uri.clone(), text.text);
-            drop(documents);
-            self.rebuild_compiler_state(&uri, &text_clone).await;
-        } else {
-            drop(documents);
-        }
-
-        self.update_diagnostics(uri).await;
+        // CRITICAL: Panic hook in main() will catch panics and log them
+        // Handlers should handle errors gracefully - panics will be logged but won't exit the server
+        crate::lsp::handlers::document::handle_did_change(self, params).await;
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
-        let uri = params.text_document.uri;
-        let mut documents = self.documents.write().await;
-        documents.remove(&uri);
-        drop(documents);
-        
-        let mut cache = self.compiler_state_cache.write().await;
-        cache.remove(&uri);
+        // CRITICAL: Panic hook in main() will catch panics and log them
+        // Handlers should handle errors gracefully - panics will be logged but won't exit the server
+        crate::lsp::handlers::document::handle_did_close(self, params).await;
     }
 
-    async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
-        self.client
-            .log_message(MessageType::INFO, "Hover method called")
-            .await;
-        
-        let uri = params.text_document_position_params.text_document.uri;
-        let pos = params.text_document_position_params.position;
-
-        let documents = self.documents.read().await;
-        let text = match documents.get(&uri) {
-            Some(text) => text,
-            None => return Ok(None),
-        };
-
-        // Simple implementation: find identifier at position
-        let identifier_info = match text_utils::extract_identifier_at_position(text, pos.line as usize, pos.character as usize) {
-            Some((id, start, end)) => (id, start, end),
-            None => return Ok(None),
-        };
-        let (identifier, start, end) = identifier_info;
-        drop(documents);
-
-        // Log for debugging
-        self.client
-            .log_message(MessageType::INFO, format!("Hover requested for identifier: '{}' at line {}", identifier, pos.line))
-            .await;
-
-        // Use compiler state - single source of truth
-        let cache = self.compiler_state_cache.read().await;
-        let has_state = cache.contains_key(&uri);
-        drop(cache);
-        
-        if !has_state {
-            // Compiler state not found, try to rebuild it
-            self.client
-                .log_message(MessageType::INFO, format!("Compiler state not found for URI, attempting to rebuild: {}", uri))
-                .await;
-            let documents = self.documents.read().await;
-            if let Some(text) = documents.get(&uri) {
-                let text_clone = text.clone();
-                drop(documents);
-                self.rebuild_compiler_state(&uri, &text_clone).await;
-            }
-        }
-        
-        let cache = self.compiler_state_cache.read().await;
-        if let Some(state) = cache.get(&uri) {
-            self.client
-                .log_message(MessageType::INFO, format!("Compiler state found for URI, searching for '{}'", identifier))
-                .await;
-            
-            // Use symbol table to find symbol
-            let symbols = state.symbols.find_by_name(&identifier);
-            if let Some(symbol) = symbols.first() {
-                let type_str = hover::format_value_kind(&symbol.ty);
-                let hover_content = match symbol.kind {
-                    crate::core::hir_lowering::SymbolKind::Function => {
-                        // For functions, try to get the full signature from HIR
-                        if let Some((func_id, _)) = state.hir.functions.iter()
-                            .find(|(_, f)| f.name == identifier) {
-                            if let Some(func) = state.hir.functions.get(func_id) {
-                                let signature = hover::format_function_signature(func);
-                                format!("```cantaloop\n{}\n```", signature)
-                            } else {
-                                format!("```cantaloop\n{}\n```\nType: `{}`", identifier, type_str)
-                            }
-                        } else {
-                            format!("```cantaloop\n{}\n```\nType: `{}`", identifier, type_str)
-                        }
-                    }
-                    crate::core::hir_lowering::SymbolKind::Variable => {
-                        // Check if this is a constant and show its value
-                        if let Some(const_value) = hover::find_constant_value(&state.ast, &state.hir, &identifier) {
-                            format!("```cantaloop\nconst {} = {}\n```\nType: `{}`", identifier, const_value, type_str)
-                        } else {
-                            format!("```cantaloop\n{}\n```\nType: `{}`", identifier, type_str)
-                        }
-                    }
-                    _ => {
-                        format!("```cantaloop\n{}\n```\nType: `{}`", identifier, type_str)
-                    }
-                };
-                let range = text_utils::create_range(pos.line as usize, start, end - start);
-                return Ok(Some(hover::create_hover_content(hover_content, range)));
-            }
-            
-            self.client
-                .log_message(MessageType::INFO, format!("Identifier '{}' not found in symbol table", identifier))
-                .await;
-        } else {
-            self.client
-                .log_message(MessageType::WARNING, format!("No compiler state found for URI: {}", uri))
-                .await;
-        }
-
-        Ok(None)
+    async fn hover(&self, params: HoverParams) -> tower_lsp::jsonrpc::Result<Option<Hover>> {
+        crate::lsp::handlers::hover::handle_hover(self, params).await
     }
 
-    async fn goto_definition(
-        &self,
-        params: GotoDefinitionParams,
-    ) -> Result<Option<GotoDefinitionResponse>> {
-        self.client
-            .log_message(MessageType::INFO, "Goto definition requested")
-            .await;
-        
-        let uri = params.text_document_position_params.text_document.uri;
-        let pos = params.text_document_position_params.position;
-
-        let documents = self.documents.read().await;
-        let text = match documents.get(&uri) {
-            Some(text) => text,
-            None => return Ok(None),
-        };
-
-        // Extract identifier at position
-        let identifier_info = match text_utils::extract_identifier_at_position(text, pos.line as usize, pos.character as usize) {
-            Some((id, _, _)) => id,
-            None => return Ok(None),
-        };
-        drop(documents);
-
-        // Log for debugging
-        self.client
-            .log_message(MessageType::INFO, format!("Goto definition requested for identifier: '{}'", identifier_info))
-            .await;
-
-        // Use compiler state - single source of truth
-        let cache = self.compiler_state_cache.read().await;
-        let has_state = cache.contains_key(&uri);
-        drop(cache);
-        
-        if !has_state {
-            // Compiler state not found, try to rebuild it
-            self.client
-                .log_message(MessageType::INFO, format!("Compiler state not found for URI, attempting to rebuild: {}", uri))
-                .await;
-            let documents = self.documents.read().await;
-            if let Some(text) = documents.get(&uri) {
-                let text_clone = text.clone();
-                drop(documents);
-                self.rebuild_compiler_state(&uri, &text_clone).await;
-            }
-        }
-        
-        let cache = self.compiler_state_cache.read().await;
-        if let Some(state) = cache.get(&uri) {
-            // Use symbol table to find symbol definition
-            let symbols = state.symbols.find_by_name(&identifier_info);
-            if let Some(symbol) = symbols.first() {
-                // Get the definition location from the symbol
-                if let Some(span) = symbol.defined_at {
-                    // Convert span to LSP Location
-                    let line_index = state.line_index.as_ref().ok_or_else(|| {
-                        tower_lsp::jsonrpc::Error::internal_error()
-                    })?;
-                    
-                    let (line, col) = line_index.lookup(span.start);
-                    let (end_line, end_col) = line_index.lookup(span.end);
-                    
-                    let location = Location {
-                        uri: uri.clone(),
-                        range: Range {
-                            start: Position {
-                                line,
-                                character: col,
-                            },
-                            end: Position {
-                                line: end_line,
-                                character: end_col,
-                            },
-                        },
-                    };
-                    
-                    self.client
-                        .log_message(MessageType::INFO, format!("Found definition for '{}' at line {}", identifier_info, line))
-                        .await;
-                    
-                    return Ok(Some(GotoDefinitionResponse::Scalar(location)));
-                } else {
-                    self.client
-                        .log_message(MessageType::INFO, format!("Symbol '{}' found but has no definition location", identifier_info))
-                        .await;
-                }
-            } else {
-                self.client
-                    .log_message(MessageType::INFO, format!("Identifier '{}' not found in symbol table", identifier_info))
-                    .await;
-            }
-        } else {
-            self.client
-                .log_message(MessageType::WARNING, format!("No compiler state found for URI: {}", uri))
-                .await;
-        }
-
-        Ok(None)
+    async fn goto_definition(&self, params: GotoDefinitionParams) -> tower_lsp::jsonrpc::Result<Option<GotoDefinitionResponse>> {
+        crate::lsp::handlers::goto::handle_goto_definition(self, params).await
     }
 
-    async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
-        let uri = params.text_document_position.text_document.uri;
-        let pos = params.text_document_position.position;
-
-        self.client
-            .log_message(MessageType::INFO, format!("Completion requested for URI: {} at line {}", uri, pos.line))
-            .await;
-
-        let documents = self.documents.read().await;
-        let text = match documents.get(&uri) {
-            Some(text) => text,
-            None => {
-                self.client
-                    .log_message(MessageType::WARNING, format!("No document found for URI: {}", uri))
-                    .await;
-                return Ok(None);
-            }
-        };
-
-        let lines: Vec<&str> = text.lines().collect();
-        if pos.line as usize >= lines.len() {
-            return Ok(None);
-        }
-
-        let char_pos = pos.character as usize;
-
-        // Get compiler state if available
-        let cache = self.compiler_state_cache.read().await;
-        let state = cache.get(&uri);
-        let response = completion::generate_completions(text, pos.line as usize, char_pos, state);
-        drop(cache);
-
-        self.client
-            .log_message(MessageType::INFO, format!("Returning completion items"))
-            .await;
-
-        Ok(Some(response))
+    async fn references(&self, params: ReferenceParams) -> tower_lsp::jsonrpc::Result<Option<Vec<Location>>> {
+        crate::lsp::handlers::goto::handle_references(self, params).await
     }
 
-    async fn semantic_tokens_full(
-        &self,
-        params: SemanticTokensParams,
-    ) -> Result<Option<SemanticTokensResult>> {
-        self.client
-            .log_message(MessageType::INFO, "Semantic tokens requested")
-            .await;
-        
-        let uri = params.text_document.uri;
-        let documents = self.documents.read().await;
-        let text = match documents.get(&uri) {
-            Some(text) => text.clone(),
-            None => {
-                self.client
-                    .log_message(MessageType::WARNING, "No document found for semantic tokens")
-                    .await;
-                return Ok(None);
-            }
-        };
-        drop(documents);
-        
-        // Ensure compiler state is built before generating semantic tokens
-        let cache = self.compiler_state_cache.read().await;
-        let has_state = cache.contains_key(&uri);
-        drop(cache);
-        
-        if !has_state {
-            self.client
-                .log_message(MessageType::INFO, "Compiler state not found, rebuilding for semantic tokens")
-                .await;
-            self.rebuild_compiler_state(&uri, &text).await;
-        }
-
-        let cache = self.compiler_state_cache.read().await;
-        let state = match cache.get(&uri) {
-            Some(s) => s,
-            None => {
-                drop(cache);
-                return Ok(None);
-            }
-        };
-
-        let tokens = semantic_tokens::generate_semantic_tokens(&text, state);
-        drop(cache);
-
-        self.client
-            .log_message(MessageType::INFO, format!("Returning {} semantic tokens", tokens.len()))
-            .await;
-        
-        Ok(Some(SemanticTokensResult::Tokens(SemanticTokens {
-            result_id: None,
-            data: tokens,
-        })))
+    async fn semantic_tokens_full(&self, params: SemanticTokensParams) -> tower_lsp::jsonrpc::Result<Option<SemanticTokensResult>> {
+        crate::lsp::handlers::tokens::handle_semantic_tokens_full(self, params).await
     }
 }

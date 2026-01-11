@@ -66,6 +66,9 @@ lazy_static::lazy_static! {
                         .sum();
                     Value::number(sum)
                 }),
+                docs: Some(crate::core::cst::DocBlock::from_text(
+                    "Sum all numbers.\n@param ...numbers Variadic list of numbers to sum\n@returns The sum of all numbers"
+                )),
             },
             StdFunction {
                 name: "min",
@@ -82,6 +85,9 @@ lazy_static::lazy_static! {
                         .fold(f64::INFINITY, |acc, x| if x < acc { x } else { acc });
                     Value::number(min_val)
                 }),
+                docs: Some(crate::core::cst::DocBlock::from_text(
+                    "Returns the minimum value from a list of numbers.\n@param ...numbers Variadic list of numbers\n@returns The smallest number in the list"
+                )),
             },
             StdFunction {
                 name: "max",
@@ -98,6 +104,9 @@ lazy_static::lazy_static! {
                         .fold(f64::NEG_INFINITY, |acc, x| if x > acc { x } else { acc });
                     Value::number(max_val)
                 }),
+                docs: Some(crate::core::cst::DocBlock::from_text(
+                    "Returns the maximum value from a list of numbers.\n@param ...numbers Variadic list of numbers\n@returns The largest number in the list"
+                )),
             },
         ]);
         

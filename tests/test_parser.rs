@@ -244,3 +244,35 @@ fn test_parse_invalid_syntax_should_fail() {
     assert_parse_failure("if ("); // Incomplete if
 }
 
+#[test]
+fn test_parse_rust_style_return() {
+    // Test Rust-style return (expression without return keyword and semicolon)
+    assert_parse_success(r#"
+fn add(a: num, b: num) -> num {
+    a + b
+}
+"#);
+
+    assert_parse_success(r#"
+fn get_number() -> num {
+    42
+}
+"#);
+
+    assert_parse_success(r#"
+fn multiply(x: num, y: num) -> num {
+    let result = x * y;
+    result
+}
+"#);
+
+    assert_parse_success(r#"
+fn conditional_return(x: num) -> num {
+    if x > 0 {
+        x * 2
+    } else {
+        x * 3
+    }
+}
+"#);
+}

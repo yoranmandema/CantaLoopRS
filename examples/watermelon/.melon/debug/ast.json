@@ -1,0 +1,25 @@
+{
+  "blocks": [
+    {
+      "statements": [
+        {
+          "Expression": {
+            "Infix": {
+              "lhs": {
+                "Literal": {
+                  "Number": 1.0
+                }
+              },
+              "op": "Add",
+              "rhs": {
+                "Literal": {
+                  "Number": 2.0
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,207 @@
+{
+  "constants": [
+    {
+      "id": 0,
+      "name": "PI",
+      "value": {
+        "Number": 3.14159265359
+      },
+      "kind": "Number"
+    }
+  ],
+  "blocks": [
+    {
+      "scope": 0,
+      "statements": [
+        "Nop",
+        "Nop",
+        {
+          "Assign": {
+            "slot": 0,
+            "value": {
+              "Constant": 0
+            }
+          }
+        },
+        {
+          "Expression": {
+            "Constant": 0
+          }
+        },
+        {
+          "Expression": {
+            "FunctionCall": {
+              "function_id": 10009,
+              "args": [
+                {
+                  "String": "Hello world!"
+                }
+              ],
+              "invoke": true
+            }
+          }
+        }
+      ]
+    },
+    {
+      "scope": 0,
+      "statements": [
+        "Nop",
+        {
+          "Expression": {
+            "Constant": 0
+          }
+        }
+      ]
+    },
+    {
+      "scope": 0,
+      "statements": [
+        "Nop",
+        {
+          "Expression": {
+            "Constant": 0
+          }
+        }
+      ]
+    },
+    {
+      "scope": 0,
+      "statements": [
+        {
+          "Expression": {
+            "Binary": {
+              "lhs": {
+                "Number": 1.0
+              },
+              "rhs": {
+                "Number": 2.0
+              },
+              "operator": "Add"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "scopes": {
+    "scopes": [
+      {
+        "vars": [
+          {
+            "id": 0,
+            "name": "PI",
+            "kind": "Number"
+          }
+        ],
+        "parent": null
+      },
+      {
+        "vars": [],
+        "parent": 0
+      },
+      {
+        "vars": [],
+        "parent": 1
+      },
+      {
+        "vars": [],
+        "parent": 0
+      },
+      {
+        "vars": [],
+        "parent": 3
+      },
+      {
+        "vars": [],
+        "parent": 0
+      },
+      {
+        "vars": [],
+        "parent": 5
+      }
+    ]
+  },
+  "functions": {
+    "0": {
+      "id": 0,
+      "name": "doSomething",
+      "signature": {
+        "params": [],
+        "return_type": "Void",
+        "is_effectful": false
+      },
+      "definition": {
+        "body": {
+          "scope": 2,
+          "statements": []
+        },
+        "param_var_ids": [],
+        "scope_id": 1
+      }
+    },
+    "1": {
+      "id": 1,
+      "name": "something",
+      "signature": {
+        "params": [],
+        "return_type": "Number",
+        "is_effectful": false
+      },
+      "definition": {
+        "body": {
+          "scope": 4,
+          "statements": []
+        },
+        "param_var_ids": [],
+        "scope_id": 3
+      }
+    },
+    "2": {
+      "id": 2,
+      "name": "something",
+      "signature": {
+        "params": [],
+        "return_type": "Number",
+        "is_effectful": false
+      },
+      "definition": {
+        "body": {
+          "scope": 6,
+          "statements": []
+        },
+        "param_var_ids": [],
+        "scope_id": 5
+      }
+    }
+  },
+  "structs": {
+    "Matrix4": {
+      "name": "Matrix4",
+      "fields": [
+        [
+          "x",
+          "Number"
+        ],
+        [
+          "y",
+          "Number"
+        ],
+        [
+          "z",
+          "Number"
+        ],
+        [
+          "w",
+          "Number"
+        ]
+      ]
+    }
+  },
+  "module_imports": {
+    "utils": {
+      "print": 10009
+    }
+  },
+  "imported_constant_values": {}
+}

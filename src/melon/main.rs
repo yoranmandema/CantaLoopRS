@@ -24,12 +24,14 @@ fn main() {
         eprintln!("Commands:");
         eprintln!("  new [name]");
         eprintln!("  run [--watch|-w] [--debug]");
+        eprintln!("  docs [path]  Extract documentation from source files");
         std::process::exit(1);
     }
 
     match args[1].as_str() {
         "new" => create_new_project_cmd(&args),
         "run" => run_project_cmd(&args),
+        "docs" => extract_docs_cmd(&args),
         other => {
             eprintln!("Unknown command: {}", other);
             std::process::exit(1);
@@ -92,14 +94,14 @@ fn create_new_project(
             r#"{{
   "name": "{}",
   "version": "0.1.0",
-  "main": "main.mln"
+  "main": "main.cl"
 }}"#,
             project_name
         ),
     )?;
 
     std::fs::write(
-        project_path.join("src/main.mln"),
+        project_path.join("src/main.cl"),
         r#"use print from std;
 
 print("Hello, world! 🍉")!;
@@ -424,5 +426,102 @@ fn find_project_root(start: &Path) -> Option<PathBuf> {
             return Some(cur);
         }
         cur = cur.parent()?.to_path_buf();
+    }
+}
+
+/* ============================
+Documentation extraction
+============================ */
+
+fn extract_docs_cmd(args: &[String]) {
+    let path = if args.len() >= 3 {
+        PathBuf::from(&args[2])
+    } else {
+        PathBuf::from("./src")
+    };
+
+    let cwd = env::current_dir().expect("cwd");
+    let project_root = find_project_root(&cwd);
+    
+    let mut engine = Engine::new();
+    stdlib::load_stdlib_runtime(&mut engine);
+    
+    if let Some(root) = &project_root {
+        if let Err(e) = ProjectLoader::load_native_modules(&mut engine, root) {
+            eprintln!("Warning: Failed to load project native modules: {}", e);
+        }
+    }
+
+    // Find all .cl files in the path
+    let mut files = Vec::new();
+    if path.is_file() {
+        files.push(path);
+    } else if path.is_dir() {
+        collect_cl_files(&path, &mut files);
+    } else {
+        eprintln!("Error: Path '{}' does not exist", path.display());
+        std::process::exit(1);
+    }
+
+    // Extract docs from each file
+    #[derive(Serialize)]
+    struct DocEntry {
+        file: String,
+        identifier: String,
+        text: String,
+        tags: DocTags,
+    }
+    
+    #[derive(Serialize)]
+    struct DocTags {
+        params: std::collections::HashMap<String, String>,
+        returns: Option<String>,
+        effects: Option<String>,
+        other: std::collections::HashMap<String, String>,
+    }
+    
+    let mut all_docs = Vec::new();
+    for file_path in &files {
+        if let Ok(content) = std::fs::read_to_string(file_path) {
+            match engine.compile_for_lsp(&content, project_root.as_deref(), Some(file_path)) {
+                Ok(state) => {
+                    // Get docs in source order
+                    let file_docs = state.docs_in_source_order(&content);
+                    for (identifier, doc) in file_docs {
+                        all_docs.push(DocEntry {
+                            file: file_path.to_string_lossy().to_string(),
+                            identifier: identifier.clone(),
+                            text: doc.text.clone(),
+                            tags: DocTags {
+                                params: doc.tags.params.clone(),
+                                returns: doc.tags.returns.clone(),
+                                effects: doc.tags.effects.clone(),
+                                other: doc.tags.other.clone(),
+                            },
+                        });
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Warning: Failed to compile {}: {:?}", file_path.display(), e);
+                }
+            }
+        }
+    }
+
+    // Output as JSON (canonical format)
+    let json_output = serde_json::to_string_pretty(&all_docs).unwrap();
+    println!("{}", json_output);
+}
+
+fn collect_cl_files(dir: &Path, files: &mut Vec<PathBuf>) {
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("cl") {
+                files.push(path);
+            } else if path.is_dir() {
+                collect_cl_files(&path, files);
+            }
+        }
     }
 }

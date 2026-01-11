@@ -1,0 +1,12 @@
+.vscode/**
+.vscode-test/**
+src/**
+.gitignore
+.yarnrc
+vscode-extension.code-workspace
+tsconfig.json
+**/*.map
+**/*.ts
+!out/**/*.js
+node_modules/**
+rust-project/**

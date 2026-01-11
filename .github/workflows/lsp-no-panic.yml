@@ -1,0 +1,79 @@
+name: LSP No-Panic Check
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'src/lsp/**'
+      - 'src/core/**'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'src/lsp/**'
+      - 'src/core/**'
+
+jobs:
+  check-no-panic:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Check for panic/unwrap/expect in LSP code
+        run: |
+          echo "Checking LSP code for panic-prone patterns..."
+          
+          # Check for panic! macros
+          if grep -r "panic!" src/lsp/ 2>/dev/null; then
+            echo "ERROR: Found panic! in LSP code"
+            exit 1
+          fi
+          
+          # Check for unwrap() calls
+          if grep -r "\.unwrap()" src/lsp/ 2>/dev/null; then
+            echo "ERROR: Found .unwrap() in LSP code"
+            exit 1
+          fi
+          
+          # Check for expect() calls
+          if grep -r "\.expect(" src/lsp/ 2>/dev/null; then
+            echo "ERROR: Found .expect() in LSP code"
+            exit 1
+          fi
+          
+          # Check for unreachable! macros
+          if grep -r "unreachable!" src/lsp/ 2>/dev/null; then
+            echo "ERROR: Found unreachable! in LSP code"
+            exit 1
+          fi
+          
+          # Check for unimplemented! macros
+          if grep -r "unimplemented!" src/lsp/ 2>/dev/null; then
+            echo "ERROR: Found unimplemented! in LSP code"
+            exit 1
+          fi
+          
+          echo "✓ No panic-prone patterns found in LSP code"
+          
+      - name: Check for panic/unwrap/expect in CST builder
+        run: |
+          echo "Checking CST builder for panic-prone patterns..."
+          
+          # Check for panic! macros
+          if grep "panic!" src/core/cst/builder.rs 2>/dev/null; then
+            echo "ERROR: Found panic! in CST builder"
+            exit 1
+          fi
+          
+          # Check for unwrap() calls
+          if grep "\.unwrap()" src/core/cst/builder.rs 2>/dev/null; then
+            echo "ERROR: Found .unwrap() in CST builder"
+            exit 1
+          fi
+          
+          # Check for expect() calls
+          if grep "\.expect(" src/core/cst/builder.rs 2>/dev/null; then
+            echo "ERROR: Found .expect() in CST builder"
+            exit 1
+          fi
+          
+          echo "✓ No panic-prone patterns found in CST builder"

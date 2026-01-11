@@ -84,6 +84,7 @@ lazy_static::lazy_static! {
                     heap,
                 )
             }),
+            docs: None,
         });
         
         // Add the BevyApp struct definition
@@ -100,6 +101,7 @@ lazy_static::lazy_static! {
                 ("clear_color_b", ValueKind::Number),
             ],
             methods: vec![],
+            docs: None,
         });
         
         // Add builder functions
@@ -128,6 +130,7 @@ lazy_static::lazy_static! {
                 )
 
             }),
+            docs: None,
         });
         
         module.functions.push(StdFunction {
@@ -161,6 +164,7 @@ lazy_static::lazy_static! {
                     heap,
                 )
             }),
+            docs: None,
         });
         
         module.functions.push(StdFunction {
@@ -194,6 +198,7 @@ lazy_static::lazy_static! {
                     heap,
                 )
             }),
+            docs: None,
         });
         
         // Effectful function: runs the Bevy app
@@ -256,6 +261,7 @@ lazy_static::lazy_static! {
                 
                 Value::none()
             }),
+            docs: None,
         });
         
         module

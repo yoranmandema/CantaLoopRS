@@ -1,8 +1,31 @@
 use serde::Serialize;
+use crate::core::cst::CstId;
 
 /// Represents a placeholder hole in partial application.
 #[derive(Debug, Clone, Serialize)]
 pub struct Hole;
+
+/// Represents an identifier with its CST identity.
+/// 
+/// Phase 3: AST nodes carry CstId to enable identity tracking through lowering.
+/// This allows binding CST nodes to HIR symbols for LSP semantic features.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, Hash)]
+pub struct AstIdent {
+    pub name: String,
+    pub cst_id: CstId,
+}
+
+impl std::fmt::Display for AstIdent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.name)
+    }
+}
+
+impl std::borrow::Borrow<str> for AstIdent {
+    fn borrow(&self) -> &str {
+        &self.name
+    }
+}
 
 /// Represents an expression in the CantaLoop language.
 /// 
@@ -11,10 +34,11 @@ pub struct Hole;
 #[derive(Debug, Clone, Serialize)]
 pub enum Expression {
     Literal(Literal),
-    Identifier(String),
+    Identifier(AstIdent), // Phase 3: Identifier carries CstId for identity tracking
     FunctionCall {
         callee: Box<Expression>, // Can be Identifier, Compose, or any expression that evaluates to a callable
         arguments: Vec<Expression>,
+        cst_id: CstId, // Phase 3: FunctionCall carries CstId for identity tracking
     },
     PartialCall {
         func: Box<Expression>, // Function to partially apply
@@ -47,15 +71,18 @@ pub enum Expression {
     },
     MemberAccess {
         object: Box<Expression>, // e.g., "utils" in "utils.add"
-        member: String, // e.g., "add" in "utils.add"
+        member: AstIdent, // e.g., "add" in "utils.add" - Phase 3: member carries CstId
+        cst_id: CstId, // Phase 3: MemberAccess carries CstId for identity tracking
     },
     StructInit {
-        struct_name: String, // e.g., "Point" in "Point { x: 10, y: 20 }"
-        fields: Vec<(String, Expression)>, // (field_name, value)
+        struct_name: AstIdent, // e.g., "Point" in "Point { x: 10, y: 20 }" - Phase 3: struct_name carries CstId
+        fields: Vec<(AstIdent, Expression)>, // (field_name, value) - Phase 3: field_name carries CstId
+        cst_id: CstId, // Phase 3: StructInit carries CstId for identity tracking
     },
     FieldAccess {
         object: Box<Expression>, // e.g., "p" in "p.x"
-        field: String, // e.g., "x" in "p.x"
+        field: AstIdent, // e.g., "x" in "p.x" - Phase 3: field carries CstId
+        cst_id: CstId, // Phase 3: FieldAccess carries CstId for identity tracking
     },
     Array(Vec<Expression>), // Array literal: [expr, expr, ...]
     ArrayIndex {
@@ -138,7 +165,7 @@ pub struct Block {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Argument {
-    pub identifier: String,
+    pub identifier: AstIdent, // Phase 3: identifier carries CstId for identity tracking
     pub kind: String
 }
 
@@ -166,13 +193,13 @@ pub enum Statement {
         identifier: String,
     },
     Let {
-        identifier: String,
+        identifier: AstIdent, // Phase 3: identifier carries CstId for identity tracking
         type_annotation: Option<String>,
         expression: Expression,
         pub_visibility: bool,
     },
     Const {
-        identifier: String,
+        identifier: AstIdent, // Phase 3: identifier carries CstId for identity tracking
         expression: Expression,
         pub_visibility: bool,
     },
@@ -197,11 +224,12 @@ pub enum Statement {
         cases: Vec<(Option<Expression>, Block)>, // (pattern expression, block) - None for wildcard
     },
     FunctionDeclaration {
-        identifier: String,
+        identifier: AstIdent, // Phase 3: identifier carries CstId for identity tracking
         arguments: Vec<Argument>,
         return_type: Option<String>,
         body: Block,
         pub_visibility: bool,
+        cst_id: CstId, // Phase 3: FunctionDeclaration carries CstId for identity tracking
     },
     Return {
         expression: Expression,

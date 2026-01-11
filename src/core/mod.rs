@@ -1,5 +1,7 @@
 /// Abstract Syntax Tree representation and builder.
 pub mod ast;
+pub mod cst;
+pub mod span;
 /// Bytecode compilation and instruction set.
 pub mod bytecode;
 /// Main engine orchestrating compilation and execution.
@@ -18,6 +20,9 @@ pub mod vm;
 pub mod compileSession;
 pub mod projectLoader;
 pub mod native_module_loader;
+pub mod source_manager;
+pub mod lsp_api;
+pub mod compiler_state;
 
 // Re-export commonly used types
 pub use engine::Engine;

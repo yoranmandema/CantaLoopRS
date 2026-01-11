@@ -9,12 +9,13 @@ use crate::core::ast::{
     Argument, BinaryOp, Block, CallArgument, ClosureBody, Expression, Literal, PostfixOp, Program, Statement,
     UnaryOp,
 };
+use crate::core::cst::CstId;
 use serde::Serialize;
 
 use super::{
     scopes::{HirBlockContext, ScopeArena, ScopeId},
     Constant, ConstantValue, Function, FunctionDefinition, FunctionSignature, HirAst, HirError,
-    HirExpression, ImportTable, Module, ReducerType, StructDef, ValueKind, Variable,
+    HirExpression, ImportTable, Module, ReducerType, StructDef, ValueKind, Variable, SymbolId,
 };
 
 // Hashable key for constant deduplication
@@ -102,6 +103,10 @@ pub struct HirBuilder {
     
     /// Maps variable_id to function_id for variables that contain closures
     closure_variables: HashMap<u32, u32>,
+    
+    /// Phase 3: Target HashMap for binding CST IDs to symbol IDs during lowering.
+    /// Set by CompileSession to enable identity tracking for LSP.
+    bind_target: Option<*mut HashMap<CstId, SymbolId>>,
 }
 
 impl HirBuilder {
@@ -124,6 +129,7 @@ impl HirBuilder {
             module_imports: HashMap::new(),
             current_module: None,
             closure_variables: HashMap::new(),
+            bind_target: None,
         }
     }
 
@@ -177,6 +183,25 @@ impl HirBuilder {
         self.current_module = module;
     }
 
+    /// Phase 3: Set the target HashMap for binding CST IDs to symbol IDs.
+    /// Called by CompileSession to enable identity tracking for LSP.
+    /// 
+    /// # Safety
+    /// The pointer must remain valid for the lifetime of the HirBuilder.
+    pub unsafe fn set_bind_target(&mut self, target: &mut HashMap<CstId, SymbolId>) {
+        self.bind_target = Some(target as *mut HashMap<CstId, SymbolId>);
+    }
+
+    /// Phase 3: Helper method to bind a CST ID to a symbol ID.
+    /// Called whenever a symbol is resolved during lowering.
+    fn bind_cst_to_symbol(&mut self, cst_id: CstId, symbol_id: SymbolId) {
+        if let Some(target_ptr) = self.bind_target {
+            unsafe {
+                (*target_ptr).insert(cst_id, symbol_id);
+            }
+        }
+    }
+
     /// Get the import table for the current module
     fn get_current_imports(&self) -> Option<&ImportTable> {
         self.current_module
@@ -205,7 +230,10 @@ impl HirBuilder {
     /// Add a symbol to the current module's import table
     fn add_import_to_current_module(&mut self, name: String, id: u32) -> Result<(), HirError> {
         let module_name = self.current_module.clone().ok_or_else(|| {
-            HirError::TypeError("Cannot import symbols without a module declaration".to_string())
+            HirError::TypeError {
+                message: "Cannot import symbols without a module declaration".to_string(),
+                span: HirError::synthetic_span(),
+            }
         })?;
 
         // Store in module_imports (for backward compatibility and LSP)
@@ -231,16 +259,57 @@ impl HirBuilder {
     }
 
     pub fn resolve_var(&self, name: &str) -> Option<u32> {
+        eprintln!("[HIR] resolve_var: name={}, scope={:?}", name, self.current_scope);
+        
         let mut scope = Some(self.current_scope);
+        let mut depth = 0;
+        let max_depth = 100; // Safety limit to prevent infinite loops
+        let mut visited_scopes = std::collections::HashSet::new();
 
         while let Some(id) = scope {
-            let ctx = &self.ast.scopes.scopes[id.as_usize()];
+            eprintln!("[HIR] Checking scope {:?} (depth={})", id, depth);
+            
+            // Check for circular reference
+            if !visited_scopes.insert(id) {
+                eprintln!("[HIR] ⚠️⚠️⚠️ CIRCULAR SCOPE DETECTED: {:?} ⚠️⚠️⚠️", id);
+                eprintln!("[HIR] Scope chain appears to be circular!");
+                return None;
+            }
+            
+            if depth > max_depth {
+                eprintln!("[HIR] ⚠️⚠️⚠️ MAX DEPTH REACHED - INFINITE LOOP DETECTED ⚠️⚠️⚠️");
+                eprintln!("[HIR] Scope chain appears to be infinite!");
+                return None;
+            }
+            
+            let scope_idx = id.as_usize();
+            if scope_idx >= self.ast.scopes.scopes.len() {
+                eprintln!("[HIR] ⚠️ Scope {:?} out of bounds (len={})", id, self.ast.scopes.scopes.len());
+                break; // Invalid scope - stop searching
+            }
+            let ctx = &self.ast.scopes.scopes[scope_idx];
+            eprintln!("[HIR] Scope {:?} has {} variables", id, ctx.vars.len());
+            
             if let Some(v) = ctx.vars.iter().find(|v| v.name == name) {
+                eprintln!("[HIR] Found variable {} in scope {:?} (id={})", name, id, v.id);
                 return Some(v.id);
             }
+            
+            // Move to parent scope
+            // CRITICAL: Root scope (ScopeId(0)) must never have a parent
+            // If we're at the root scope and it has a parent, stop searching (root is the top)
+            if id == ScopeId(0) && ctx.parent.is_some() {
+                eprintln!("[HIR] ⚠️⚠️⚠️ BUG DETECTED: Root scope has a parent! Stopping search to prevent infinite loop. ⚠️⚠️⚠️");
+                // Root scope shouldn't have a parent - stop searching here
+                break;
+            }
+            
             scope = ctx.parent;
+            eprintln!("[HIR] Moving to parent scope: {:?}", scope);
+            depth += 1;
         }
 
+        eprintln!("[HIR] Variable {} not found after checking {} scopes", name, depth);
         None
     }
 
@@ -270,7 +339,11 @@ impl HirBuilder {
     pub fn get_var_kind(&self, var_id: u32) -> Option<ValueKind> {
         let mut scope = Some(self.current_scope);
         while let Some(scope_id) = scope {
-            let ctx = &self.ast.scopes.scopes[scope_id.as_usize()];
+            let scope_idx = scope_id.as_usize();
+            if scope_idx >= self.ast.scopes.scopes.len() {
+                break; // Invalid scope - stop searching
+            }
+            let ctx = &self.ast.scopes.scopes[scope_idx];
             if let Some(v) = ctx.vars.iter().find(|v| v.id == var_id) {
                 return Some(v.kind.clone());
             }
@@ -403,20 +476,55 @@ impl HirBuilder {
     /// Check if a variable exists only in the current scope (not parent scopes)
     /// Used to allow shadowing: variables can be redeclared in nested scopes
     fn var_exists_in_current_scope(&self, name: &str) -> bool {
-        let ctx = &self.ast.scopes.scopes[self.current_scope.as_usize()];
+        let scope_idx = self.current_scope.as_usize();
+        if scope_idx >= self.ast.scopes.scopes.len() {
+            // Invalid scope - return false to avoid panic
+            return false;
+        }
+        let ctx = &self.ast.scopes.scopes[scope_idx];
         ctx.vars.iter().any(|v| v.name == name)
     }
 
     pub fn init_var(&mut self, name: &str, kind: ValueKind) -> u32 {
+        self.init_var_with_cst_id(name, kind, None)
+    }
+
+    /// Initialize a variable with an optional CST ID for identity tracking.
+    pub fn init_var_with_cst_id(&mut self, name: &str, kind: ValueKind, cst_id: Option<CstId>) -> u32 {
         let id = self.next_var_id;
         self.next_var_id += 1;
 
-        let ctx = &mut self.ast.scopes.scopes[self.current_scope.as_usize()];
+        let scope_idx = self.current_scope.as_usize();
+        // Ensure scope exists - if not, create it (defensive programming for LSP)
+        if scope_idx >= self.ast.scopes.scopes.len() {
+            // This shouldn't happen, but recover gracefully for LSP
+            // Extend scopes vector to include the missing scope
+            while self.ast.scopes.scopes.len() <= scope_idx {
+                let new_scope_idx = self.ast.scopes.scopes.len();
+                // CRITICAL: Root scope (index 0) must have parent: None
+                // All other scopes should have parent pointing to their parent scope
+                // For now, we set parent to None for all new scopes and let process_block set it correctly
+                self.ast.scopes.scopes.push(HirBlockContext {
+                    vars: Vec::new(),
+                    parent: if new_scope_idx == 0 {
+                        None  // Root scope has no parent
+                    } else {
+                        None  // Will be set by process_block or other scope creation code
+                    },
+                });
+            }
+        }
+        let ctx = &mut self.ast.scopes.scopes[scope_idx];
         ctx.vars.push(Variable {
             id,
             name: name.to_string(),
             kind,
         });
+
+        // Phase 3: Bind CST ID to variable symbol ID if provided
+        if let Some(cst_id) = cst_id {
+            self.bind_cst_to_symbol(cst_id, SymbolId(id));
+        }
 
         id
     }
@@ -582,32 +690,47 @@ impl HirBuilder {
                     return output_kind;
                 }
                 
-                // Both are functions/thunks - compose them
-                // f |> g means g(f(x)), so:
-                // - Input type = input type of f
-                // - Output type = output type of g
-                // - Effectfulness: composition is effectful if either function is effectful
-                let first_is_effectful = match &first_kind {
-                    ValueKind::Function(ty) | ValueKind::Thunk(ty) => {
-                        Self::is_effectful_type_string(ty)
+                // Skip if either type is "unknown" - can't compose with unknown types
+                if f_in == "unknown" || g_out == "unknown" {
+                    // Try to infer from structure if types are Unknown
+                    // If both expressions are callable, we can still create a thunk
+                    if matches!(first_kind, ValueKind::Thunk(_) | ValueKind::Function(_) | ValueKind::Callable) &&
+                       matches!(second_kind, ValueKind::Thunk(_) | ValueKind::Function(_) | ValueKind::Callable) {
+                        // Both are callable - create a thunk with unknown types
+                        ValueKind::Thunk(format!("unknown -> unknown"))
+                    } else {
+                        ValueKind::Unknown
                     }
-                    _ => false,
-                };
-                let second_is_effectful = match &second_kind {
-                    ValueKind::Function(ty) | ValueKind::Thunk(ty) => {
-                        Self::is_effectful_type_string(ty)
-                    }
-                    _ => false,
-                };
-                
-                // Composition is effectful if either function is effectful
-                let arrow = if first_is_effectful || second_is_effectful { "~>" } else { "->" };
-                let thunk_type = format!("{} {} {}", f_in, arrow, g_out);
-                ValueKind::Thunk(thunk_type)
+                } else {
+                    // Both are functions/thunks - compose them
+                    // f |> g means g(f(x)), so:
+                    // - Input type = input type of f
+                    // - Output type = output type of g
+                    // - Effectfulness: composition is effectful if either function is effectful
+                    let first_is_effectful = match &first_kind {
+                        ValueKind::Function(ty) | ValueKind::Thunk(ty) => {
+                            Self::is_effectful_type_string(ty)
+                        }
+                        _ => false,
+                    };
+                    let second_is_effectful = match &second_kind {
+                        ValueKind::Function(ty) | ValueKind::Thunk(ty) => {
+                            Self::is_effectful_type_string(ty)
+                        }
+                        _ => false,
+                    };
+                    
+                    // Composition is effectful if either function is effectful
+                    let arrow = if first_is_effectful || second_is_effectful { "~>" } else { "->" };
+                    let thunk_type = format!("{} {} {}", f_in, arrow, g_out);
+                    ValueKind::Thunk(thunk_type)
+                }
             }
             _ => {
                 // If we can't infer from types, check if both expressions are callable
                 // In that case, we can still infer it's a thunk even if we don't know the exact types
+                // This is important for cases like add(?, 5) |> mul(?, 2) where type inference
+                // might fail but the expressions are structurally callable
                 let first_is_callable = matches!(
                     first,
                     HirExpression::PartialCall { .. } |
@@ -625,12 +748,29 @@ impl HirBuilder {
                 
                 if first_is_callable && second_is_callable {
                     // Both are callable - composition is a thunk, even if we can't infer exact types
-                    // Use a generic type
+                    // Use a generic type that allows calling
+                    ValueKind::Thunk("Any ~> Any".to_string())
+                } else if first_is_callable || second_is_callable {
+                    // At least one is callable - still treat as a thunk with generic type
+                    // This handles cases where one side's type inference failed
                     ValueKind::Thunk("Any ~> Any".to_string())
                 } else {
-                    // If we can't infer, return Unknown
-                    // This could happen if one of the expressions isn't a function/thunk
-                    ValueKind::Unknown
+                    // If we can't infer and neither is structurally callable, return Unknown
+                    // But also check if the expressions themselves are PartialCall or ComposeThunk
+                    // (in case infer_variable_kind returned Unknown for a callable expression)
+                    match (first, second) {
+                        (HirExpression::PartialCall { .. }, _) |
+                        (_, HirExpression::PartialCall { .. }) |
+                        (HirExpression::ComposeThunk { .. }, _) |
+                        (_, HirExpression::ComposeThunk { .. }) => {
+                            // At least one is a PartialCall or ComposeThunk - treat as callable
+                            ValueKind::Thunk("Any ~> Any".to_string())
+                        }
+                        _ => {
+                            // If we can't infer, return Unknown
+                            ValueKind::Unknown
+                        }
+                    }
                 }
             }
         }
@@ -860,26 +1000,38 @@ impl HirBuilder {
         let (func_id, _) = self.ast.functions.iter().find(|(_, f)| f.name == name)?;
 
         // 3. Check module ownership
+        // If current_module is set, check if the function belongs to it (or is a local function)
         if let Some(current_module) = &self.current_module {
-            // If function belongs to current module → allowed
+            // Check if function is explicitly registered in current module's pub functions
             if let Some(module) = self.modules.get(current_module) {
                 if module.functions.values().any(|&id| id == *func_id) {
                     return Some(*func_id);
                 }
             }
+            // For __main__ module, all functions in ast.functions are available (even if not pub)
+            // This handles the case where functions are defined in the same file
+            if current_module == "__main__" {
+                return Some(*func_id);
+            }
         }
 
-        // 4. Otherwise, function must be imported
-        let belongs_to_some_module = self
+        // 4. Check if function belongs to a different module (must be imported)
+        let current_module_name = self.current_module.as_deref();
+        let belongs_to_other_module = self
             .modules
-            .values()
-            .any(|module| module.functions.values().any(|&id| id == *func_id));
+            .iter()
+            .any(|(module_name, module)| {
+                Some(module_name.as_str()) != current_module_name
+                    && module.functions.values().any(|&id| id == *func_id)
+            });
 
-        if belongs_to_some_module {
+        if belongs_to_other_module {
+            // Function belongs to another module and must be imported
             return None;
         }
 
-        // 5. Local or built-in function
+        // 5. Local function (no module, or in current file but not explicitly in module map)
+        // This handles non-pub functions and functions defined before module declaration
         Some(*func_id)
     }
 
@@ -1005,7 +1157,10 @@ impl HirBuilder {
         let module = self
             .modules
             .get(&module_path)
-            .ok_or_else(|| HirError::TypeError(format!("Module '{}' not found", module_path)))?;
+            .ok_or_else(|| HirError::ModuleNotFound {
+                module_path: module_path.clone(),
+                span: HirError::synthetic_span(),
+            })?;
 
         let mut imports = ImportTable::new();
 
@@ -1022,10 +1177,10 @@ impl HirBuilder {
                     // The struct handling code (after resolve_import) will copy them to ast.structs
                     // So we just skip them here without error
                 } else {
-                    return Err(HirError::TypeError(format!(
-                        "Function, constant, or struct '{}' not found in module '{}'",
-                        name, module_path
-                    )));
+                    return Err(HirError::FunctionNotFound {
+                        name: name.clone(),
+                        span: HirError::synthetic_span(),
+                    });
                 }
             }
             crate::core::ast::ImportSelector::Multiple(names) => {
@@ -1041,10 +1196,10 @@ impl HirBuilder {
                         // The struct handling code (after resolve_import) will copy them to ast.structs
                         // So we just skip them here without error
                     } else {
-                        return Err(HirError::TypeError(format!(
-                            "Function, constant, or struct '{}' not found in module '{}'",
-                            name, module_path
-                        )));
+                        return Err(HirError::FunctionNotFound {
+                            name: name.clone(),
+                            span: HirError::synthetic_span(),
+                        });
                     }
                 }
             }
@@ -1262,6 +1417,7 @@ impl HirBuilder {
                         rhs_type: rhs_type.clone(),
                         expected: "Number or String (supports string + number concatenation)"
                             .to_string(),
+                        span: HirError::synthetic_span(),
                     });
                 }
             }
@@ -1282,6 +1438,7 @@ impl HirBuilder {
                         lhs_type: lhs_type.clone(),
                         rhs_type: rhs_type.clone(),
                         expected: "Number".to_string(),
+                        span: HirError::synthetic_span(),
                     });
                 }
             }
@@ -1299,6 +1456,7 @@ impl HirBuilder {
                         lhs_type: lhs_type.clone(),
                         rhs_type: rhs_type.clone(),
                         expected: "Boolean".to_string(),
+                        span: HirError::synthetic_span(),
                     });
                 }
             }
@@ -1330,6 +1488,7 @@ impl HirBuilder {
                             Self::format_value_kind(lhs_type),
                             Self::format_value_kind(rhs_type)
                         ),
+                        span: HirError::synthetic_span(),
                     });
                 }
             }
@@ -1433,10 +1592,28 @@ impl HirBuilder {
             "build_append called without current_module set"
         );
 
-        for block in program.blocks {
+        let total_blocks = program.blocks.len();
+        eprintln!("[HIR] build_append: processing {} blocks", total_blocks);
+        let mut block_counter = 0;
+        const MAX_BLOCKS: usize = 1000; // Safety limit
+        
+        for (block_idx, block) in program.blocks.into_iter().enumerate() {
+            block_counter += 1;
+            if block_counter > MAX_BLOCKS {
+                eprintln!("[HIR] ERROR: Infinite loop detected - processed {} blocks, aborting", block_counter);
+                return Err(HirError::TypeError {
+                    message: format!("HIR builder infinite loop: processed {} blocks (max: {})", block_counter, MAX_BLOCKS),
+                    span: HirError::synthetic_span(),
+                });
+            }
+            
+            eprintln!("[HIR] Processing block {}/{} ({} statements)", 
+                block_idx + 1, total_blocks, block.statements.len());
             let hir_block = self.process_block(ctx, block)?;
+            eprintln!("[HIR] Block {} processed successfully", block_idx + 1);
             self.ast.blocks.push(hir_block);
         }
+        eprintln!("[HIR] build_append completed: processed {} blocks", block_counter);
         Ok(())
     }
 
@@ -1500,6 +1677,7 @@ impl HirBuilder {
     }
 
     fn process_block(&mut self, ctx: &crate::core::compileSession::CompileContext, block: Block) -> Result<HirBlock, HirError> {
+
         let parent = self.current_scope;
 
         let is_top_level = self.current_scope == ScopeId(0);
@@ -1511,24 +1689,90 @@ impl HirBuilder {
         };
 
         if !is_top_level {
+            // CRITICAL: Root scope (ScopeId(0)) must always have parent: None
+            // When creating a child scope of the root scope, parent should be Some(ScopeId(0))
+            // But we must NEVER modify the root scope's own parent field
             self.ast.scopes.scopes.push(HirBlockContext {
                 vars: Vec::new(),
                 parent: Some(parent),
             });
+            
+            // CRITICAL: Ensure root scope always has parent: None (defensive check)
+            // This prevents the circular reference bug where root scope points to itself
+            if self.ast.scopes.scopes.len() > 0 {
+                let root_ctx = &mut self.ast.scopes.scopes[0];
+                if root_ctx.parent != None {
+                    eprintln!("[HIR] ⚠️ FIXING: Root scope had parent {:?}, setting to None", root_ctx.parent);
+                    root_ctx.parent = None;
+                }
+            }
         }
 
         self.current_scope = new_scope;
+
+        eprintln!(
+            "[HIR] process_block entered: scope={:?}, block_ptr={:p}, stmt_count={}",
+            new_scope,
+            &block,
+            block.statements.len()
+        );
 
         let mut hir_block = HirBlock {
             scope: new_scope,
             statements: Vec::new(),
         };
 
-        for stmt in block.statements {
+        let total_statements = block.statements.len();
+        eprintln!("[HIR] process_block: processing {} statements in scope {:?}", total_statements, new_scope);
+        let mut stmt_counter = 0;
+        const MAX_STATEMENTS: usize = 10_000; // Safety limit
+        
+        for (stmt_idx, stmt) in block.statements.into_iter().enumerate() {
+            stmt_counter += 1;
+            if stmt_counter > MAX_STATEMENTS {
+                eprintln!("[HIR] ERROR: Infinite loop in process_block - processed {} statements, aborting", stmt_counter);
+                return Err(HirError::TypeError {
+                    message: format!("HIR builder infinite loop in process_block: processed {} statements (max: {})", stmt_counter, MAX_STATEMENTS),
+                    span: HirError::synthetic_span(),
+                });
+            }
+            
+            eprintln!("[HIR] Processing statement {}/{}", stmt_idx + 1, total_statements);
+            
+            // CRITICAL: Log statement type to identify which one is hanging
+            eprintln!("[HIR] Statement type: {}", match &stmt {
+                Statement::Let { .. } => "Let",
+                Statement::Const { .. } => "Const",
+                Statement::Return { .. } => "Return",
+                Statement::FunctionDeclaration { .. } => "FunctionDeclaration",
+                Statement::Expression(_) => "Expression",
+                Statement::If { .. } => "If",
+                Statement::Loop { .. } => "Loop",
+                Statement::While { .. } => "While",
+                Statement::For { .. } => "For",
+                Statement::Break { .. } => "Break",
+                Statement::Continue => "Continue",
+                Statement::Match { .. } => "Match",
+                Statement::Assign { .. } => "Assign",
+                Statement::AssignIncrement { .. } => "AssignIncrement",
+                Statement::AssignDecrement { .. } => "AssignDecrement",
+                Statement::Use { .. } => "Use",
+                Statement::Mod { .. } => "Mod",
+                Statement::Struct { .. } => "Struct",
+            });
+            
+            let start = std::time::Instant::now();
             let hir = self.process_statement(ctx, stmt)?;
+            let duration = start.elapsed();
+            
+            eprintln!("[HIR] Statement {}/{} processed in {:?}", stmt_idx + 1, total_statements, duration);
+            if duration > std::time::Duration::from_millis(100) {
+                eprintln!("[HIR] ⚠️ SLOW STATEMENT: took {:?}", duration);
+            }
 
             hir_block.statements.push(hir);
         }
+        eprintln!("[HIR] process_block completed: processed {} statements", stmt_counter);
 
         self.current_scope = parent;
         Ok(hir_block)
@@ -1550,10 +1794,10 @@ impl HirBuilder {
             match self.resolve_var(&identifier) {
                 Some(id) => {
                     let expected_kind = self.get_var_kind(id).ok_or_else(|| {
-                        HirError::UnknownVariable(format!(
-                            "Variable '{}' not found in scope",
-                            identifier
-                        ))
+                        HirError::UnknownVariable {
+                            name: identifier.clone(),
+                            span: HirError::synthetic_span(),
+                        }
                     })?;
 
                     if !Self::check_type_compatibility(&expected_kind, &actual_kind) {
@@ -1561,24 +1805,25 @@ impl HirBuilder {
                             variable: identifier,
                             expected: expected_kind,
                             actual: actual_kind,
+                            span: HirError::synthetic_span(),
                         });
                     }
                     id
                 }
                 None => {
-                    return Err(HirError::UnknownVariable(format!(
-                        "Variable '{}' is not declared. Use 'let' to declare a new variable.",
-                        identifier
-                    )));
+                    return Err(HirError::UnknownVariable {
+                        name: identifier,
+                        span: HirError::synthetic_span(),
+                    });
                 }
             }
         } else {
             // For let, variable must not already exist in the current scope
             if self.var_exists_in_current_scope(&identifier) {
-                return Err(HirError::VariableAlreadyDeclared(format!(
-                    "Variable '{}' is already declared",
-                    identifier
-                )));
+                return Err(HirError::VariableAlreadyDeclared {
+                    name: identifier,
+                    span: HirError::synthetic_span(),
+                });
             }
             self.init_var(&identifier, actual_kind)
         };
@@ -1589,7 +1834,7 @@ impl HirBuilder {
     /// Process a const statement - must be compile-time evaluable
     fn process_const_statement(
         &mut self,
-        identifier: String,
+        identifier: crate::core::ast::AstIdent,
         expression: Expression,
         pub_visibility: bool,
     ) -> Result<HirStmt, HirError> {
@@ -1602,18 +1847,19 @@ impl HirBuilder {
             ConstantValue::String(_) => ValueKind::String,
             ConstantValue::Boolean(_) => ValueKind::Boolean,
             ConstantValue::None => {
-                return Err(HirError::TypeError(
-                    "Constant must have a compile-time evaluable value".to_string(),
-                ))
+                return Err(HirError::TypeError {
+                    message: "Constant must have a compile-time evaluable value".to_string(),
+                    span: HirError::synthetic_span(),
+                })
             }
         };
 
         // Variable must not already exist in current scope
-        if self.var_exists_in_current_scope(&identifier) {
-            return Err(HirError::VariableAlreadyDeclared(format!(
-                "Constant '{}' is already declared",
-                identifier
-            )));
+        if self.var_exists_in_current_scope(&identifier.name) {
+            return Err(HirError::VariableAlreadyDeclared {
+                name: identifier.name.clone(),
+                span: HirError::synthetic_span(),
+            });
         }
 
         // Create a constant entry
@@ -1626,7 +1872,7 @@ impl HirBuilder {
         } else {
             self.ast.constants.push(Constant {
                 id: const_id,
-                name: identifier.clone(),
+                name: identifier.name.clone(),
                 kind: kind.clone(),
                 value: constant_value,
             });
@@ -1634,8 +1880,12 @@ impl HirBuilder {
             const_id
         };
 
+        // Phase 3: Bind CST ID to constant symbol ID
+        self.bind_cst_to_symbol(identifier.cst_id, SymbolId(const_id));
+
         // Create a variable for the constant (so it can be referenced)
-        let slot = self.init_var(&identifier, kind);
+        // Phase 3: Use init_var_with_cst_id to bind CST ID (constant already bound above)
+        let slot = self.init_var_with_cst_id(&identifier.name, kind, Some(identifier.cst_id));
 
         // Register pub constants in the module registry
         // Store constant ID (not variable slot ID) - imports need the constant, not the storage
@@ -1650,7 +1900,7 @@ impl HirBuilder {
                         imports: HashMap::new(),
                     })
                     .constants
-                    .insert(identifier.clone(), const_id);
+                    .insert(identifier.name.clone(), const_id);
             }
         }
 
@@ -1675,23 +1925,26 @@ impl HirBuilder {
                     Literal::Boolean(b) => ConstantValue::Boolean(*b),
                 })
             }
-            Expression::Identifier(name) => {
+            Expression::Identifier(ident) => {
                 // Look up constant by name
-                if let Some(const_id) = self.resolve_const(name) {
+                if let Some(const_id) = self.resolve_const(&ident.name) {
                     // Find the constant value
                     if let Some(constant) = self.ast.constants.iter().find(|c| c.id == const_id) {
                         Ok(constant.value.clone())
                     } else {
-                        Err(HirError::TypeError(format!(
-                            "Constant '{}' not found",
-                            name
-                        )))
+                        Err(HirError::FunctionNotFound {
+                            name: ident.name.clone(),
+                            span: HirError::synthetic_span(),
+                        })
                     }
                 } else {
-                    Err(HirError::TypeError(format!(
-                        "Constant expression cannot reference variable '{}'. Only constants can be referenced in constant expressions.",
-                        name
-                    )))
+                    Err(HirError::TypeError {
+                        message: format!(
+                            "Constant expression cannot reference variable '{}'. Only constants can be referenced in constant expressions.",
+                            ident.name
+                        ),
+                        span: HirError::synthetic_span(),
+                    })
                 }
             }
             Expression::Infix { lhs, op, rhs } => {
@@ -1707,9 +1960,10 @@ impl HirBuilder {
                 self.compile_time_evaluate(inner)
             }
             _ => {
-                Err(HirError::TypeError(format!(
-                    "Constant expression must be compile-time evaluable. Expressions like function calls, loops, and member access are not allowed in constant declarations."
-                )))
+                Err(HirError::TypeError {
+                    message: "Constant expression must be compile-time evaluable. Expressions like function calls, loops, and member access are not allowed in constant declarations.".to_string(),
+                    span: HirError::synthetic_span(),
+                })
             }
         }
     }
@@ -1735,65 +1989,67 @@ impl HirBuilder {
                 (ConstantValue::Number(a), ConstantValue::String(b)) => {
                     Ok(ConstantValue::String(format!("{}{}", a, b)))
                 }
-                _ => Err(HirError::TypeError(format!(
-                    "Invalid operands for addition: {:?} and {:?}",
-                    lhs, rhs
-                ))),
+                _ => Err(HirError::TypeError {
+                    message: format!("Invalid operands for addition: {:?} and {:?}", lhs, rhs),
+                    span: HirError::synthetic_span(),
+                }),
             },
             BinaryOp::Sub => match (lhs, rhs) {
                 (ConstantValue::Number(a), ConstantValue::Number(b)) => {
                     Ok(ConstantValue::Number(a - b))
                 }
-                _ => Err(HirError::TypeError(format!(
-                    "Subtraction requires number operands, got {:?} and {:?}",
-                    lhs, rhs
-                ))),
+                _ => Err(HirError::TypeError {
+                    message: format!("Subtraction requires number operands, got {:?} and {:?}", lhs, rhs),
+                    span: HirError::synthetic_span(),
+                }),
             },
             BinaryOp::Mul => match (lhs, rhs) {
                 (ConstantValue::Number(a), ConstantValue::Number(b)) => {
                     Ok(ConstantValue::Number(a * b))
                 }
-                _ => Err(HirError::TypeError(format!(
-                    "Multiplication requires number operands, got {:?} and {:?}",
-                    lhs, rhs
-                ))),
+                _ => Err(HirError::TypeError {
+                    message: format!("Multiplication requires number operands, got {:?} and {:?}", lhs, rhs),
+                    span: HirError::synthetic_span(),
+                }),
             },
             BinaryOp::Div => match (lhs, rhs) {
                 (ConstantValue::Number(a), ConstantValue::Number(b)) => {
                     if *b == 0.0 {
-                        return Err(HirError::TypeError(
-                            "Division by zero in constant expression".to_string(),
-                        ));
+                        return Err(HirError::TypeError {
+                            message: "Division by zero in constant expression".to_string(),
+                            span: HirError::synthetic_span(),
+                        });
                     }
                     Ok(ConstantValue::Number(a / b))
                 }
-                _ => Err(HirError::TypeError(format!(
-                    "Division requires number operands, got {:?} and {:?}",
-                    lhs, rhs
-                ))),
+                _ => Err(HirError::TypeError {
+                    message: format!("Division requires number operands, got {:?} and {:?}", lhs, rhs),
+                    span: HirError::synthetic_span(),
+                }),
             },
             BinaryOp::Mod => match (lhs, rhs) {
                 (ConstantValue::Number(a), ConstantValue::Number(b)) => {
                     if *b == 0.0 {
-                        return Err(HirError::TypeError(
-                            "Modulo by zero in constant expression".to_string(),
-                        ));
+                        return Err(HirError::TypeError {
+                            message: "Modulo by zero in constant expression".to_string(),
+                            span: HirError::synthetic_span(),
+                        });
                     }
                     Ok(ConstantValue::Number(a % b))
                 }
-                _ => Err(HirError::TypeError(format!(
-                    "Modulo requires number operands, got {:?} and {:?}",
-                    lhs, rhs
-                ))),
+                _ => Err(HirError::TypeError {
+                    message: format!("Modulo requires number operands, got {:?} and {:?}", lhs, rhs),
+                    span: HirError::synthetic_span(),
+                }),
             },
             BinaryOp::Pow => match (lhs, rhs) {
                 (ConstantValue::Number(a), ConstantValue::Number(b)) => {
                     Ok(ConstantValue::Number(a.powf(*b)))
                 }
-                _ => Err(HirError::TypeError(format!(
-                    "Power requires number operands, got {:?} and {:?}",
-                    lhs, rhs
-                ))),
+                _ => Err(HirError::TypeError {
+                    message: format!("Power requires number operands, got {:?} and {:?}", lhs, rhs),
+                    span: HirError::synthetic_span(),
+                }),
             },
             BinaryOp::Eq => Ok(ConstantValue::Boolean(lhs == rhs)),
             BinaryOp::Ne => Ok(ConstantValue::Boolean(lhs != rhs)),
@@ -1801,55 +2057,55 @@ impl HirBuilder {
                 (ConstantValue::Number(a), ConstantValue::Number(b)) => {
                     Ok(ConstantValue::Boolean(a > b))
                 }
-                _ => Err(HirError::TypeError(format!(
-                    "Comparison requires number operands, got {:?} and {:?}",
-                    lhs, rhs
-                ))),
+                _ => Err(HirError::TypeError {
+                    message: format!("Comparison requires number operands, got {:?} and {:?}", lhs, rhs),
+                    span: HirError::synthetic_span(),
+                }),
             },
             BinaryOp::Lt => match (lhs, rhs) {
                 (ConstantValue::Number(a), ConstantValue::Number(b)) => {
                     Ok(ConstantValue::Boolean(a < b))
                 }
-                _ => Err(HirError::TypeError(format!(
-                    "Comparison requires number operands, got {:?} and {:?}",
-                    lhs, rhs
-                ))),
+                _ => Err(HirError::TypeError {
+                    message: format!("Comparison requires number operands, got {:?} and {:?}", lhs, rhs),
+                    span: HirError::synthetic_span(),
+                }),
             },
             BinaryOp::Ge => match (lhs, rhs) {
                 (ConstantValue::Number(a), ConstantValue::Number(b)) => {
                     Ok(ConstantValue::Boolean(a >= b))
                 }
-                _ => Err(HirError::TypeError(format!(
-                    "Comparison requires number operands, got {:?} and {:?}",
-                    lhs, rhs
-                ))),
+                _ => Err(HirError::TypeError {
+                    message: format!("Comparison requires number operands, got {:?} and {:?}", lhs, rhs),
+                    span: HirError::synthetic_span(),
+                }),
             },
             BinaryOp::Le => match (lhs, rhs) {
                 (ConstantValue::Number(a), ConstantValue::Number(b)) => {
                     Ok(ConstantValue::Boolean(a <= b))
                 }
-                _ => Err(HirError::TypeError(format!(
-                    "Comparison requires number operands, got {:?} and {:?}",
-                    lhs, rhs
-                ))),
+                _ => Err(HirError::TypeError {
+                    message: format!("Comparison requires number operands, got {:?} and {:?}", lhs, rhs),
+                    span: HirError::synthetic_span(),
+                }),
             },
             BinaryOp::And => match (lhs, rhs) {
                 (ConstantValue::Boolean(a), ConstantValue::Boolean(b)) => {
                     Ok(ConstantValue::Boolean(*a && *b))
                 }
-                _ => Err(HirError::TypeError(format!(
-                    "Logical AND requires boolean operands, got {:?} and {:?}",
-                    lhs, rhs
-                ))),
+                _ => Err(HirError::TypeError {
+                    message: format!("Logical AND requires boolean operands, got {:?} and {:?}", lhs, rhs),
+                    span: HirError::synthetic_span(),
+                }),
             },
             BinaryOp::Or => match (lhs, rhs) {
                 (ConstantValue::Boolean(a), ConstantValue::Boolean(b)) => {
                     Ok(ConstantValue::Boolean(*a || *b))
                 }
-                _ => Err(HirError::TypeError(format!(
-                    "Logical OR requires boolean operands, got {:?} and {:?}",
-                    lhs, rhs
-                ))),
+                _ => Err(HirError::TypeError {
+                    message: format!("Logical OR requires boolean operands, got {:?} and {:?}", lhs, rhs),
+                    span: HirError::synthetic_span(),
+                }),
             },
         }
     }
@@ -1863,21 +2119,22 @@ impl HirBuilder {
         match op {
             UnaryOp::Neg => match rhs {
                 ConstantValue::Number(n) => Ok(ConstantValue::Number(-n)),
-                _ => Err(HirError::TypeError(format!(
-                    "Negation requires number operand, got {:?}",
-                    rhs
-                ))),
+                _ => Err(HirError::TypeError {
+                    message: format!("Negation requires number operand, got {:?}", rhs),
+                    span: HirError::synthetic_span(),
+                }),
             },
             UnaryOp::Not => match rhs {
                 ConstantValue::Boolean(b) => Ok(ConstantValue::Boolean(!b)),
-                _ => Err(HirError::TypeError(format!(
-                    "Logical NOT requires boolean operand, got {:?}",
-                    rhs
-                ))),
+                _ => Err(HirError::TypeError {
+                    message: format!("Logical NOT requires boolean operand, got {:?}", rhs),
+                    span: HirError::synthetic_span(),
+                }),
             },
-            UnaryOp::Increment | UnaryOp::Decrement => Err(HirError::TypeError(format!(
-                "Increment/decrement operations are not allowed in constant expressions"
-            ))),
+            UnaryOp::Increment | UnaryOp::Decrement => Err(HirError::TypeError {
+                message: "Increment/decrement operations are not allowed in constant expressions".to_string(),
+                span: HirError::synthetic_span(),
+            }),
         }
     }
 
@@ -1895,7 +2152,7 @@ impl HirBuilder {
     fn process_let_statement(
         &mut self,
         ctx: &crate::core::compileSession::CompileContext,
-        identifier: String,
+        identifier: crate::core::ast::AstIdent,
         type_annotation: Option<String>,
         expression: Expression,
     ) -> Result<HirStmt, HirError> {
@@ -1928,9 +2185,10 @@ impl HirBuilder {
             let parsed_kind = self.parse_type_string(type_ann);
             if !Self::check_type_compatibility(&parsed_kind, &actual_kind) {
                 return Err(HirError::TypeMismatch {
-                    variable: identifier.clone(),
+                    variable: identifier.name.clone(),
                     expected: parsed_kind,
                     actual: actual_kind,
+                    span: HirError::synthetic_span(),
                 });
             }
             parsed_kind
@@ -1939,14 +2197,15 @@ impl HirBuilder {
         };
 
         // Variable must not already exist in current scope (allows shadowing)
-        if self.var_exists_in_current_scope(&identifier) {
-            return Err(HirError::VariableAlreadyDeclared(format!(
-                "Variable '{}' is already declared",
-                identifier
-            )));
+        if self.var_exists_in_current_scope(&identifier.name) {
+            return Err(HirError::VariableAlreadyDeclared {
+                name: identifier.name.clone(),
+                span: HirError::synthetic_span(),
+            });
         }
 
-        let slot = self.init_var(&identifier, expected_kind);
+        // Phase 3: Initialize variable with CST ID for identity tracking
+        let slot = self.init_var_with_cst_id(&identifier.name, expected_kind, Some(identifier.cst_id));
         
         // Track if this variable contains a closure
         if let HirExpression::Closure { function_id } = expr {
@@ -2053,7 +2312,7 @@ impl HirBuilder {
     fn process_function_declaration_statement(
         &mut self,
         ctx: &crate::core::compileSession::CompileContext,
-        identifier: String,
+        identifier: crate::core::ast::AstIdent,
         arguments: Vec<Argument>,
         return_type: Option<String>,
         body: Block,
@@ -2110,7 +2369,7 @@ impl HirBuilder {
         let mut param_var_ids = Vec::new();
         for arg in &arguments {
             let param_kind = self.parse_type_string(&arg.kind);
-            let var_id = self.init_var(&arg.identifier, param_kind);
+            let var_id = self.init_var(&arg.identifier.name, param_kind);
             param_var_ids.push(var_id);
         }
 
@@ -2127,12 +2386,15 @@ impl HirBuilder {
 
         let function = Function {
             id: func_id,
-            name: identifier.clone(),
+            name: identifier.name.clone(),
             signature,
             definition: placeholder_def,
         };
 
         self.ast.functions.insert(func_id, function);
+
+        // Phase 3: Bind CST ID to function symbol ID
+        self.bind_cst_to_symbol(identifier.cst_id, SymbolId(func_id));
 
         // Register pub functions in the module registry
         if pub_visibility {
@@ -2146,7 +2408,7 @@ impl HirBuilder {
                         imports: HashMap::new(),
                     })
                     .functions
-                    .insert(identifier.clone(), func_id);
+                    .insert(identifier.name.clone(), func_id);
             }
         }
 
@@ -2167,8 +2429,32 @@ impl HirBuilder {
 
     /// Process a return statement
     fn process_return_statement(&mut self, ctx: &crate::core::compileSession::CompileContext, expression: Expression) -> Result<HirStmt, HirError> {
-        let expr = self.process_expression(ctx, expression)?;
-        Ok(HirStmt::Return { value: expr })
+        eprintln!("[HIR] Processing Return statement...");
+        eprintln!("[HIR] Return expression type: {:?}", std::any::type_name_of_val(&expression));
+        
+        // CRITICAL: The hang is likely in process_expression
+        eprintln!("[HIR] About to process return expression...");
+        let start = std::time::Instant::now();
+        let expr_result = self.process_expression(ctx, expression);
+        let duration = start.elapsed();
+        
+        eprintln!("[HIR] Return expression processed in {:?}: {:?}", duration, 
+            if expr_result.is_ok() { "Ok" } else { "Err" });
+        
+        if duration > std::time::Duration::from_millis(100) {
+            eprintln!("[HIR] ⚠️ SLOW RETURN EXPRESSION: took {:?}", duration);
+        }
+        
+        match expr_result {
+            Ok(hir_expr) => {
+                eprintln!("[HIR] Return statement created successfully");
+                Ok(HirStmt::Return { value: hir_expr })
+            }
+            Err(e) => {
+                eprintln!("[HIR] Error processing return expression: {:?}", e);
+                Err(e)
+            }
+        }
     }
 
     /// Process a while statement
@@ -2416,6 +2702,7 @@ impl HirBuilder {
                 return_type,
                 body,
                 pub_visibility,
+                cst_id: _,
             } => self.process_function_declaration_statement(
                 ctx,
                 identifier,
@@ -2456,7 +2743,10 @@ impl HirBuilder {
                 let module = self
                     .modules
                     .get(&module_path)
-                    .ok_or_else(|| HirError::TypeError(format!("Module '{}' not found", module_path)))?;
+                    .ok_or_else(|| HirError::ModuleNotFound {
+                module_path: module_path.clone(),
+                span: HirError::synthetic_span(),
+            })?;
 
                 let imports = self.resolve_import(&path, &selector)?;
 
@@ -2466,10 +2756,10 @@ impl HirBuilder {
                         if let Some(struct_def) = module.structs.get(&name) {
                             // Copy struct definition to HirAst.structs
                             if self.ast.structs.contains_key(&name) {
-                                return Err(HirError::TypeError(format!(
-                                    "Struct '{}' already defined",
-                                    name
-                                )));
+                                return Err(HirError::TypeError {
+                                    message: format!("Struct '{}' already defined", name),
+                                    span: HirError::synthetic_span(),
+                                });
                             }
                             self.ast.structs.insert(name.clone(), struct_def.clone());
                         }
@@ -2479,10 +2769,10 @@ impl HirBuilder {
                             if let Some(struct_def) = module.structs.get(&name) {
                                 // Copy struct definition to HirAst.structs
                                 if self.ast.structs.contains_key(&name) {
-                                    return Err(HirError::TypeError(format!(
-                                        "Struct '{}' already defined",
-                                        name
-                                    )));
+                                return Err(HirError::TypeError {
+                                    message: format!("Struct '{}' already defined", name),
+                                    span: HirError::synthetic_span(),
+                                });
                                 }
                                 self.ast.structs.insert(name.clone(), struct_def.clone());
                             }
@@ -2492,10 +2782,10 @@ impl HirBuilder {
                         // Import all structs from the module
                         for (name, struct_def) in &module.structs {
                             if self.ast.structs.contains_key(name) {
-                                return Err(HirError::TypeError(format!(
-                                    "Struct '{}' already defined",
-                                    name
-                                )));
+                                return Err(HirError::TypeError {
+                                    message: format!("Struct '{}' already defined", name),
+                                    span: HirError::synthetic_span(),
+                                });
                             }
                             self.ast.structs.insert(name.clone(), struct_def.clone());
                         }
@@ -2506,11 +2796,14 @@ impl HirBuilder {
                     // Check for duplicate imports within THIS module only
                     if let Some(existing_imports) = self.get_current_imports() {
                         if existing_imports.contains_key(&name) {
-                            return Err(HirError::TypeError(format!(
-                                "Symbol '{}' already imported in module '{}'",
-                                name,
-                                self.current_module.as_ref().unwrap()
-                            )));
+                            return Err(HirError::TypeError {
+                                message: format!(
+                                    "Symbol '{}' already imported in module '{}'",
+                                    name,
+                                    self.current_module.as_ref().unwrap()
+                                ),
+                                span: HirError::synthetic_span(),
+                            });
                         }
                     }
 
@@ -2586,16 +2879,35 @@ impl HirBuilder {
 
         // Check if it's a function (should error - can't use ! on functions)
         if self.resolve_function(ctx, &identifier).is_some() {
-            return Err(HirError::TypeError(format!(
-                "Cannot use thunk invocation syntax '{}!' on a function. Use '{}' with parentheses to call the function.",
-                identifier, identifier
-            )));
+            return Err(HirError::TypeError {
+                message: format!(
+                    "Cannot use thunk invocation syntax '{}!' on a function. Use '{}' with parentheses to call the function.",
+                    identifier, identifier
+                ),
+                span: HirError::synthetic_span(),
+            });
         }
 
-        Err(HirError::UnknownVariable(format!(
-            "{} is not a variable or function",
-            identifier
-        )))
+        Err(HirError::UnknownVariable {
+            name: identifier.clone(),
+            span: HirError::synthetic_span(),
+        })
+    }
+
+    /// Extract CstId from an expression if available.
+    /// 
+    /// For synthetic AST nodes created during transformations (e.g., pipe operators),
+    /// we try to extract the CstId from the callee expression to maintain identity tracking.
+    /// Returns CstId::new(0) if no CstId is available (synthetic nodes without source).
+    fn extract_cst_id_from_expr(expr: &Expression) -> crate::core::cst::CstId {
+        match expr {
+            Expression::Identifier(ident) => ident.cst_id,
+            Expression::MemberAccess { cst_id, .. } => *cst_id,
+            Expression::FunctionCall { cst_id, .. } => *cst_id,
+            Expression::StructInit { cst_id, .. } => *cst_id,
+            Expression::FieldAccess { cst_id, .. } => *cst_id,
+            _ => crate::core::cst::CstId::new(0), // No CstId available - this is a synthetic node
+        }
     }
 
     /// Process PostfixInvoke when lhs is a FunctionCall
@@ -2606,9 +2918,12 @@ impl HirBuilder {
         fc_args: Vec<Expression>,
         invoke_args: Option<Vec<Expression>>,
     ) -> Result<HirExpression, HirError> {
+        // Extract CstId from callee if available (for synthetic nodes created during transformations)
+        let cst_id = Self::extract_cst_id_from_expr(&callee);
         let func_expr = self.process_expression(ctx, Expression::FunctionCall {
             callee,
             arguments: fc_args,
+            cst_id, // Use extracted CstId or CstId::new(0) for fully synthetic nodes
         })?;
 
         match func_expr {
@@ -2622,8 +2937,7 @@ impl HirBuilder {
                 Ok(HirExpression::FunctionCall {
                     function_id,
                     args: processed_args,
-                    invoke: true,
-                })
+                    invoke: true})
             }
             HirExpression::PostfixInvoke {
                 operand,
@@ -2739,18 +3053,33 @@ impl HirBuilder {
     /// Process a member access expression (e.g., utils.add)
     fn process_member_access_expression(
         &mut self,
+        ctx: &crate::core::compileSession::CompileContext,
         object: Expression,
         member: String,
     ) -> Result<HirExpression, HirError> {
+        // First, check if the object is an identifier that resolves to a variable
+        // If so, this is a struct field access, not a module member access
+        if let Expression::Identifier(ident) = &object {
+            // Check if it's a variable (struct instance) first
+            if self.resolve_var_aggressive(&ident.name).is_some() {
+                // It's a variable - treat as field access
+                let base_expr = self.process_expression(ctx, object)?;
+                return Ok(HirExpression::FieldAccess {
+                    base: Box::new(base_expr),
+                    field_name: member,
+                });
+            }
+        }
+
         // The object should be an identifier (module name)
         // We extract the name directly without processing it, since modules aren't values
         let module_name = match object {
-            Expression::Identifier(name) => name,
+            Expression::Identifier(ident) => ident.name.clone(),
             _ => {
-                return Err(HirError::TypeError(format!(
-                    "Member access object must be an identifier (module name), got: {:?}",
-                    object
-                )));
+                return Err(HirError::TypeError {
+                    message: format!("Member access object must be an identifier (module name), got: {:?}", object),
+                    span: HirError::synthetic_span(),
+                });
             }
         };
 
@@ -2758,33 +3087,40 @@ impl HirBuilder {
         let module = self
             .modules
             .get(&module_name)
-            .ok_or_else(|| HirError::TypeError(format!("Module '{}' not found", module_name)))?;
+            .ok_or_else(|| HirError::ModuleNotFound {
+                module_path: module_name.clone(),
+                span: HirError::synthetic_span(),
+            })?;
 
         // Look up the member in the module
+        // member is already String (passed as member.name from call site at line 3841)
         if let Some(function_id) = module.functions.get(&member) {
             // It's a function - return a FunctionCall with empty args
             // The actual arguments will be added by process_function_call_expression
             Ok(HirExpression::FunctionCall {
                 function_id: *function_id,
                 args: Vec::new(),
-                invoke: false,
-            })
+                invoke: false})
         } else if let Some(constant_id) = module.constants.get(&member) {
             // It's a constant - return the constant ID directly
             // The constant ID is stored in modules.constants (not variable slot ID)
             Ok(HirExpression::Constant(*constant_id))
         } else if module.structs.contains_key(&member) {
             // It's a struct type - structs can't be used as values, only as types
-            Err(HirError::TypeError(format!(
-                "'{}' is a struct type in module '{}' and cannot be used as a value. Use it in type annotations or struct initialization.",
-                member, module_name
-            )))
+            Err(HirError::TypeError {
+                message: format!(
+                    "'{}' is a struct type in module '{}' and cannot be used as a value. Use it in type annotations or struct initialization.",
+                    member, module_name
+                ),
+                span: HirError::synthetic_span(),
+            })
         } else {
             // TODO: Also check variables
-            Err(HirError::TypeError(format!(
-                "Member '{}' not found in module '{}'",
-                member, module_name
-            )))
+            Err(HirError::MemberNotFound {
+                member: member.clone(),
+                object_type: module_name.clone(),
+                span: HirError::synthetic_span(),
+            })
         }
     }
 
@@ -2792,53 +3128,85 @@ impl HirBuilder {
     fn process_identifier_expression(
         &mut self,
         ctx: &crate::core::compileSession::CompileContext,
-        identifier: String,
+        identifier: crate::core::ast::AstIdent,
     ) -> Result<HirExpression, HirError> {
+        let identifier_name = &identifier.name;
+        eprintln!("[HIR] Processing identifier: {}", identifier_name);
+        eprintln!("[HIR] Current scope: {:?}", self.current_scope);
+        
         // First check imported symbols (compile-time resolved)
-        if let Some(imported_id) = self.resolve_import_in_current_module(&identifier) {
+        eprintln!("[HIR] Checking imports...");
+        if let Some(imported_id) = self.resolve_import_in_current_module(identifier_name) {
             // Check if this is a constant ID or function ID
             // Constants are stored in hir_ast.constants, functions are in hir_ast.functions
             if self.ast.constants.iter().any(|c| c.id == imported_id) {
-                // It's a constant - return as constant expression
+                // It's a constant - bind CST ID to symbol ID
+                self.bind_cst_to_symbol(identifier.cst_id, SymbolId(imported_id));
                 return Ok(HirExpression::Constant(imported_id));
             } else {
-                // It's a function - convert to thunk by calling with no args
+                // It's a function - bind CST ID to symbol ID
+                self.bind_cst_to_symbol(identifier.cst_id, SymbolId(imported_id));
+                // Convert to thunk by calling with no args
                 return Ok(HirExpression::FunctionCall {
                     function_id: imported_id,
                     args: Vec::new(),
-                    invoke: false,
-                });
+                    invoke: false});
             }
         }
 
-        if let Some(slot) = self.resolve_var_aggressive(&identifier) {
+        eprintln!("[HIR] Looking up symbol in scope {:?}...", self.current_scope);
+        let symbol_lookup_start = std::time::Instant::now();
+        let symbol_result = self.resolve_var_aggressive(identifier_name);
+        let symbol_lookup_duration = symbol_lookup_start.elapsed();
+        
+        eprintln!("[HIR] Symbol lookup took {:?}", symbol_lookup_duration);
+        
+        if symbol_lookup_duration > std::time::Duration::from_millis(10) {
+            eprintln!("[HIR] ⚠️ SLOW SYMBOL LOOKUP: {} took {:?}", identifier_name, symbol_lookup_duration);
+        }
+        
+        if let Some(slot) = symbol_result {
+            eprintln!("[HIR] Found variable: {} (id={})", identifier_name, slot);
+            // Bind CST ID to variable symbol ID
+            self.bind_cst_to_symbol(identifier.cst_id, SymbolId(slot));
             return Ok(HirExpression::Identifier(slot));
         }
-        if let Some(const_id) = self.resolve_const(&identifier) {
+        
+        eprintln!("[HIR] Variable {} not found, checking constants...", identifier_name);
+        if let Some(const_id) = self.resolve_const(identifier_name) {
+            // Bind CST ID to constant symbol ID
+            self.bind_cst_to_symbol(identifier.cst_id, SymbolId(const_id));
             return Ok(HirExpression::Constant(const_id));
         }
 
-        if let Some(function_id) = self.resolve_function(ctx, &identifier) {
+        if let Some(function_id) = self.resolve_function(ctx, identifier_name) {
+            // Bind CST ID to function symbol ID
+            self.bind_cst_to_symbol(identifier.cst_id, SymbolId(function_id));
             // Function name used as identifier - convert to thunk by calling with no args
             // This allows functions to be used in compositions like: square <| add10
             return Ok(HirExpression::FunctionCall {
                 function_id,
                 args: Vec::new(),
-                invoke: false,
-            });
+                invoke: false});
         }
 
         // If we get here, the identifier is not a variable, constant, function, or import
         // Check if it's a module name - if so, provide a helpful error message
-        if self.modules.contains_key(&identifier) {
-            return Err(HirError::TypeError(format!(
-                "'{}' is a module name and cannot be used as a value. Use '{}.function_name(...)' to call module functions.",
-                identifier, identifier
-            )));
+        if self.modules.contains_key(identifier_name) {
+            return Err(HirError::TypeError {
+                message: format!(
+                    "'{}' is a module name and cannot be used as a value. Use '{}.function_name(...)' to call module functions.",
+                    identifier_name, identifier_name
+                ),
+                span: HirError::synthetic_span(),
+            });
         }
 
         // The identifier is not a variable, constant, function, import, or module
-        Err(HirError::UnknownVariable(identifier))
+        Err(HirError::UnknownVariable {
+            name: identifier.name,
+            span: HirError::synthetic_span(),
+        })
     }
 
     /// Process an infix (binary) expression
@@ -2849,14 +3217,39 @@ impl HirBuilder {
         op: BinaryOp,
         rhs: Expression,
     ) -> Result<HirExpression, HirError> {
-        let lhs_expr = self.process_expression(ctx, lhs)?;
-        let rhs_expr = self.process_expression(ctx, rhs)?;
+        eprintln!("[HIR] Processing binary expression: op={:?}", op);
+        
+        eprintln!("[HIR] Processing LHS...");
+        let lhs_start = std::time::Instant::now();
+        let lhs_result = self.process_expression(ctx, lhs);
+        let lhs_duration = lhs_start.elapsed();
+        eprintln!("[HIR] LHS processed in {:?}: {:?}", lhs_duration, 
+            if lhs_result.is_ok() { "Ok" } else { "Err" });
+        let lhs_expr = lhs_result?;
+        
+        if lhs_duration > std::time::Duration::from_millis(10) {
+            eprintln!("[HIR] ⚠️ SLOW LHS: took {:?}", lhs_duration);
+        }
+        
+        eprintln!("[HIR] Processing RHS...");
+        let rhs_start = std::time::Instant::now();
+        let rhs_result = self.process_expression(ctx, rhs);
+        let rhs_duration = rhs_start.elapsed();
+        eprintln!("[HIR] RHS processed in {:?}: {:?}", rhs_duration, 
+            if rhs_result.is_ok() { "Ok" } else { "Err" });
+        let rhs_expr = rhs_result?;
+        
+        if rhs_duration > std::time::Duration::from_millis(10) {
+            eprintln!("[HIR] ⚠️ SLOW RHS: took {:?}", rhs_duration);
+        }
 
+        eprintln!("[HIR] Type checking binary operation...");
         // Type check binary operations
         let lhs_type = self.infer_variable_kind(&lhs_expr);
         let rhs_type = self.infer_variable_kind(&rhs_expr);
         self.check_binary_op_types(&op, &lhs_type, &rhs_type)?;
 
+        eprintln!("[HIR] Creating binary HIR node...");
         Ok(HirExpression::Binary {
             lhs: Box::new(lhs_expr),
             rhs: Box::new(rhs_expr),
@@ -2893,6 +3286,7 @@ impl HirBuilder {
                 if let Expression::FunctionCall {
                     callee,
                     arguments: fc_args,
+                cst_id: _,
                 } = lhs
                 {
                     return self.process_function_call_invoke(ctx, callee, fc_args, args);
@@ -2900,15 +3294,18 @@ impl HirBuilder {
 
                 // Special handling: if lhs is a MemberAccess (e.g., matrix.add), handle it directly
                 // This avoids processing the module name as an identifier
-                if let Expression::MemberAccess { object, member } = lhs {
+                if let Expression::MemberAccess { object, member, cst_id: _ } = lhs {
                     // Extract module name directly without processing it as an identifier
                     let module_name = match *object {
-                        Expression::Identifier(name) => name,
+                        Expression::Identifier(ident) => ident.name.clone(),
                         other => {
-                            return Err(HirError::TypeError(format!(
-                                "Member access object must be an identifier (module name), got: {:?}",
-                                other
-                            )));
+                            return Err(HirError::TypeError {
+                                message: format!(
+                                    "Member access object must be an identifier (module name), got: {:?}",
+                                    other
+                                ),
+                                span: HirError::synthetic_span(),
+                            });
                         }
                     };
 
@@ -2917,13 +3314,16 @@ impl HirBuilder {
                         let module = self
                             .modules
                             .get(&module_name)
-                            .ok_or_else(|| HirError::TypeError(format!("Module '{}' not found", module_name)))?;
+                            .ok_or_else(|| HirError::ModuleNotFound {
+                                module_path: module_name.clone(),
+                                span: HirError::synthetic_span(),
+                            })?;
 
-                        *module.functions.get(&member)
-                            .ok_or_else(|| HirError::TypeError(format!(
-                                "Function '{}' not found in module '{}'",
-                                member, module_name
-                            )))?
+                        *module.functions.get(&member.name)
+                            .ok_or_else(|| HirError::FunctionNotFound {
+                                name: member.name.clone(),
+                                span: HirError::synthetic_span(),
+                            })?
                     };
 
                     // Process invoke arguments (now that we've released the borrow on self.modules)
@@ -2932,13 +3332,12 @@ impl HirBuilder {
                     return Ok(HirExpression::FunctionCall {
                         function_id,
                         args: processed_args,
-                        invoke: true,
-                    });
+                        invoke: true});
                 }
 
                 // If lhs is an Identifier, check if it's a variable first
                 if let Expression::Identifier(identifier) = lhs {
-                    return self.process_identifier_invoke(ctx, identifier, args);
+                    return self.process_identifier_invoke(ctx, identifier.name, args);
                 }
 
                 // For other expressions, process normally
@@ -2951,8 +3350,7 @@ impl HirBuilder {
                     } => Ok(HirExpression::FunctionCall {
                         function_id,
                         args: existing_args,
-                        invoke: true,
-                    }),
+                        invoke: true}),
                     HirExpression::PostfixInvoke {
                         operand,
                         args: existing_args,
@@ -2979,96 +3377,112 @@ impl HirBuilder {
         ctx: &crate::core::compileSession::CompileContext,
         callee: Expression,
         arguments: Vec<Expression>,
+        cst_id: crate::core::cst::CstId,
     ) -> Result<HirExpression, HirError> {
         // Identifier callee: Check if it's a function name OR a variable with function type
-        if let Expression::Identifier(identifier_name) = callee {
+        if let Expression::Identifier(ident) = callee {
+            let identifier_name = &ident.name;
             // First, try to resolve as a variable with function/thunk type (closures should be callable like functions)
-            if let Some(var_id) = self.resolve_var_aggressive(&identifier_name) {
+            if let Some(var_id) = self.resolve_var_aggressive(identifier_name) {
+                // Bind CST ID to variable symbol ID (for the callee identifier)
+                self.bind_cst_to_symbol(ident.cst_id, SymbolId(var_id));
                 let var_expr = HirExpression::Identifier(var_id);
                 let var_kind = self.infer_variable_kind(&var_expr);
-                match var_kind {
-                    ValueKind::Function(func_type_str) | ValueKind::Thunk(func_type_str) => {
-                        // Check if it's a generic thunk type - still treat as callable
-                        if func_type_str == "Any ~> Any" || func_type_str.starts_with("Any ~>") || func_type_str.ends_with("~> Any") {
-                            // Generic thunk - still callable, just with less type information
-                        }
-                        // Variable contains a function value - process arguments first
-                        let processed_args = arguments
-                            .into_iter()
-                            .map(|arg| self.process_expression(ctx, arg))
-                            .collect::<Result<Vec<_>, _>>()?;
-                        
-                        // Perform type checking - parse the function type to get parameter types
-                        if let Some((param_types, _, _)) = Self::parse_callable_type(&func_type_str) {
-                            // Check argument count
-                            if processed_args.len() != param_types.len() {
-                                return Err(HirError::TypeError(format!(
-                                    "Function '{}' expects {} argument(s), but {} were provided",
-                                    identifier_name, param_types.len(), processed_args.len()
-                                )));
-                            }
-                            
-                            // Check argument types (skip if Any or Unknown to allow flexibility)
-                            for (i, (param_type_str, arg_expr)) in param_types.iter().zip(processed_args.iter()).enumerate() {
-                                let expected_kind = Self::parse_type_string_static(param_type_str);
-                                // Skip type checking for Any/Unknown parameters
-                                if matches!(expected_kind, ValueKind::Any | ValueKind::Unknown) {
-                                    continue;
-                                }
-                                
-                                let actual_kind = self.infer_variable_kind(arg_expr);
-                                
-                                if !Self::check_type_compatibility(&expected_kind, &actual_kind) {
-                                    return Err(HirError::TypeError(format!(
-                                        "Type mismatch in argument {} of function '{}': expected {}, got {}",
-                                        i + 1, identifier_name,
-                                        Self::format_value_kind_for_type(&expected_kind),
-                                        Self::format_value_kind_for_type(&actual_kind)
-                                    )));
-                                }
-                            }
-                        }
-                        
-                        // Create a thunk from the function value
-                        return Ok(HirExpression::PostfixInvoke {
-                            operand: Box::new(var_expr),
-                            args: Some(processed_args),
-                        });
+                
+                // Check if variable is callable by type OR by structure of assigned expression
+                // This is important because type inference might fail for ComposeThunk/PartialCall
+                // but we can still determine if it's callable by looking at the assigned expression
+                let is_callable_by_type = matches!(
+                    var_kind,
+                    ValueKind::Function(_) | ValueKind::Thunk(_) | ValueKind::Callable
+                );
+                
+                let is_callable_by_structure = if !is_callable_by_type {
+                    // Check the assigned expression structure - this is a fallback when type inference fails
+                    if let Some(assigned_expr) = self.ast.get_var_assigned_expression(var_id) {
+                        matches!(
+                            assigned_expr,
+                            HirExpression::ComposeThunk { .. } |
+                            HirExpression::PartialCall { .. } |
+                            HirExpression::FunctionCall { .. } |
+                            HirExpression::PostfixInvoke { .. }
+                        )
+                    } else {
+                        false
                     }
-                    ValueKind::Unknown => {
-                        // Variable exists but type is unknown - check if it was assigned a callable expression
-                        // by looking at the assigned expression
-                        if let Some(assigned_expr) = self.ast.get_var_assigned_expression(var_id) {
-                            match assigned_expr {
-                                HirExpression::ComposeThunk { .. } |
-                                HirExpression::PartialCall { .. } |
-                                HirExpression::FunctionCall { .. } |
-                                HirExpression::PostfixInvoke { .. } => {
-                                    // Variable contains a callable expression - treat as callable
-                                    let processed_args = arguments
-                                        .into_iter()
-                                        .map(|arg| self.process_expression(ctx, arg))
-                                        .collect::<Result<Vec<_>, _>>()?;
-                                    return Ok(HirExpression::PostfixInvoke {
-                                        operand: Box::new(var_expr),
-                                        args: Some(processed_args),
-                                    });
-                                }
-                                _ => {
-                                    // Not a callable expression - fall through
+                } else {
+                    false
+                };
+                
+                if is_callable_by_type || is_callable_by_structure {
+                    // Variable is callable - process arguments
+                    let processed_args = arguments
+                        .into_iter()
+                        .map(|arg| self.process_expression(ctx, arg))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    
+                    // If we have type information, perform type checking
+                    if is_callable_by_type {
+                        if let ValueKind::Function(func_type_str) | ValueKind::Thunk(func_type_str) = var_kind {
+                            // Check if it's a generic thunk type - still treat as callable
+                            if func_type_str != "Any ~> Any" && !func_type_str.starts_with("Any ~>") && !func_type_str.ends_with("~> Any") {
+                                // Perform type checking - parse the function type to get parameter types
+                                if let Some((param_types, _, _)) = Self::parse_callable_type(&func_type_str) {
+                                    // Check argument count
+                                    if processed_args.len() != param_types.len() {
+                                        return Err(HirError::TypeError {
+                                            message: format!(
+                                                "Function '{}' expects {} argument(s), but {} were provided",
+                                                identifier_name, param_types.len(), processed_args.len()
+                                            ),
+                                            span: HirError::synthetic_span(),
+                                        });
+                                    }
+                                    
+                                    // Check argument types (skip if Any or Unknown to allow flexibility)
+                                    for (i, (param_type_str, arg_expr)) in param_types.iter().zip(processed_args.iter()).enumerate() {
+                                        let expected_kind = Self::parse_type_string_static(param_type_str);
+                                        // Skip type checking for Any/Unknown parameters
+                                        if matches!(expected_kind, ValueKind::Any | ValueKind::Unknown) {
+                                            continue;
+                                        }
+                                        
+                                        let actual_kind = self.infer_variable_kind(arg_expr);
+                                        
+                                        if !Self::check_type_compatibility(&expected_kind, &actual_kind) {
+                                            return Err(HirError::TypeError {
+                                                message: format!(
+                                                    "Type mismatch in argument {} of function '{}': expected {}, got {}",
+                                                    i + 1, identifier_name,
+                                                    Self::format_value_kind_for_type(&expected_kind),
+                                                    Self::format_value_kind_for_type(&actual_kind)
+                                                ),
+                                                span: HirError::synthetic_span(),
+                                            });
+                                        }
+                                    }
                                 }
                             }
                         }
-                        // Not a function type - fall through to check if it's a function name
                     }
-                    _ => {
-                        // Not a function type - fall through to check if it's a function name
-                    }
+                    
+                    // Bind CST ID for the function call itself (not just the callee)
+                    self.bind_cst_to_symbol(cst_id, SymbolId(var_id));
+                    
+                    // Create a PostfixInvoke for the callable variable
+                    return Ok(HirExpression::PostfixInvoke {
+                        operand: Box::new(var_expr),
+                        args: Some(processed_args),
+                    });
                 }
             }
             
             // Try to resolve as a function name
-            if let Some(function_id) = self.resolve_function(ctx, &identifier_name) {
+            if let Some(function_id) = self.resolve_function(ctx, identifier_name) {
+                // Bind CST ID for the callee identifier
+                self.bind_cst_to_symbol(ident.cst_id, SymbolId(function_id));
+                // Bind CST ID for the function call itself
+                self.bind_cst_to_symbol(cst_id, SymbolId(function_id));
                 let args = arguments
                     .into_iter()
                     .map(|arg| self.process_expression(ctx, arg))
@@ -3080,28 +3494,30 @@ impl HirBuilder {
                 return Ok(HirExpression::FunctionCall {
                     function_id,
                     args,
-                    invoke: should_invoke,
-                });
+                    invoke: should_invoke});
             }
             
             // If we get here, the identifier is not a variable with function type or a function name
             // Return an error - the identifier is not callable
-            return Err(HirError::UnknownVariable(format!(
-                "'{}' is not a callable function or variable",
-                identifier_name
-            )));
+            return Err(HirError::UnknownVariable {
+                name: identifier_name.to_string(),
+                span: HirError::synthetic_span(),
+            });
         }
 
         // Member access callee (e.g., matrix.add): handle directly to avoid processing module name as identifier
-        if let Expression::MemberAccess { object, member } = callee {
+        if let Expression::MemberAccess { object, member, cst_id: _ } = callee {
             // Extract module name directly without processing it as an identifier
             let module_name = match *object {
-                Expression::Identifier(name) => name,
+                Expression::Identifier(ident) => ident.name.clone(),
                 other => {
-                    return Err(HirError::TypeError(format!(
-                        "Member access object must be an identifier (module name), got: {:?}",
-                        other
-                    )));
+                    return Err(HirError::TypeError {
+                        message: format!(
+                            "Member access object must be an identifier (module name), got: {:?}",
+                            other
+                        ),
+                        span: HirError::synthetic_span(),
+                    });
                 }
             };
 
@@ -3110,13 +3526,16 @@ impl HirBuilder {
                 let module = self
                     .modules
                     .get(&module_name)
-                    .ok_or_else(|| HirError::TypeError(format!("Module '{}' not found", module_name)))?;
+                    .ok_or_else(|| HirError::ModuleNotFound {
+                        module_path: module_name.clone(),
+                        span: HirError::synthetic_span(),
+                    })?;
 
-                *module.functions.get(&member)
-                    .ok_or_else(|| HirError::TypeError(format!(
-                        "Function '{}' not found in module '{}'",
-                        member, module_name
-                    )))?
+                *module.functions.get(&member.name)
+                    .ok_or_else(|| HirError::FunctionNotFound {
+                        name: member.name.clone(),
+                        span: HirError::synthetic_span(),
+                    })?
             };
 
             // Process arguments (now that we've released the borrow on self.modules)
@@ -3125,14 +3544,16 @@ impl HirBuilder {
                 .map(|arg| self.process_expression(ctx, arg))
                 .collect::<Result<Vec<_>, _>>()?;
 
+            // Bind CST ID for the function call (member access)
+            self.bind_cst_to_symbol(cst_id, SymbolId(function_id));
+            
             // Check if function is pure and has all arguments - if so, eagerly invoke
             let should_invoke = self.should_eagerly_invoke(ctx, function_id, args.len());
 
             return Ok(HirExpression::FunctionCall {
                 function_id,
                 args,
-                invoke: should_invoke,
-            });
+                invoke: should_invoke});
         }
 
         // Non-identifier callees (thunks, compositions, etc.)
@@ -3160,8 +3581,7 @@ impl HirBuilder {
                 Ok(HirExpression::FunctionCall {
                     function_id,
                     args: combined,
-                    invoke: should_invoke,
-                })
+                    invoke: should_invoke})
             }
             _ => Ok(HirExpression::PostfixInvoke {
                 operand: Box::new(callee_expr),
@@ -3178,7 +3598,8 @@ impl HirBuilder {
         args: Vec<CallArgument>,
     ) -> Result<HirExpression, HirError> {
         // Process the function identifier
-        let func_id = if let Expression::Identifier(ref identifier_name) = func {
+        let func_id = if let Expression::Identifier(ref ident) = func {
+            let identifier_name = &ident.name;
             // Try to resolve as a function declaration first (for backwards compatibility)
             if let Some(function_id) = self.resolve_function(ctx, identifier_name) {
                 function_id
@@ -3189,19 +3610,35 @@ impl HirBuilder {
                     *closure_func_id
                 } else {
                     // Variable exists but is not a closure - partial calls only work with closures or functions
-                    return Err(HirError::TypeError(format!(
-                        "Variable '{}' is not a closure or function. Partial calls only work with closures or function declarations.",
-                        identifier_name
-                    )));
+                    // First try to see if it's actually a function that wasn't found
+                    let available_functions: Vec<String> = self.ast.functions.values()
+                        .map(|f| f.name.clone())
+                        .take(10)
+                        .collect();
+                    eprintln!("[PARTIAL_CALL] Variable '{}' exists but is not a closure. Available functions (sample): {:?}", identifier_name, available_functions);
+                    return Err(HirError::FunctionNotFound {
+                        name: identifier_name.to_string(),
+                        span: HirError::synthetic_span(),
+                    });
                 }
             } else {
-                return Err(HirError::UnknownVariable(identifier_name.clone()));
+                // Function not found - provide better error message
+                let available_functions: Vec<String> = self.ast.functions.values()
+                    .map(|f| f.name.clone())
+                    .take(10)
+                    .collect();
+                eprintln!("[PARTIAL_CALL] Function '{}' not found. Available functions (sample): {:?}", identifier_name, available_functions);
+                return Err(HirError::FunctionNotFound {
+                    name: identifier_name.to_string(),
+                    span: HirError::synthetic_span(),
+                });
             }
         } else {
             // For now, only support identifiers as function names in partial calls
-            return Err(HirError::TypeError(
-                "Partial call function must be an identifier".to_string(),
-            ));
+            return Err(HirError::TypeError {
+                message: "Partial call function must be an identifier".to_string(),
+                span: HirError::synthetic_span(),
+            });
         };
 
         // Process arguments - convert CallArgument to Option<HirExpression>
@@ -3248,13 +3685,22 @@ impl HirBuilder {
     ) -> Result<HirExpression, HirError> {
         // For now, only support single dimension (one IndexSpec)
         if indices.len() != 1 {
-            return Err(HirError::TypeError(format!(
-                "Multi-dimensional indexing not yet supported (got {} indices)",
-                indices.len()
-            )));
+            return Err(HirError::TypeError {
+                message: format!(
+                    "Multi-dimensional indexing not yet supported (got {} indices)",
+                    indices.len()
+                ),
+                span: HirError::synthetic_span(),
+            });
         }
 
-        let index_spec = &indices[0];
+        // Get first index spec - return error if empty
+        let index_spec = indices.first().ok_or_else(|| {
+            HirError::TypeError {
+                message: "Array index expression requires at least one index spec".to_string(),
+                span: HirError::synthetic_span(),
+            }
+        })?;
         let array_expr = self.process_expression(ctx, array)?;
 
         match index_spec {
@@ -3331,7 +3777,7 @@ impl HirBuilder {
             // Check if RHS is a function call at AST level - if so, prepend LHS as first argument
             // BUT: skip this transformation for reducers (map, filter, fold, reduce, sum)
             // Reducers need special handling and should fall through to reducer detection
-            if let Expression::FunctionCall { callee, arguments } = &rhs {
+            if let Expression::FunctionCall { callee, arguments, cst_id: _ } = &rhs {
                 // Check if this is a reducer function - if so, don't transform, let it be handled by reducer detection
                 let is_reducer = self.is_ast_reducer(callee, arguments.len());
                 
@@ -3341,10 +3787,10 @@ impl HirBuilder {
                     // bevy.app |> bevy.with_window("My Game", 1280, 720) should become bevy.with_window(bevy.app(), "My Game", 1280, 720)
                     let lhs_value = if let Expression::Identifier(_) | Expression::MemberAccess { .. } = &lhs {
                         // LHS is a function reference - call it with no arguments first
-                        Expression::FunctionCall {
-                            callee: Box::new(lhs.clone()),
-                            arguments: vec![],
-                        }
+                        // Extract CstId from lhs for identity tracking
+                        let lhs_cst_id = Self::extract_cst_id_from_expr(&lhs);
+                        Expression::FunctionCall { callee: Box::new(lhs.clone()), arguments: vec![],
+                        cst_id: lhs_cst_id }
                     } else {
                         // LHS is already a value - use it directly
                         lhs
@@ -3355,10 +3801,10 @@ impl HirBuilder {
                     new_args.extend(arguments.clone());
                     
                     // Process the transformed function call
-                    return self.process_expression(ctx, Expression::FunctionCall {
-                        callee: callee.clone(),
-                        arguments: new_args,
-                    });
+                    // Extract CstId from callee for identity tracking (synthetic node from pipe transformation)
+                    let call_cst_id = Self::extract_cst_id_from_expr(callee);
+                    return self.process_expression(ctx, Expression::FunctionCall { callee: callee.clone(), arguments: new_args,
+                    cst_id: call_cst_id });
                 }
                 // If it's a reducer, fall through to let reducer detection handle it
             }
@@ -3370,20 +3816,20 @@ impl HirBuilder {
                 // bevy.app |> bevy.with_default_plugins should become bevy.with_default_plugins(bevy.app())
                 let lhs_value = if let Expression::Identifier(_) | Expression::MemberAccess { .. } = &lhs {
                     // LHS is a function reference - call it with no arguments first
-                    Expression::FunctionCall {
-                        callee: Box::new(lhs.clone()),
-                        arguments: vec![],
-                    }
+                    // Extract CstId from lhs for identity tracking
+                    let lhs_cst_id = Self::extract_cst_id_from_expr(&lhs);
+                    Expression::FunctionCall { callee: Box::new(lhs.clone()), arguments: vec![],
+                    cst_id: lhs_cst_id }
                 } else {
                     // LHS is already a value - use it directly
                     lhs
                 };
                 
                 // Create a function call with the processed LHS as the first argument
-                return self.process_expression(ctx, Expression::FunctionCall {
-                    callee: Box::new(rhs.clone()),
-                    arguments: vec![lhs_value],
-                });
+                // Extract CstId from rhs for identity tracking (synthetic node from pipe transformation)
+                let call_cst_id = Self::extract_cst_id_from_expr(&rhs);
+                return self.process_expression(ctx, Expression::FunctionCall { callee: Box::new(rhs.clone()), arguments: vec![lhs_value],
+                cst_id: call_cst_id });
             }
             
             // Process both sides first (for other cases like compositions, thunks, etc.)
@@ -3415,19 +3861,29 @@ impl HirBuilder {
             let second_input = Self::get_function_input_type(&second_kind);
             
             // If we can determine both types, check compatibility
+            // If types are Unknown, skip type checking (they'll be inferred at runtime)
             if let (Some(f_out), Some(g_in)) = (first_output, second_input) {
                 // Parse the types to check compatibility
                 let f_out_kind = self.parse_type_string(&f_out);
                 let g_in_kind = self.parse_type_string(&g_in);
                 
-                // Check if types are compatible (allowing for Unknown/Any)
-                if !Self::check_type_compatibility(&g_in_kind, &f_out_kind) {
-                    return Err(HirError::TypeError(format!(
-                        "Type mismatch in composition: first function returns {}, but second function expects {}",
-                        Self::format_value_kind(&f_out_kind),
-                        Self::format_value_kind(&g_in_kind)
-                    )));
+                // Skip type checking if either type is Unknown (type inference incomplete)
+                // This allows compositions to work even if types aren't fully inferred yet
+                if matches!(f_out_kind, ValueKind::Unknown) || matches!(g_in_kind, ValueKind::Unknown) {
+                    // Types will be inferred at runtime - allow the composition
+                } else if !Self::check_type_compatibility(&g_in_kind, &f_out_kind) {
+                    return Err(HirError::TypeError {
+                        message: format!(
+                            "Type mismatch in composition: first function returns {}, but second function expects {}",
+                            Self::format_value_kind(&f_out_kind),
+                            Self::format_value_kind(&g_in_kind)
+                        ),
+                        span: HirError::synthetic_span(),
+                    });
                 }
+            } else {
+                // If we can't determine types, that's okay - they'll be inferred at runtime
+                // Don't error out, just allow the composition
             }
             
             Ok(HirExpression::ComposeThunk {
@@ -3440,16 +3896,18 @@ impl HirBuilder {
             // f(a, b) <| x should become f(x, a, b) (same semantics as |>)
             
             // Check if LHS is a function call at AST level - if so, prepend RHS as first argument
-            if let Expression::FunctionCall { callee, arguments } = lhs {
+            if let Expression::FunctionCall { callee, arguments, cst_id: original_cst_id } = lhs {
                 // f(a, b) <| x should become f(x, a, b)
                 // Prepend RHS to the arguments list
                 let mut new_args = vec![rhs];
                 new_args.extend(arguments);
                 
                 // Process the transformed function call
+                // Use original CstId from the function call (synthetic node from reverse pipe transformation)
                 return self.process_expression(ctx, Expression::FunctionCall {
                     callee,
                     arguments: new_args,
+                    cst_id: original_cst_id,
                 });
             }
             
@@ -3457,10 +3915,10 @@ impl HirBuilder {
             // f <| x should become f(x)
             if let Expression::Identifier(_) | Expression::MemberAccess { .. } = lhs {
                 // Create a function call with RHS as the first argument
-                return self.process_expression(ctx, Expression::FunctionCall {
-                    callee: Box::new(lhs),
-                    arguments: vec![rhs],
-                });
+                // Extract CstId from lhs for identity tracking (synthetic node from reverse pipe transformation)
+                let call_cst_id = Self::extract_cst_id_from_expr(&lhs);
+                return self.process_expression(ctx, Expression::FunctionCall { callee: Box::new(lhs), arguments: vec![rhs],
+                cst_id: call_cst_id });
             }
             
             // For reverse composition, process both sides normally
@@ -3485,11 +3943,14 @@ impl HirBuilder {
                 
                 // Check if types are compatible (allowing for Unknown/Any)
                 if !Self::check_type_compatibility(&f_in_kind, &g_out_kind) {
-                    return Err(HirError::TypeError(format!(
-                        "Type mismatch in reverse composition: second function returns {}, but first function expects {}",
-                        Self::format_value_kind(&g_out_kind),
-                        Self::format_value_kind(&f_in_kind)
-                    )));
+                    return Err(HirError::TypeError {
+                        message: format!(
+                            "Type mismatch in reverse composition: second function returns {}, but first function expects {}",
+                            Self::format_value_kind(&g_out_kind),
+                            Self::format_value_kind(&f_in_kind)
+                        ),
+                        span: HirError::synthetic_span(),
+                    });
                 }
             }
             
@@ -3505,8 +3966,8 @@ impl HirBuilder {
     fn is_ast_reducer(&self, callee: &Expression, arg_count: usize) -> bool {
         // Extract the function name from the callee
         let func_name = match callee {
-            Expression::Identifier(name) => name.as_str(),
-            Expression::MemberAccess { member, .. } => member.as_str(),
+            Expression::Identifier(name) => name.name.as_str(),
+            Expression::MemberAccess { member, .. } => member.name.as_str(),
             _ => return false, // Not an identifier or member access, can't be a reducer
         };
         
@@ -3573,7 +4034,7 @@ impl HirBuilder {
                 if let Some(name) = func_name {
                     // Check if the name is a reducer (strip module prefix if present)
                     let base_name = name.split('.').last().unwrap_or(name);
-                    match base_name {
+                    return match base_name {
                         "sum" => {
                             // sum is a reducer with no args (or any number of args when used as identifier)
                             Ok(Some((ReducerType::Sum, Vec::new())))
@@ -3611,10 +4072,9 @@ impl HirBuilder {
                             }
                         }
                         _ => Ok(None),
-                    }
-                } else {
-                    Ok(None)
+                    };
                 }
+                Ok(None)
             }
             HirExpression::ComposeThunk { second, .. } => {
                 // Recursively check the rightmost expression in the composition
@@ -3667,42 +4127,92 @@ impl HirBuilder {
     }
 
     fn process_expression(&mut self, ctx: &crate::core::compileSession::CompileContext, expression: Expression) -> Result<HirExpression, HirError> {
-        match expression {
-            Expression::Literal(lit) => self.process_literal_expression(lit),
-            Expression::Array(elements) => self.process_array_expression(ctx, elements),
-            Expression::ArrayIndex { array, indices } => {
-                self.process_array_index_expression(ctx, *array, indices)
-            }
-            Expression::Identifier(identifier) => self.process_identifier_expression(ctx, identifier),
-            Expression::MemberAccess { object, member } => {
-                self.process_member_access_expression(*object, member)
-            }
-            Expression::Infix { lhs, op, rhs } => self.process_infix_expression(ctx, *lhs, op, *rhs),
-            Expression::Prefix { op, rhs } => self.process_prefix_expression(ctx, op, *rhs),
-            Expression::Postfix { lhs, op, args } => {
-                self.process_postfix_expression(ctx, *lhs, op, args)
-            }
-            Expression::FunctionCall { callee, arguments } => {
-                self.process_function_call_expression(ctx, *callee, arguments)
-            }
-            Expression::PartialCall { func, args } => {
-                self.process_partial_call_expression(ctx, *func, args)
-            }
-            Expression::Group(expr) => self.process_group_expression(ctx, *expr),
-            Expression::Compose { lhs, rhs, reverse } => {
-                self.process_compose_expression(ctx, *lhs, *rhs, reverse)
-            }
-            Expression::Loop { init_vars, body } => self.process_loop_expression(ctx, init_vars, body),
-            Expression::StructInit { struct_name, fields } => {
-                self.process_struct_init_expression(ctx, struct_name, fields)
-            }
-            Expression::FieldAccess { object, field } => {
-                self.process_field_access_expression(ctx, *object, field)
-            }
-            Expression::Closure { arguments, return_type, body } => {
-                self.process_closure_expression(ctx, arguments, return_type, body)
-            }
+        // CRITICAL: Track recursion depth to detect infinite loops
+        thread_local! {
+            static RECURSION_DEPTH: std::cell::Cell<usize> = std::cell::Cell::new(0);
+            static EXPR_COUNTER: std::cell::Cell<usize> = std::cell::Cell::new(0);
         }
+        
+        let depth = RECURSION_DEPTH.with(|d| {
+            let current = d.get();
+            d.set(current + 1);
+            current
+        });
+        
+        let expr_num = EXPR_COUNTER.with(|c| {
+            let num = c.get() + 1;
+            c.set(num);
+            num
+        });
+        
+        const MAX_DEPTH: usize = 1000;
+        const MAX_EXPRS: usize = 100_000;
+        
+        if depth > MAX_DEPTH {
+            RECURSION_DEPTH.with(|d| d.set(d.get() - 1));
+            eprintln!("[HIR] ERROR: Infinite recursion in process_expression - depth {}, expr #{}", depth, expr_num);
+            return Err(HirError::TypeError {
+                message: format!("HIR builder infinite recursion: depth {} (max: {}), processed {} expressions", depth, MAX_DEPTH, expr_num),
+                span: HirError::synthetic_span(),
+            });
+        }
+        
+        if expr_num > MAX_EXPRS {
+            RECURSION_DEPTH.with(|d| d.set(d.get() - 1));
+            eprintln!("[HIR] ERROR: Too many expressions processed - {} (max: {})", expr_num, MAX_EXPRS);
+            return Err(HirError::TypeError {
+                message: format!("HIR builder processed too many expressions: {} (max: {})", expr_num, MAX_EXPRS),
+                span: HirError::synthetic_span(),
+            });
+        }
+        
+        if expr_num % 1000 == 0 {
+            eprintln!("[HIR] process_expression: expr #{}, depth {}", expr_num, depth);
+        }
+        
+        let result = (|| -> Result<HirExpression, HirError> {
+            Ok(match expression {
+                Expression::Literal(lit) => self.process_literal_expression(lit)?,
+                Expression::Array(elements) => self.process_array_expression(ctx, elements)?,
+                Expression::ArrayIndex { array, indices } => {
+                    self.process_array_index_expression(ctx, *array, indices)?
+                }
+                Expression::Identifier(identifier) => self.process_identifier_expression(ctx, identifier)?,
+                Expression::MemberAccess { object, member, cst_id: _ } => {
+                    self.process_member_access_expression(ctx, *object, member.name)?
+                }
+                Expression::Infix { lhs, op, rhs } => self.process_infix_expression(ctx, *lhs, op, *rhs)?,
+                Expression::Prefix { op, rhs } => self.process_prefix_expression(ctx, op, *rhs)?,
+                Expression::Postfix { lhs, op, args } => {
+                    self.process_postfix_expression(ctx, *lhs, op, args)?
+                }
+                Expression::FunctionCall { callee, arguments, cst_id } => {
+                    self.process_function_call_expression(ctx, *callee, arguments, cst_id)?
+                }
+                Expression::PartialCall { func, args } => {
+                    self.process_partial_call_expression(ctx, *func, args)?
+                }
+                Expression::Group(expr) => self.process_group_expression(ctx, *expr)?,
+                Expression::Compose { lhs, rhs, reverse } => {
+                    self.process_compose_expression(ctx, *lhs, *rhs, reverse)?
+                }
+                Expression::Loop { init_vars, body } => self.process_loop_expression(ctx, init_vars, body)?,
+                Expression::StructInit { struct_name, fields, cst_id: _ } => {
+                    self.process_struct_init_expression(ctx, struct_name.name, fields.into_iter().map(|(f, e)| (f.name, e)).collect())?
+                }
+                Expression::FieldAccess { object, field, cst_id: _ } => {
+                    self.process_field_access_expression(ctx, *object, field.name)?
+                }
+                Expression::Closure { arguments, return_type, body } => {
+                    self.process_closure_expression(ctx, arguments, return_type, body)?
+                }
+            })
+        })();
+        
+        // Decrement recursion depth
+        RECURSION_DEPTH.with(|d| d.set(d.get() - 1));
+        
+        result
     }
 
     fn process_struct_statement(
@@ -3754,7 +4264,10 @@ impl HirBuilder {
     ) -> Result<HirExpression, HirError> {
         // Verify struct exists
         if !self.ast.structs.contains_key(&struct_name) {
-            return Err(HirError::TypeError(format!("Unknown struct type: {}", struct_name)));
+            return Err(HirError::TypeError {
+                message: format!("Unknown struct type: {}", struct_name),
+                span: HirError::synthetic_span(),
+            });
         }
         
         // Process field values
@@ -3828,7 +4341,7 @@ impl HirBuilder {
             } else {
                 self.parse_type_string(&arg.kind)
             };
-            let var_id = self.init_var(&arg.identifier, param_kind);
+            let var_id = self.init_var(&arg.identifier.name, param_kind);
             param_var_ids.push(var_id);
         }
 
@@ -3880,28 +4393,30 @@ impl HirBuilder {
         // Check if the object is an identifier that's a module name
         // If so, treat this as a MemberAccess (module member access) rather than FieldAccess (struct field access)
         if let Expression::Identifier(module_name) = object {
-            if self.modules.contains_key(&module_name) {
+            if self.modules.contains_key(&module_name.name) {
                 // This is a module member access, not a struct field access
                 // Look up the module and get the function ID
                 let function_id = {
                     let module = self
                         .modules
-                        .get(&module_name)
-                        .ok_or_else(|| HirError::TypeError(format!("Module '{}' not found", module_name)))?;
+                        .get(&module_name.name)
+                        .ok_or_else(|| HirError::ModuleNotFound {
+                module_path: module_name.name.clone(),
+                span: HirError::synthetic_span(),
+            })?;
 
                     *module.functions.get(&field)
-                        .ok_or_else(|| HirError::TypeError(format!(
-                            "Function '{}' not found in module '{}'",
-                            field, module_name
-                        )))?
+                        .ok_or_else(|| HirError::FunctionNotFound {
+                            name: field.clone(),
+                            span: HirError::synthetic_span(),
+                        })?
                 };
 
                 // Return a FunctionCall with empty args (the actual arguments will be added by the caller)
                 return Ok(HirExpression::FunctionCall {
                     function_id,
                     args: Vec::new(),
-                    invoke: false,
-                });
+                    invoke: false});
             }
             // If it's not a module, fall through to process as field access
             // We need to process the identifier as an expression first

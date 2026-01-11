@@ -42,6 +42,7 @@ lazy_static::lazy_static! {
                         heap,
                     )
                 }),
+                docs: None,
             },
             StdFunction {
                 name: "identity",
@@ -63,6 +64,7 @@ lazy_static::lazy_static! {
                         heap,
                     )
                 }),
+                docs: None,
             },
             StdFunction {
                 name: "add",
@@ -88,6 +90,7 @@ lazy_static::lazy_static! {
             
                     Value::struct_with_heap(matrix4_type_id(), values, heap)
                 }),
+                docs: None,
             },
 
             StdFunction {
@@ -111,6 +114,7 @@ lazy_static::lazy_static! {
             
                     Value::struct_with_heap(matrix4_type_id(), values, heap)
                 }),
+                docs: None,
             },
             StdFunction {
                 name: "get",
@@ -137,6 +141,7 @@ lazy_static::lazy_static! {
             
                     m.fields[idx].clone()
                 }),
+                docs: None,
             }
         ]
     },
@@ -150,8 +155,10 @@ lazy_static::lazy_static! {
                 ("w", ValueKind::Number),
             ],
             methods: vec![],
+            docs: None,
         }
     ],
     submodules: vec![],
+    docs: None,
     };
 }

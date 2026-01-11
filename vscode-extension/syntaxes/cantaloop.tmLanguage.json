@@ -1,0 +1,67 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "CantaLoop",
+  "scopeName": "source.cantaloop",
+  "patterns": [
+    {
+      "include": "#keywords"
+    },
+    {
+      "include": "#literals"
+    },
+    {
+      "include": "#operators"
+    },
+    {
+      "include": "#comments"
+    }
+  ],
+  "repository": {
+    "keywords": {
+      "patterns": [
+        {
+          "match": "\\b(fn|let|const|if|else|loop|while|for|break|continue|return|match|struct|mod|use|import)\\b",
+          "name": "keyword.control.cantaloop"
+        },
+        {
+          "match": "\\b(true|false)\\b",
+          "name": "constant.language.boolean.cantaloop"
+        }
+      ]
+    },
+    "literals": {
+      "patterns": [
+        {
+          "match": "\"([^\"\\\\]|\\\\.)*\"",
+          "name": "string.quoted.double.cantaloop"
+        },
+        {
+          "match": "\\b[0-9]+(\\.[0-9]+)?\\b",
+          "name": "constant.numeric.cantaloop"
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "match": "(->|~>|!|\\?|\\+|-|\\*|/|%|==|!=|<|>|<=|>=|&&|\\|\\||&|\\||\\^|<<|>>)",
+          "name": "keyword.operator.cantaloop"
+        }
+      ]
+    },
+    "comments": {
+      "patterns": [
+        {
+          "begin": "//",
+          "end": "$",
+          "name": "comment.line.double-slash.cantaloop"
+        },
+        {
+          "begin": "/\\*",
+          "end": "\\*/",
+          "name": "comment.block.cantaloop"
+        }
+      ]
+    }
+  }
+}

@@ -58,7 +58,7 @@ pub fn run_code(engine: &mut Engine, code: &str) {
     let mut hasher = DefaultHasher::new();
     code.hash(&mut hasher);
     let hash = hasher.finish();
-    let test_file = test_dir.join(format!("test_{:x}.mln", hash));
+    let test_file = test_dir.join(format!("test_{:x}.cl", hash));
     
     // Write code to file
     fs::write(&test_file, code).expect("Failed to write test file");

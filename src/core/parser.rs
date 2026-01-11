@@ -1,10 +1,9 @@
-use pest::Parser as PestParser;
 use pest::pratt_parser::Assoc;
 use pest::pratt_parser::PrattParser;
 use pest_derive::Parser;
 
-use crate::core::ast::build_program;
 use crate::core::ast::Program;
+use crate::core::cst::{parse_cst_program, lower_cst_to_ast};
 
 #[derive(Parser)]
 #[grammar = "src/grammar/grammar.pest"]
@@ -31,11 +30,20 @@ lazy_static! {
 
 /// Parses CantaLoop source code into an Abstract Syntax Tree.
 /// 
-/// Uses the Pest parser generator with a grammar defined in `src/grammar/grammar.pest`.
-/// Returns a `Program` AST on success, or a parse error on failure.
+/// This function now uses the CST layer for parsing:
+/// Text → CST (with spans) → AST (semantic, clean)
+/// 
+/// The CST preserves exact source spans for LSP integration.
+/// The AST is semantic and ready for type checking and compilation.
 pub fn parse_program(src: &str) -> Result<Program, pest::error::Error<Rule>> {
-    let parse_result = CantaLoopParser::parse(Rule::program, src);
-    let mut pairs = parse_result?;
-    let program = pairs.next().unwrap();
-    build_program(program)
+    // Parse to CST first (preserves spans)
+    let (cst, _docs) = parse_cst_program(src)?;
+    
+    // Lower CST to AST (drops spans, extracts semantics)
+    let (ast, _) = lower_cst_to_ast(cst, _docs)
+        .map_err(|e| pest::error::Error::new_from_pos(
+            pest::error::ErrorVariant::CustomError { message: e },
+            pest::Position::from_start("")
+        ))?;
+    Ok(ast)
 }

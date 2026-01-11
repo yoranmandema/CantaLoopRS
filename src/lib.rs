@@ -39,3 +39,6 @@ pub use core::{
     CompilerState, FunctionSignature, ValueKind, HirBuilder, Symbol, SymbolKind, SymbolTable
 };
 
+// Re-export CST functions
+pub use core::cst::{parse_cst_program, lower_cst_to_ast};
+

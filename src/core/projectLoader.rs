@@ -14,7 +14,7 @@ impl ProjectLoader {
         let config_data = std::fs::read_to_string(config_path)?;
         let config: serde_json::Value = serde_json::from_str(&config_data)?;
 
-        let main_file = config["main"].as_str().unwrap_or("main.mln");
+        let main_file = config["main"].as_str().unwrap_or("main.cl");
         let entry = project_path.join("src").join(main_file);
 
         let scripts: Vec<PathBuf> = config["scripts"]

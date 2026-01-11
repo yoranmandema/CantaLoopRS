@@ -2,7 +2,7 @@
     "name": "Example project",
     "version": "1.0.0",
     "description": "Example project",
-    "main": "main.mln",
+    "main": "main.cl",
     "compiler_options": {
         "optimize": true
     }

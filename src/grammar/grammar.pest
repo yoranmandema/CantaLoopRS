@@ -1,6 +1,7 @@
 program = { SOI ~ block ~ EOI }
 
-block = { (WHITESPACE* ~ statement_without_semicolon ~ WHITESPACE* | WHITESPACE* ~ statement_with_semicolon ~ ";" ~ WHITESPACE*)* }
+block = { (WHITESPACE* ~ (doc_comment ~ WHITESPACE*)* ~ statement_without_semicolon ~ WHITESPACE* | WHITESPACE* ~ (doc_comment ~ WHITESPACE*)* ~ statement_with_semicolon ~ ";" ~ WHITESPACE*)* ~ (WHITESPACE* ~ (doc_comment ~ WHITESPACE*)* ~ trailing_expression ~ WHITESPACE*)? }
+trailing_expression = { !("fn" ~ WHITESPACE) ~ !("return" ~ WHITESPACE) ~ !("let" ~ WHITESPACE) ~ !maybe_assign ~ !maybe_assign_increment ~ !maybe_assign_decrement ~ expression }
 braced_block = ${ "{" ~ WHITESPACE* ~ block ~ WHITESPACE* ~ "}" }
 non_assign_statement = { return_statement | let_statement | break_statement | continue_statement | expression_statement | use_statement | mod_statement }
 statement_with_semicolon = { !("fn" ~ WHITESPACE) ~ !(("pub" ~ WHITESPACE+) ~ "fn" ~ WHITESPACE) ~ !(("pub" ~ WHITESPACE+) ~ "fn") ~ (let_statement | const_statement | return_statement | break_statement | continue_statement | assign_statement | assign_increment_statement | assign_decrement_statement | expression_statement | use_statement | mod_statement) }
@@ -185,6 +186,8 @@ alpha = { 'a'..'z' | 'A'..'Z' }
 digit = { '0'..'9' }
 
 // Comments
-line_comment = _{ "//" ~ (!"\n" ~ ANY)* }
+// Doc comments (///) - must come before line_comment to match longer pattern first
+doc_comment = ${ "///" ~ (!"\n" ~ ANY)* }
+line_comment = _{ "//" ~ !"/" ~ (!"\n" ~ ANY)* }  // Regular comments (//) but not doc comments (///)
 block_comment = _{ "/*" ~ (!"*/" ~ ANY)* ~ "*/" }
 WHITESPACE = _{ " " | "\t" | "\r" | "\n" | line_comment | block_comment }

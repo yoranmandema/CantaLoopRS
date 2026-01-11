@@ -9,6 +9,7 @@ pub mod lower_stmt;
 pub mod project_semantic_items;
 pub mod scopes;
 pub mod symbols;
+pub mod symbol_occurrences;
 
 // Re-export core types
 pub use lower_expr::{HirExpression, ReducerType};
@@ -17,6 +18,7 @@ pub use project_semantic_items::{SemanticItem, SemanticItemKind, SemanticModifie
 pub use scopes::{HirBlockContext, Scope, ScopeArena, ScopeId, ScopeIdOld};
 use serde::Serialize;
 pub use symbols::{Symbol, SymbolId, SymbolKind, SymbolTable, TypeId};
+pub use symbol_occurrences::{SymbolOccurrence, SymbolOccurrences, SymbolRole};
 
 // Core types that belong in the main module
 use std::collections::HashMap;
@@ -208,7 +210,7 @@ impl HirAst {
 }
 
 /// Source code span (byte offsets).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub struct Span {
     pub start: usize, // byte offset
     pub end: usize,
@@ -257,31 +259,104 @@ impl LineIndex {
 #[derive(Debug, Clone, Serialize)]
 pub enum HirError {
     #[allow(dead_code)]
-    NotImplemented,
-    UnknownVariable(String),
-    VariableAlreadyDeclared(String),
+    NotImplemented {
+        span: Span,
+    },
+    UnknownVariable {
+        name: String,
+        span: Span,
+    },
+    VariableAlreadyDeclared {
+        name: String,
+        span: Span,
+    },
     TypeMismatch {
         variable: String,
         expected: ValueKind,
         actual: ValueKind,
+        span: Span,
     },
-    TypeError(String),
+    TypeError {
+        message: String,
+        span: Span,
+    },
     BinaryOpTypeError {
         operator: String,
         lhs_type: ValueKind,
         rhs_type: ValueKind,
         expected: String,
+        span: Span,
+    },
+    MemberNotFound {
+        member: String,
+        object_type: String,
+        span: Span,
+    },
+    FunctionNotFound {
+        name: String,
+        span: Span,
+    },
+    ModuleNotFound {
+        module_path: String,
+        span: Span,
     },
     // You can add more specific error variants as needed
 }
 
 impl std::fmt::Display for HirError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", self)
+        match self {
+            HirError::NotImplemented { .. } => write!(f, "Not implemented"),
+            HirError::UnknownVariable { name, .. } => {
+                write!(f, "Variable '{}' is not declared. Use 'let' to declare a new variable.", name)
+            }
+            HirError::VariableAlreadyDeclared { name, .. } => {
+                write!(f, "Variable '{}' is already declared", name)
+            }
+            HirError::TypeMismatch { variable, expected, actual, .. } => {
+                write!(f, "Type mismatch for variable '{}': expected {:?}, got {:?}", variable, expected, actual)
+            }
+            HirError::TypeError { message, .. } => write!(f, "{}", message),
+            HirError::BinaryOpTypeError { operator, lhs_type, rhs_type, expected, .. } => {
+                write!(f, "{} operation requires {}, but got {:?} and {:?}", operator, expected, lhs_type, rhs_type)
+            }
+            HirError::MemberNotFound { member, object_type, .. } => {
+                write!(f, "Member '{}' not found on type '{}'", member, object_type)
+            }
+            HirError::FunctionNotFound { name, .. } => {
+                write!(f, "Function or constant '{}' not found", name)
+            }
+            HirError::ModuleNotFound { module_path, .. } => {
+                write!(f, "Module '{}' not found", module_path)
+            }
+        }
     }
 }
 
 impl std::error::Error for HirError {}
+
+impl HirError {
+    /// Create a synthetic span (0,0) - used when span information is not available during lowering.
+    /// This should be replaced with actual spans when span information is available.
+    pub fn synthetic_span() -> Span {
+        Span::new(0, 0)
+    }
+    
+    /// Get the span from this error.
+    pub fn span(&self) -> Span {
+        match self {
+            HirError::NotImplemented { span } => *span,
+            HirError::UnknownVariable { span, .. } => *span,
+            HirError::VariableAlreadyDeclared { span, .. } => *span,
+            HirError::TypeMismatch { span, .. } => *span,
+            HirError::TypeError { span, .. } => *span,
+            HirError::BinaryOpTypeError { span, .. } => *span,
+            HirError::MemberNotFound { span, .. } => *span,
+            HirError::FunctionNotFound { span, .. } => *span,
+            HirError::ModuleNotFound { span, .. } => *span,
+        }
+    }
+}
 
 
 /// Maps imported symbol names to their function IDs.
@@ -310,6 +385,10 @@ pub struct Module {
 /// The LSP consumes this state instead of re-parsing or re-analyzing.
 #[derive(Debug, Clone, Serialize)]
 pub struct CompilerState {
+    /// Concrete Syntax Tree - preserves exact source spans for LSP.
+    /// Used for fast syntax highlighting (keywords, operators, literals) without semantic analysis.
+    pub cst: crate::core::cst::CstProgram,
+    /// Abstract Syntax Tree - semantic representation without spans.
     pub ast: crate::core::ast::Program,
     pub hir: HirAst,
     pub diagnostics: Vec<HirError>,
@@ -319,6 +398,8 @@ pub struct CompilerState {
     pub semantic_items: Vec<SemanticItem>,
     /// Precomputed line index for efficient byte-to-line/column conversion.
     pub line_index: Option<LineIndex>,
+    /// Documentation blocks keyed by declaration identifier name.
+    pub docs: std::collections::HashMap<String, crate::core::cst::DocBlock>,
 }
 
 impl CompilerState {
@@ -330,13 +411,15 @@ impl CompilerState {
     /// Note: source text is needed to extract spans, but we don't store it in CompilerState.
     /// If source is None, spans will be None. Semantic items are projected from the state.
     pub fn new(
+        cst: crate::core::cst::CstProgram,
         ast: crate::core::ast::Program,
         hir: HirAst,
         diagnostics: Vec<HirError>,
         source: Option<&str>,
+        docs: std::collections::HashMap<String, crate::core::cst::DocBlock>,
     ) -> Self {
-        let symbols = if let Some(src) = source {
-            Self::build_symbol_table(&hir, &ast, src)
+        let symbols = if let Some(_src) = source {
+            Self::build_symbol_table(&hir, &ast, &cst)
         } else {
             Self::build_symbol_table_without_spans(&hir)
         };
@@ -355,12 +438,14 @@ impl CompilerState {
         };
 
         Self {
+            cst,
             ast,
             hir,
             diagnostics,
             symbols,
             semantic_items,
             line_index,
+            docs,
         }
     }
 
@@ -376,13 +461,158 @@ impl CompilerState {
         project_semantic_items::collect_semantic_items(&self.ast, source, &self.hir)
     }
 
+    /// Query documentation for a declaration by identifier name.
+    ///
+    /// This is the stable internal API for tooling to access documentation.
+    /// The compiler does not interpret docs - this is purely for tooling consumption.
+    ///
+    /// # Arguments
+    /// * `identifier` - The name of the declaration (function, const, let, struct, mod)
+    ///
+    /// # Returns
+    /// * `Some(&DocBlock)` if documentation exists for this identifier
+    /// * `None` if no documentation is available
+    ///
+    /// # Example
+    /// ```ignore
+    /// if let Some(doc) = compiler_state.docs_for("my_function") {
+    ///     println!("Documentation: {}", doc.text);
+    /// }
+    /// ```
+    pub fn docs_for(&self, identifier: &str) -> Option<&crate::core::cst::DocBlock> {
+        self.docs.get(identifier)
+    }
+
+    /// Get all documentation blocks in source order.
+    ///
+    /// Returns documentation blocks in the order they appear in the source code,
+    /// matching Cantaloop's "code as execution" philosophy.
+    ///
+    /// This is useful for deterministic doc extraction tools.
+    pub fn docs_in_source_order(&self, source: &str) -> Vec<(&String, &crate::core::cst::DocBlock)> {
+        // Build a map of identifier -> (line_number, identifier, doc)
+        let mut docs_with_positions: Vec<(usize, &String, &crate::core::cst::DocBlock)> = Vec::new();
+        
+        for (identifier, doc) in &self.docs {
+            // Find the line number of the declaration by searching in AST
+            let line_num = self.find_declaration_line(identifier, source);
+            docs_with_positions.push((line_num, identifier, doc));
+        }
+        
+        // Sort by line number (source order)
+        docs_with_positions.sort_by_key(|(line, _, _)| *line);
+        
+        // Return (identifier, doc) pairs
+        docs_with_positions.into_iter().map(|(_, ident, doc)| (ident, doc)).collect()
+    }
+
+    /// Find the line number of a declaration in source code.
+    fn find_declaration_line(&self, identifier: &str, source: &str) -> usize {
+        // Search through AST to find the declaration
+        for block in &self.ast.blocks {
+            for stmt in &block.statements {
+                match stmt {
+                    crate::core::ast::Statement::FunctionDeclaration { identifier: name, .. } 
+                        if name.name == identifier => {
+                        // Find in CST to get span
+                        if let Some(span) = self.find_cst_span_for_declaration(identifier) {
+                            if let Some(idx) = &self.line_index {
+                                let (line, _) = idx.lookup(span.start as usize);
+                                return line as usize;
+                            }
+                        }
+                    }
+                    crate::core::ast::Statement::Const { identifier: name, .. } 
+                        if name.name == identifier => {
+                        if let Some(span) = self.find_cst_span_for_declaration(identifier) {
+                            if let Some(idx) = &self.line_index {
+                                let (line, _) = idx.lookup(span.start as usize);
+                                return line as usize;
+                            }
+                        }
+                    }
+                    crate::core::ast::Statement::Let { identifier: name, .. } 
+                        if name.name == identifier => {
+                        if let Some(span) = self.find_cst_span_for_declaration(identifier) {
+                            if let Some(idx) = &self.line_index {
+                                let (line, _) = idx.lookup(span.start as usize);
+                                return line as usize;
+                            }
+                        }
+                    }
+                    crate::core::ast::Statement::Struct { name, .. } 
+                        if name == identifier => {
+                        if let Some(span) = self.find_cst_span_for_declaration(identifier) {
+                            if let Some(idx) = &self.line_index {
+                                let (line, _) = idx.lookup(span.start as usize);
+                                return line as usize;
+                            }
+                        }
+                    }
+                    crate::core::ast::Statement::Mod { identifier: name } 
+                        if name == identifier => {
+                        if let Some(span) = self.find_cst_span_for_declaration(identifier) {
+                            if let Some(idx) = &self.line_index {
+                                let (line, _) = idx.lookup(span.start as usize);
+                                return line as usize;
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        
+        // Fallback: search in source text
+        for (line_num, line) in source.lines().enumerate() {
+            if line.contains(&format!("{}", identifier)) {
+                return line_num;
+            }
+        }
+        
+        0
+    }
+
+    /// Find the CST span for a declaration identifier.
+    pub fn find_cst_span_for_declaration(&self, identifier: &str) -> Option<crate::core::cst::Span> {
+        // Search through CST to find the declaration
+        for block in &self.cst.blocks {
+            for stmt in &block.node.statements {
+                match &stmt.node {
+                    crate::core::cst::CstStatement::FunctionDeclaration { identifier: name, .. } 
+                        if name.node == identifier => {
+                        return Some(name.span);
+                    }
+                    crate::core::cst::CstStatement::Const { identifier: name, .. } 
+                        if name.node == identifier => {
+                        return Some(name.span);
+                    }
+                    crate::core::cst::CstStatement::Let { identifier: name, .. } 
+                        if name.node == identifier => {
+                        return Some(name.span);
+                    }
+                    crate::core::cst::CstStatement::Struct { name, .. } 
+                        if name.node == identifier => {
+                        return Some(name.span);
+                    }
+                    crate::core::cst::CstStatement::Mod { identifier: name } 
+                        if name.node == identifier => {
+                        return Some(name.span);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        None
+    }
+
     // Symbol table building functions (moved from symbols module for now due to dependencies)
     fn build_symbol_table(
         hir: &HirAst,
         ast: &crate::core::ast::Program,
-        source: &str,
+        cst: &crate::core::cst::CstProgram,
     ) -> SymbolTable {
-        symbols::build_symbol_table(hir, ast, source)
+        symbols::build_symbol_table(hir, ast, cst)
     }
 
     fn build_symbol_table_without_spans(hir: &HirAst) -> SymbolTable {

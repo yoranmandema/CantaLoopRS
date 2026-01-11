@@ -2,7 +2,25 @@ use pest::iterators::Pair;
 
 use crate::core::parser::{Rule, PRATT_PARSER, CantaLoopParser};
 use pest::Parser;
-use crate::core::ast::{Expression, Statement, Program, Block, Literal, UnaryOp, BinaryOp, PostfixOp, CallArgument, ImportSelector, IndexSpec};
+use crate::core::ast::{Expression, Statement, Program, Block, Literal, UnaryOp, BinaryOp, PostfixOp, CallArgument, ImportSelector, IndexSpec, AstIdent};
+use crate::core::cst::CstId;
+
+/// Helper to create an AstIdent from a String with a dummy CstId.
+/// 
+/// **LEGACY CODE**: This builder module is kept for reference but is NOT used in the main
+/// compilation path. The main path uses `Text → CST → AST` lowering via `parse_program()`.
+/// 
+/// **CstId::new(0) is intentional**: Since this builder creates AST nodes directly from
+/// Pest pairs (bypassing CST), there is no CST node to get a CstId from. All nodes created
+/// by this builder will have `CstId::new(0)` as a marker that they don't have identity tracking.
+/// 
+/// For proper identity tracking, use the CST→AST lowering path instead.
+fn make_dummy_ast_ident(name: String) -> AstIdent {
+    AstIdent {
+        name,
+        cst_id: CstId::new(0), // Legacy code: no CST node available, so no identity tracking
+    }
+}
 
 // ============================================================================
 // Error Helpers
@@ -325,6 +343,12 @@ fn build_block (pair: Pair<Rule>) -> Result<Block, pest::error::Error<Rule>> {
             Rule::statement => {
                 statements.push(build_statement(inner)?);
             },
+            Rule::trailing_expression => {
+                // Trailing expression without semicolon - parse as expression statement
+                let span = inner.as_span();
+                let full_text = inner.as_str();
+                statements.push(Statement::Expression(parse_expression_from_text(full_text, span)?));
+            },
             _ => {
                 // Ignore semicolons and whitespace
             }
@@ -368,17 +392,26 @@ fn build_function_declaration(pair: Pair<Rule>) -> Result<Statement, pest::error
     
     // Extract block content
     let block_content = extract_braced_content(text, brace_start, span)?;
-    let body_block = parse_block_from_braced_block_text(
+    let mut body_block = parse_block_from_braced_block_text(
         &format!("{{{}}}", block_content),
         span,
         "Function body",
     )?;
-    
+
+    // Convert trailing expression to return statement (Rust-style return)
+    if let Some(Statement::Expression(expr)) = body_block.statements.last() {
+        let expr_clone = expr.clone();
+        let last_idx = body_block.statements.len() - 1;
+        body_block.statements[last_idx] = Statement::Return {
+            expression: expr_clone,
+        };
+    }
+
     // Parse function arguments
     let args_start = text.find('(')
         .ok_or_else(|| error_at_span(span, "Function missing opening paren".to_string()))? + 1;
     let args_text = text[args_start..paren_end - 1].trim();
-    
+
     let arguments = if args_text.is_empty() {
         Vec::new()
     } else {
@@ -386,11 +419,14 @@ fn build_function_declaration(pair: Pair<Rule>) -> Result<Statement, pest::error
     };
 
     Ok(Statement::FunctionDeclaration {
-        identifier,
+        identifier: make_dummy_ast_ident(identifier),
         arguments,
         return_type,
         body: body_block,
         pub_visibility,
+        // Legacy code: This builder bypasses CST, so no CstId is available.
+        // For proper identity tracking, use CST→AST lowering instead.
+        cst_id: CstId::new(0),
     })
 }
 
@@ -417,7 +453,7 @@ fn parse_function_arguments(
                 let type_pair = arg_inner.next()
                     .ok_or_else(|| error_at_span(arg_span, "Function argument missing type annotation".to_string()))?;
                 let kind = build_type_annotation(type_pair)?;
-                arguments.push(Argument { identifier: id, kind });
+                arguments.push(Argument { identifier: make_dummy_ast_ident(id), kind });
             }
         }
     }
@@ -458,7 +494,7 @@ fn parse_closure_arguments(
                     "".to_string() // No type annotation
                 };
                 
-                arguments.push(Argument { identifier: id, kind });
+                arguments.push(Argument { identifier: make_dummy_ast_ident(id), kind });
             }
         }
     }
@@ -466,13 +502,19 @@ fn parse_closure_arguments(
 }
 
 fn build_identifier_expr(pair: Pair<Rule>) -> Result<Expression, pest::error::Error<Rule>> {
-    let identifier = pair.as_str().to_string();
+    let identifier_str = pair.as_str().to_string();
+    let identifier = crate::core::ast::AstIdent {
+        name: identifier_str.clone(),
+        // Legacy code: This builder bypasses CST, so no CstId is available.
+        // For proper identity tracking, use CST→AST lowering instead.
+        cst_id: crate::core::cst::CstId::new(0),
+    };
     // Keywords are prevented by grammar, but check here as a safety measure
     const KEYWORDS: &[&str] = &["fn", "if", "else", "elseif", "match", "return", "let", "true", "false"];
-    if KEYWORDS.contains(&identifier.as_str()) {
+    if KEYWORDS.contains(&identifier.name.as_str()) {
         return Err(pest::error::Error::new_from_span(
             pest::error::ErrorVariant::CustomError { 
-                message: format!("'{}' is a keyword and cannot be used as an identifier", identifier)
+                message: format!("'{}' is a keyword and cannot be used as an identifier", identifier.name)
             },
             pair.as_span(),
         ));
@@ -932,7 +974,17 @@ fn build_closure_expression(pair: Pair<Rule>) -> Result<Expression, pest::error:
             let whitespace_skip = body_text_start[body_start_in_body_text..].len() - body_text.len();
             let block_start = paren_end + body_start_offset + body_start_in_body_text + whitespace_skip;
             let block_content = extract_braced_content(full_text, block_start, span)?;
-            let body_block = parse_block_from_text(block_content, span)?;
+            let mut body_block = parse_block_from_text(block_content, span)?;
+            
+            // Convert trailing expression to return statement (Rust-style return)
+            if let Some(Statement::Expression(expr)) = body_block.statements.last() {
+                let expr_clone = expr.clone();
+                let last_idx = body_block.statements.len() - 1;
+                body_block.statements[last_idx] = Statement::Return {
+                    expression: expr_clone,
+                };
+            }
+            
             ClosureBody::Block(body_block)
         } else {
             // Expression body with arrow
@@ -943,7 +995,17 @@ fn build_closure_expression(pair: Pair<Rule>) -> Result<Expression, pest::error:
         // No arrow, but has block: fn(args) { body } or fn(args) -> type { body }
         let block_start = paren_end + body_start_offset + body_text_start.find('{').unwrap();
         let block_content = extract_braced_content(full_text, block_start, span)?;
-        let body_block = parse_block_from_text(block_content, span)?;
+        let mut body_block = parse_block_from_text(block_content, span)?;
+        
+        // Convert trailing expression to return statement (Rust-style return)
+        if let Some(Statement::Expression(expr)) = body_block.statements.last() {
+            let expr_clone = expr.clone();
+            let last_idx = body_block.statements.len() - 1;
+            body_block.statements[last_idx] = Statement::Return {
+                expression: expr_clone,
+            };
+        }
+        
         ClosureBody::Block(body_block)
     } else {
         return Err(error_at_span(span, "Closure must have either '=>' followed by an expression/block, or a block body without arrow".to_string()));
@@ -989,15 +1051,22 @@ fn build_primary(primary_pair: Pair<Rule>) -> Result<Expression, pest::error::Er
                         let object_expr = parse_expression_from_text(&identifiers[0], span)?;
                         Ok(Expression::FieldAccess {
                             object: Box::new(object_expr),
-                            field: identifiers[1].clone(),
+                            field: make_dummy_ast_ident(identifiers[1].clone()),
+                            // Legacy code: This builder bypasses CST, so no CstId is available.
+        // For proper identity tracking, use CST→AST lowering instead.
+        cst_id: CstId::new(0),
                         })
                     } else {
                         // Multi-level member access: utils.add -> MemberAccess(Identifier("utils"), "add")
-                        let object = Box::new(Expression::Identifier(identifiers[0].clone()));
-                        let member = identifiers[1..].join(".");
+                        let object = Box::new(Expression::Identifier(make_dummy_ast_ident(identifiers[0].clone())));
+                        // For multi-level member access, use the last member
+                        let last_member = identifiers.last().unwrap().clone();
                         Ok(Expression::MemberAccess {
                             object,
-                            member,
+                            member: make_dummy_ast_ident(last_member),
+                            // Legacy code: This builder bypasses CST, so no CstId is available.
+        // For proper identity tracking, use CST→AST lowering instead.
+        cst_id: CstId::new(0),
                         })
                     }
                 }
@@ -1118,6 +1187,9 @@ fn build_atom(atom_pair: Pair<Rule>) -> Result<Expression, pest::error::Error<Ru
                                 expr = Expression::FunctionCall {
                                     callee: Box::new(expr),
                                     arguments,
+                                    // Legacy code: This builder bypasses CST, so no CstId is available.
+        // For proper identity tracking, use CST→AST lowering instead.
+        cst_id: CstId::new(0),
                                 };
                             }
                         } else {
@@ -1491,7 +1563,12 @@ fn build_statement(pair: Pair<Rule>) -> Result<Statement, pest::error::Error<Rul
             let expression = parse_expression_from_text(expr_text, span)?;
             
             Ok(Statement::Let {
-                identifier,
+                identifier: crate::core::ast::AstIdent {
+                    name: identifier,
+                    // Legacy code: This builder bypasses CST, so no CstId is available.
+                    // For proper identity tracking, use CST→AST lowering instead.
+                    cst_id: crate::core::cst::CstId::new(0),
+                },
                 type_annotation,
                 expression,
                 pub_visibility,
@@ -1517,7 +1594,12 @@ fn build_statement(pair: Pair<Rule>) -> Result<Statement, pest::error::Error<Rul
             let expression = parse_expression_from_text(expr_text, span)?;
             
             Ok(Statement::Const {
-                identifier,
+                identifier: crate::core::ast::AstIdent {
+                    name: identifier,
+                    // Legacy code: This builder bypasses CST, so no CstId is available.
+                    // For proper identity tracking, use CST→AST lowering instead.
+                    cst_id: crate::core::cst::CstId::new(0),
+                },
                 expression,
                 pub_visibility,
             })
@@ -2092,15 +2174,18 @@ fn build_struct_literal(pair: Pair<Rule>) -> Result<Expression, pest::error::Err
     };
     
     Ok(Expression::StructInit {
-        struct_name,
+        struct_name: make_dummy_ast_ident(struct_name),
         fields,
+        // Legacy code: This builder bypasses CST, so no CstId is available.
+        // For proper identity tracking, use CST→AST lowering instead.
+        cst_id: CstId::new(0),
     })
 }
 
 fn parse_struct_init_fields(
     fields_text: &str,
     span: pest::Span,
-) -> Result<Vec<(String, Expression)>, pest::error::Error<Rule>> {
+) -> Result<Vec<(AstIdent, Expression)>, pest::error::Error<Rule>> {
     // Trim the fields text to remove leading/trailing whitespace
     let trimmed = fields_text.trim();
     let mut parse_result = CantaLoopParser::parse(Rule::struct_init_fields, trimmed)
@@ -2121,7 +2206,12 @@ fn parse_struct_init_fields(
                 
                 // Extract identifier (everything before the colon)
                 let identifier_text = field_text[..colon_pos].trim();
-                let field_name = identifier_text.to_string();
+                let field_name = crate::core::ast::AstIdent {
+        name: identifier_text.to_string(),
+        // Legacy code: This builder bypasses CST, so no CstId is available.
+        // For proper identity tracking, use CST→AST lowering instead.
+        cst_id: crate::core::cst::CstId::new(0),
+    };
                 
                 // Extract expression (everything after the colon)
                 let expr_text = field_text[colon_pos + 1..].trim();

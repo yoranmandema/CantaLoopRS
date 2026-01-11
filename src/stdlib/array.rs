@@ -49,6 +49,7 @@ lazy_static::lazy_static! {
                     panic!("len expects array argument")
                 }
             }),
+            docs: None,
         },
         StdFunction {
             name: "get",
@@ -69,6 +70,7 @@ lazy_static::lazy_static! {
                     panic!("get expects array as first argument")
                 }
             }),
+            docs: None,
         },
         StdFunction {
             name: "set",
@@ -91,6 +93,7 @@ lazy_static::lazy_static! {
                     panic!("set expects array as first argument");
                 }
             }),
+            docs: None,
         },
         StdFunction {
             name: "slice",
@@ -135,6 +138,7 @@ lazy_static::lazy_static! {
                     panic!("slice expects array as first argument")
                 }
             }),
+            docs: None,
         },
         StdFunction {
             name: "push",
@@ -155,6 +159,7 @@ lazy_static::lazy_static! {
                     panic!("push expects array as first argument");
                 }
             }),
+            docs: None,
         },
         StdFunction {
             name: "concat",
@@ -180,6 +185,7 @@ lazy_static::lazy_static! {
                 result.extend_from_slice(arr2);
                 Value::array_with_heap(result, heap)
             }),
+            docs: None,
         },
         StdFunction {
             name: "range",
@@ -208,10 +214,12 @@ lazy_static::lazy_static! {
 
                 Value::array_with_heap(result, heap)
             }),
+            docs: None,
         },
         ]
     },
     structs: vec![],
     submodules: vec![],
+    docs: None,
     };
 }

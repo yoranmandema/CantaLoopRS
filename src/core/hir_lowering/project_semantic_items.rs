@@ -103,26 +103,37 @@ pub fn collect_semantic_items(ast: &crate::core::ast::Program, source: &str, hir
     }
     
     // Also include imported functions
-    // Imported constants are in var_types (we copy them), so if it's in import_table
-    // but not in var_types, it's likely a function. Also check if the ID maps to a function.
+    // Imported items can be functions (native or user-defined) or constants
+    // Check if the ID maps to a function in hir.functions (user-defined functions)
+    // Also check var_types - if an imported item has a Function/Thunk/Callable type, it's a function
     for (_module_name, imports) in &hir.module_imports {
         for (name, func_id) in imports {
-        // Check if the ID maps to a function in hir.functions
-        if hir.functions.contains_key(func_id) {
-            function_names.insert(name.clone());
-        } else if !var_types.contains_key(name) {
-            // If not in var_types and not in functions, assume it's a function from another module
-            function_names.insert(name.clone());
+            // Check if the ID maps to a function in hir.functions (user-defined functions)
+            if hir.functions.contains_key(func_id) {
+                function_names.insert(name.clone());
+            } else if let Some(ty) = var_types.get(name) {
+                // Check the type - if it's a Function, Thunk, or Callable, it's a function
+                match ty {
+                    ValueKind::Function(_) | ValueKind::Thunk(_) | ValueKind::Callable => {
+                        function_names.insert(name.clone());
+                    }
+                    _ => {
+                        // It's a constant (Number, String, Boolean, etc.), don't add to function_names
+                    }
+                }
+            } else {
+                // Not in var_types - assume it's a function (native or from another module)
+                function_names.insert(name.clone());
+            }
         }
     }
-}
     
     // Build a set of constant names from AST (variables declared with `const`)
     let mut constant_names: std::collections::HashSet<String> = std::collections::HashSet::new();
     for block in &ast.blocks {
         for stmt in &block.statements {
             if let crate::core::ast::Statement::Const { identifier, .. } = stmt {
-                constant_names.insert(identifier.clone());
+                constant_names.insert(identifier.name.clone());
             }
         }
     }
@@ -207,7 +218,7 @@ pub fn collect_semantic_items(ast: &crate::core::ast::Program, source: &str, hir
                         current_pos = span.end;
                     }
                     // Function name
-                    if let Some(span) = find_identifier_span(identifier, source, current_pos) {
+                    if let Some(span) = find_identifier_span(&identifier.name, source, current_pos) {
                         items.push(SemanticItem::function(span));
                         current_pos = span.end;
                     }
@@ -247,10 +258,10 @@ pub fn collect_semantic_items(ast: &crate::core::ast::Program, source: &str, hir
                         current_pos = span.end;
                     }
                     // Variable name - check if it's a thunk
-                    if let Some(span) = find_identifier_span(identifier, source, current_pos) {
+                    if let Some(span) = find_identifier_span(&identifier.name, source, current_pos) {
                         let mut item = SemanticItem::variable(span);
                         // Check if this variable is a thunk
-                        if let Some(ty) = var_types.get(identifier) {
+                        if let Some(ty) = var_types.get(&identifier.name) {
                             if matches!(ty, ValueKind::Thunk(_)) {
                                 item = item.with_modifiers(SemanticModifiers::THUNK);
                             }
@@ -280,10 +291,10 @@ pub fn collect_semantic_items(ast: &crate::core::ast::Program, source: &str, hir
                         items.push(SemanticItem::keyword(span));
                         current_pos = span.end;
                     }
-                    if let Some(span) = find_identifier_span(identifier, source, current_pos) {
+                    if let Some(span) = find_identifier_span(&identifier.name, source, current_pos) {
                         let mut item = SemanticItem::variable(span);
                         // Check if this constant is a thunk (readonly + thunk)
-                        if let Some(ty) = var_types.get(identifier) {
+                        if let Some(ty) = var_types.get(&identifier.name) {
                             let mut modifiers = SemanticModifiers::READONLY;
                             if matches!(ty, ValueKind::Thunk(_)) {
                                 modifiers |= SemanticModifiers::THUNK;
@@ -574,30 +585,70 @@ fn collect_expression_operators(
             }
             Expression::Identifier(name) => {
                 // Identifier in expression - check if it's a function, variable, or constant
-                if let Some(span) = find_identifier_span_in_expr(name, source, *current_pos) {
-                    let item = if function_names.contains(name) {
+                if let Some(span) = find_identifier_span_in_expr(&name.name, source, *current_pos) {
+                    let item = if function_names.contains(&name.name) {
                         // It's a function
                         SemanticItem::function(span)
-                    } else {
-                        // It's a variable or constant - check if it's a constant or thunk
-                        let mut modifiers = SemanticModifiers::empty();
-                        if constant_names.contains(name) {
-                            // It's a constant - mark with READONLY modifier
-                            modifiers |= SemanticModifiers::READONLY;
-                        }
-                        if let Some(ty) = var_types.get(name) {
-                            if matches!(ty, ValueKind::Thunk(_)) {
-                                modifiers |= SemanticModifiers::THUNK;
+                    } else if let Some(ty) = var_types.get(&name.name) {
+                        // Check if the variable type is callable (Function, Thunk, or Callable)
+                        // If so, highlight as function since it's callable
+                        match ty {
+                            ValueKind::Function(_) | ValueKind::Thunk(_) | ValueKind::Callable => {
+                                SemanticItem::function(span)
+                            }
+                            _ => {
+                                // It's a variable or constant - check if it's a constant
+                                let mut modifiers = SemanticModifiers::empty();
+                                if constant_names.contains(&name.name) {
+                                    // It's a constant - mark with READONLY modifier
+                                    modifiers |= SemanticModifiers::READONLY;
+                                }
+                                if matches!(ty, ValueKind::Thunk(_)) {
+                                    modifiers |= SemanticModifiers::THUNK;
+                                }
+                                SemanticItem::variable(span).with_modifiers(modifiers)
                             }
                         }
-                        SemanticItem::variable(span).with_modifiers(modifiers)
+                    } else {
+                        // Unknown identifier - could be a function, but highlight as variable for now
+                        // (will be resolved later in function call contexts)
+                        SemanticItem::variable(span)
                     };
                     items.push(item);
                     *current_pos = span.end;
                 }
             }
             Expression::FunctionCall { callee, arguments, .. } => {
-                walk_expr(callee, source, items, current_pos, var_types, function_names, constant_names);
+                // When we see a function call, check if the callee is a function, thunk, or callable
+                // If so, highlight it as a function
+                if let Expression::Identifier(name) = callee.as_ref() {
+                    if let Some(span) = find_identifier_span_in_expr(&name.name, source, *current_pos) {
+                        // Check if it's a function name, or a variable with a callable type
+                        let item = if function_names.contains(&name.name) {
+                            SemanticItem::function(span)
+                        } else if let Some(ty) = var_types.get(&name.name) {
+                            // Check if the variable type is callable (Function, Thunk, or Callable)
+                            match ty {
+                                ValueKind::Function(_) | ValueKind::Thunk(_) | ValueKind::Callable => {
+                                    // Callable variables should be highlighted as functions
+                                    SemanticItem::function(span)
+                                }
+                                _ => {
+                                    SemanticItem::variable(span)
+                                }
+                            }
+                        } else {
+                            // Unknown identifier - could be a function, highlight as function
+                            SemanticItem::function(span)
+                        };
+                        items.push(item);
+                        *current_pos = span.end;
+                    }
+                } else {
+                    // Recurse into callee expression
+                    walk_expr(callee, source, items, current_pos, var_types, function_names, constant_names);
+                }
+                // Recurse into arguments
                 for arg in arguments {
                     walk_expr(arg, source, items, current_pos, var_types, function_names, constant_names);
                 }
@@ -622,7 +673,7 @@ fn collect_expression_operators(
             Expression::MemberAccess { object, member, .. } => {
                 // Highlight the module/namespace part (object) as a module
                 if let Expression::Identifier(module_name) = object.as_ref() {
-                    if let Some(span) = find_identifier_span_in_expr(module_name, source, *current_pos) {
+                    if let Some(span) = find_identifier_span_in_expr(&module_name.name, source, *current_pos) {
                         items.push(SemanticItem::module(span));
                         *current_pos = span.end;
                     }
@@ -636,9 +687,17 @@ fn collect_expression_operators(
                     *current_pos = span.end;
                 }
                 // Highlight the member name as a function
-                if let Some(span) = find_identifier_span_in_expr(member, source, *current_pos) {
+                if let Some(span) = find_identifier_span_in_expr(&member.name, source, *current_pos) {
                     items.push(SemanticItem::function(span));
                     *current_pos = span.end;
+                }
+            }
+            Expression::Array(elements) => {
+                // Array literal - recurse into each element
+                // Numbers and other literals in arrays are handled by CST syntax tokens,
+                // so we don't need to add semantic items for them here
+                for elem in elements {
+                    walk_expr(elem, source, items, current_pos, var_types, function_names, constant_names);
                 }
             }
             Expression::ArrayIndex { array, .. } => {

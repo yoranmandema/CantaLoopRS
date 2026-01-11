@@ -32,7 +32,9 @@ fn format_function_type_string(sig: &FunctionSignature) -> String {
 
     let params: Vec<String> = sig.params.iter().map(|p| format_kind(p)).collect();
 
-    let param_str = if params.len() == 1 {
+    let param_str = if params.is_empty() {
+        "()".to_string()
+    } else if params.len() == 1 {
         params[0].clone()
     } else {
         format!("({})", params.join(","))
@@ -121,16 +123,16 @@ fn extract_module_name(ast: &crate::core::ast::Program) -> Option<String> {
     None
 }
 
-/// Build a symbol table from HIR, extracting spans from AST.
+/// Build a symbol table from HIR, extracting spans from CST.
 pub fn build_symbol_table(
     hir: &HirAst,
     ast: &crate::core::ast::Program,
-    source: &str,
+    cst: &crate::core::cst::CstProgram,
 ) -> SymbolTable {
     let mut table = SymbolTable::new();
 
-    // Extract all identifier spans from AST
-    let span_map = extract_identifier_spans(ast, source);
+    // Extract all identifier spans from CST (which has accurate spans from the parser)
+    let span_map = extract_identifier_spans_from_cst(cst);
 
     // Track which spans we've used for each name
     let mut used_spans: HashMap<String, usize> = HashMap::new();
@@ -158,19 +160,56 @@ pub fn build_symbol_table(
     let current_module = extract_module_name(ast).unwrap_or_else(|| "__main__".to_string());
 
     // Add all functions (both regular and built-in)
-    for (_, func) in &hir.functions {
+    // CRITICAL: Built-in functions may be registered with qualified names (e.g., "std.print")
+    // but also need to be accessible with unqualified names (e.g., "print")
+    // Since register_builtin_function uses function ID as key, only one name per ID exists in hir.functions.
+    // We create symbols for the name in hir.functions, and the matching logic in build_semantic_index
+    // will match identifiers to symbols by unqualified name.
+    let mut function_ids_seen = std::collections::HashSet::new();
+    for (func_id, func) in &hir.functions {
+        // Skip duplicate function IDs (shouldn't happen, but defensive)
+        if !function_ids_seen.insert(*func_id) {
+            continue;
+        }
+        
         let symbol_id = SymbolId(next_symbol_id);
         next_symbol_id += 1;
         // Functions are defined in the root scope (scope 0)
         let scope = ScopeId(0);
+        
+        // CRITICAL: For built-in functions with qualified names, also create a symbol with unqualified name
+        // This allows code to call built-in functions directly (e.g., "print" instead of "std.print")
+        let qualified_name = func.name.clone();
+        let unqualified_name = if let Some(dot_pos) = qualified_name.find('.') {
+            qualified_name[dot_pos + 1..].to_string()
+        } else {
+            qualified_name.clone()
+        };
+        
+        // Add symbol with the name from hir.functions (may be qualified or unqualified)
         table.symbols.push(Symbol {
             id: symbol_id,
-            name: func.name.clone(),
+            name: qualified_name.clone(),
             kind: SymbolKind::Function,
             ty: ValueKind::Function(format_function_type_string(&func.signature)),
-            defined_at: get_span(&func.name),
+            defined_at: get_span(&qualified_name).or_else(|| get_span(&unqualified_name)),
             scope,
         });
+        
+        // If the function name is qualified, also add a symbol with unqualified name
+        // This ensures code can call built-in functions directly
+        if qualified_name != unqualified_name {
+            let unqualified_symbol_id = SymbolId(next_symbol_id);
+            next_symbol_id += 1;
+            table.symbols.push(Symbol {
+                id: unqualified_symbol_id,
+                name: unqualified_name.clone(),
+                kind: SymbolKind::Function,
+                ty: ValueKind::Function(format_function_type_string(&func.signature)),
+                defined_at: get_span(&unqualified_name).or_else(|| get_span(&qualified_name)),
+                scope,
+            });
+        }
     }
 
     // Add imported functions (they're not in hir.functions, but in import_table)
@@ -228,6 +267,73 @@ pub fn build_symbol_table(
                     scope,
                 });
             }
+        }
+    }
+    
+    // CRITICAL: Add module symbols (std, bevy, functional, etc.)
+    // Module names are extracted from multiple sources:
+    // 1. module_imports keys (modules that have imports registered)
+    // 2. Function names with module qualifiers (e.g., "std.print" -> "std")
+    // 3. Use statement paths (e.g., "use print from std" -> "std")
+    let mut module_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    // Extract module names from module_imports (modules that have imports registered)
+    for module_name in hir.module_imports.keys() {
+        module_names.insert(module_name.clone());
+    }
+
+    // Also check if any function names contain module qualifiers (e.g., "std.print")
+    // This helps us identify stdlib modules even if they haven't been imported yet
+    for func in hir.functions.values() {
+        if let Some(dot_pos) = func.name.find('.') {
+            let module_name = &func.name[..dot_pos];
+            module_names.insert(module_name.to_string());
+        }
+    }
+
+    // CRITICAL FIX: Extract module names from Use statements in CST
+    // This ensures modules like "std" and "functional" in "use print from std"
+    // get symbols created, even if they're not in module_imports yet
+    eprintln!("[LSP] [SYMBOLS] Extracting module names from Use statements in CST...");
+    eprintln!("[LSP] [SYMBOLS] CST has {} blocks", cst.blocks.len());
+    for (block_idx, block) in cst.blocks.iter().enumerate() {
+        eprintln!("[LSP] [SYMBOLS] Block {} has {} statements", block_idx, block.node.statements.len());
+        for (stmt_idx, stmt) in block.node.statements.iter().enumerate() {
+            match &stmt.node {
+                crate::core::cst::CstStatement::Use { path, selector, .. } => {
+                    eprintln!("[LSP] [SYMBOLS] Statement {}: Use statement with {} path segments", stmt_idx, path.len());
+                    for path_segment in path {
+                        eprintln!("[LSP] [SYMBOLS] Found module in Use statement: '{}'", path_segment.node);
+                        module_names.insert(path_segment.node.clone());
+                    }
+                    // Also log the selector for debugging
+                    match &selector.node {
+                        crate::core::cst::CstImportSelector::Single(name) => {
+                            eprintln!("[LSP] [SYMBOLS] Importing: {}", name.node);
+                        }
+                        _ => {}
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    eprintln!("[LSP] [SYMBOLS] Total module names collected: {} -> {:?}", module_names.len(), module_names);
+    
+    // Create symbols for all identified modules
+    for module_name in module_names {
+        // Only create a symbol if we haven't already created one for this module
+        if !table.symbols.iter().any(|s| s.name == module_name && s.kind == SymbolKind::Module) {
+            let symbol_id = SymbolId(next_symbol_id);
+            next_symbol_id += 1;
+            table.symbols.push(Symbol {
+                id: symbol_id,
+                name: module_name.clone(),
+                kind: SymbolKind::Module,
+                ty: ValueKind::Unknown, // Modules don't have types
+                defined_at: get_span(&module_name),
+                scope: ScopeId(0),
+            });
         }
     }
 
@@ -357,7 +463,565 @@ pub fn build_symbol_table_without_spans(hir: &HirAst) -> SymbolTable {
     table
 }
 
+/// Extract identifier spans from CST (which has accurate spans from the parser).
+pub fn extract_identifier_spans_from_cst(
+    cst: &crate::core::cst::CstProgram,
+) -> HashMap<String, Vec<Span>> {
+    use crate::core::cst::{CstExpr, CstStatement};
+    
+    let mut span_map: HashMap<String, Vec<Span>> = HashMap::new();
+
+    // Helper to convert CST span (u32) to HIR span (usize)
+    let cst_to_hir_span = |cst_span: crate::core::cst::Span| -> Span {
+        Span::new(cst_span.start as usize, cst_span.end as usize)
+    };
+
+    // Helper to add a span for an identifier (inline to avoid closure borrow issues)
+    // We'll add spans directly instead of using a closure
+
+    // Helper to walk expressions in CST recursively
+    fn walk_cst_expr(expr: &crate::core::cst::Spanned<CstExpr>, span_map: &mut HashMap<String, Vec<Span>>) {
+        use crate::core::cst::CstExpr;
+        
+        let cst_to_hir_span = |cst_span: crate::core::cst::Span| -> Span {
+            Span::new(cst_span.start as usize, cst_span.end as usize)
+        };
+        
+        match &expr.node {
+            CstExpr::Identifier(name) => {
+                span_map
+                    .entry(name.node.clone())
+                    .or_insert_with(Vec::new)
+                    .push(cst_to_hir_span(name.span));
+            }
+            CstExpr::FunctionCall { callee, arguments, .. } => {
+                walk_cst_expr(callee, span_map);
+                for arg in arguments {
+                    // Arguments are Spanned<CstCallArgument>, extract the expression if present
+                    if let crate::core::cst::CstCallArgument::Expr(e) = &arg.node {
+                        walk_cst_expr(e, span_map);
+                    }
+                }
+            }
+            CstExpr::PartialCall { func, args, .. } => {
+                walk_cst_expr(func, span_map);
+                for arg in args {
+                    if let crate::core::cst::CstCallArgument::Expr(e) = &arg.node {
+                        walk_cst_expr(e, span_map);
+                    }
+                }
+            }
+            CstExpr::MemberAccess { object, members, .. } => {
+                walk_cst_expr(object, span_map);
+                for member in members {
+                    span_map
+                        .entry(member.node.clone())
+                        .or_insert_with(Vec::new)
+                        .push(cst_to_hir_span(member.span));
+                }
+            }
+            CstExpr::Prefix { rhs, .. } => {
+                walk_cst_expr(rhs, span_map);
+            }
+            CstExpr::Postfix { lhs, .. } => {
+                walk_cst_expr(lhs, span_map);
+            }
+            CstExpr::Infix { lhs, rhs, .. } => {
+                walk_cst_expr(lhs, span_map);
+                walk_cst_expr(rhs, span_map);
+            }
+            CstExpr::Compose { lhs, rhs, .. } => {
+                walk_cst_expr(lhs, span_map);
+                walk_cst_expr(rhs, span_map);
+            }
+            CstExpr::Loop { init_vars, body, .. } => {
+                for (var_name, _, expr) in init_vars {
+                    span_map
+                        .entry(var_name.node.clone())
+                        .or_insert_with(Vec::new)
+                        .push(cst_to_hir_span(var_name.span));
+                    walk_cst_expr(expr, span_map);
+                }
+                // Walk body expressions  
+                for stmt in &body.node.statements {
+                    if let crate::core::cst::CstStatement::Expression(expr) = &stmt.node {
+                        walk_cst_expr(expr, span_map);
+                    }
+                }
+            }
+            CstExpr::StructInit { struct_name, fields, .. } => {
+                span_map
+                    .entry(struct_name.node.clone())
+                    .or_insert_with(Vec::new)
+                    .push(cst_to_hir_span(struct_name.span));
+                for field in fields {
+                    walk_cst_expr(&field.node.value, span_map);
+                }
+            }
+            CstExpr::FieldAccess { object, field, .. } => {
+                walk_cst_expr(object, span_map);
+                span_map
+                    .entry(field.node.clone())
+                    .or_insert_with(Vec::new)
+                    .push(cst_to_hir_span(field.span));
+            }
+            CstExpr::ArrayIndex { array, indices, .. } => {
+                walk_cst_expr(array, span_map);
+                for idx_spec in indices {
+                    match &idx_spec.node {
+                        crate::core::cst::CstIndexSpec::Single(expr) => walk_cst_expr(expr, span_map),
+                        crate::core::cst::CstIndexSpec::Range { start, end, step, .. } => {
+                            if let Some(expr) = start {
+                                walk_cst_expr(expr, span_map);
+                            }
+                            if let Some(expr) = end {
+                                walk_cst_expr(expr, span_map);
+                            }
+                            if let Some((_, expr)) = step {
+                                walk_cst_expr(expr, span_map);
+                            }
+                        }
+                        crate::core::cst::CstIndexSpec::InclusiveRange { start, end, .. } => {
+                            if let Some(expr) = start {
+                                walk_cst_expr(expr, span_map);
+                            }
+                            if let Some(expr) = end {
+                                walk_cst_expr(expr, span_map);
+                            }
+                        }
+                    }
+                }
+            }
+            CstExpr::Array { elements, .. } => {
+                for elem in elements {
+                    walk_cst_expr(elem, span_map);
+                }
+            }
+            CstExpr::Closure { arguments, body, .. } => {
+                for arg in arguments {
+                    span_map
+                        .entry(arg.node.identifier.node.clone())
+                        .or_insert_with(Vec::new)
+                        .push(cst_to_hir_span(arg.node.identifier.span));
+                }
+                match body {
+                    crate::core::cst::CstClosureBody::Expression(expr) => walk_cst_expr(expr, span_map),
+                    crate::core::cst::CstClosureBody::Block(block) => {
+                        for stmt in &block.node.statements {
+                            if let crate::core::cst::CstStatement::Expression(expr) = &stmt.node {
+                                walk_cst_expr(expr, span_map);
+                            }
+                        }
+                    }
+                }
+            }
+            CstExpr::Group { inner, .. } => {
+                walk_cst_expr(inner, span_map);
+            }
+            CstExpr::Literal(_) => {}
+            _ => {
+                log::debug!("Unhandled CstExpr variant in walk_cst_expr: {:?}", std::mem::discriminant(&expr.node));
+            }
+        }
+    }
+
+    // Helper to walk statements recursively (for nested blocks)
+    fn walk_cst_statements(statements: &[crate::core::cst::Spanned<CstStatement>], span_map: &mut HashMap<String, Vec<Span>>) {
+        use crate::core::cst::CstStatement;
+        
+        let cst_to_hir_span = |cst_span: crate::core::cst::Span| -> Span {
+            Span::new(cst_span.start as usize, cst_span.end as usize)
+        };
+        
+        fn walk_cst_expr_inner(expr: &crate::core::cst::Spanned<CstExpr>, span_map: &mut HashMap<String, Vec<Span>>) {
+            use crate::core::cst::CstExpr;
+            let cst_to_hir_span = |cst_span: crate::core::cst::Span| -> Span {
+                Span::new(cst_span.start as usize, cst_span.end as usize)
+            };
+            match &expr.node {
+                CstExpr::Identifier(name) => {
+                    span_map
+                        .entry(name.node.clone())
+                        .or_insert_with(Vec::new)
+                        .push(cst_to_hir_span(name.span));
+                }
+                CstExpr::FunctionCall { callee, arguments, .. } => {
+                    walk_cst_expr_inner(callee, span_map);
+                    for arg in arguments {
+                        // Arguments are Spanned<CstCallArgument>, extract the expression if present
+                        if let crate::core::cst::CstCallArgument::Expr(e) = &arg.node {
+                            walk_cst_expr_inner(e, span_map);
+                        }
+                    }
+                }
+                CstExpr::PartialCall { func, args, .. } => {
+                    walk_cst_expr_inner(func, span_map);
+                    for arg in args {
+                        if let crate::core::cst::CstCallArgument::Expr(e) = &arg.node {
+                            walk_cst_expr_inner(e, span_map);
+                        }
+                    }
+                }
+                CstExpr::MemberAccess { object, members, .. } => {
+                    walk_cst_expr_inner(object, span_map);
+                    for member in members {
+                        span_map
+                            .entry(member.node.clone())
+                            .or_insert_with(Vec::new)
+                            .push(cst_to_hir_span(member.span));
+                    }
+                }
+                CstExpr::Prefix { rhs, .. } => walk_cst_expr_inner(rhs, span_map),
+                CstExpr::Postfix { lhs, .. } => walk_cst_expr_inner(lhs, span_map),
+                CstExpr::Infix { lhs, rhs, .. } => {
+                    walk_cst_expr_inner(lhs, span_map);
+                    walk_cst_expr_inner(rhs, span_map);
+                }
+                CstExpr::Compose { lhs, rhs, .. } => {
+                    walk_cst_expr_inner(lhs, span_map);
+                    walk_cst_expr_inner(rhs, span_map);
+                }
+                CstExpr::Loop { init_vars, body, .. } => {
+                    for (var_name, _, expr) in init_vars {
+                        span_map
+                            .entry(var_name.node.clone())
+                            .or_insert_with(Vec::new)
+                            .push(cst_to_hir_span(var_name.span));
+                        walk_cst_expr_inner(expr, span_map);
+                    }
+                    // Walk body expressions
+                    for stmt in &body.node.statements {
+                        if let crate::core::cst::CstStatement::Expression(expr) = &stmt.node {
+                            walk_cst_expr_inner(expr, span_map);
+                        }
+                    }
+                }
+                CstExpr::StructInit { struct_name, fields, .. } => {
+                    // Extract struct name
+                    span_map
+                        .entry(struct_name.node.clone())
+                        .or_insert_with(Vec::new)
+                        .push(cst_to_hir_span(struct_name.span));
+                    // Extract field values (they are expressions)
+                    for field in fields {
+                        walk_cst_expr_inner(&field.node.value, span_map);
+                    }
+                }
+                CstExpr::FieldAccess { object, field, .. } => {
+                    walk_cst_expr_inner(object, span_map);
+                    // Extract field name
+                    span_map
+                        .entry(field.node.clone())
+                        .or_insert_with(Vec::new)
+                        .push(cst_to_hir_span(field.span));
+                }
+                CstExpr::ArrayIndex { array, indices, .. } => {
+                    walk_cst_expr_inner(array, span_map);
+                    for idx_spec in indices {
+                        match &idx_spec.node {
+                            crate::core::cst::CstIndexSpec::Single(expr) => walk_cst_expr_inner(expr, span_map),
+                            crate::core::cst::CstIndexSpec::Range { start, end, step, .. } => {
+                                if let Some(expr) = start {
+                                    walk_cst_expr_inner(expr, span_map);
+                                }
+                                if let Some(expr) = end {
+                                    walk_cst_expr_inner(expr, span_map);
+                                }
+                                if let Some((_, expr)) = step {
+                                    walk_cst_expr_inner(expr, span_map);
+                                }
+                            }
+                            crate::core::cst::CstIndexSpec::InclusiveRange { start, end, .. } => {
+                                if let Some(expr) = start {
+                                    walk_cst_expr_inner(expr, span_map);
+                                }
+                                if let Some(expr) = end {
+                                    walk_cst_expr_inner(expr, span_map);
+                                }
+                            }
+                        }
+                    }
+                }
+                CstExpr::Array { elements, .. } => {
+                    for elem in elements {
+                        walk_cst_expr_inner(elem, span_map);
+                    }
+                }
+                CstExpr::Closure { arguments, body, .. } => {
+                    // Extract closure parameter identifiers
+                    for arg in arguments {
+                        span_map
+                            .entry(arg.node.identifier.node.clone())
+                            .or_insert_with(Vec::new)
+                            .push(cst_to_hir_span(arg.node.identifier.span));
+                    }
+                    // Walk closure body
+                    match body {
+                        crate::core::cst::CstClosureBody::Expression(expr) => walk_cst_expr_inner(expr, span_map),
+                        crate::core::cst::CstClosureBody::Block(block) => {
+                            for stmt in &block.node.statements {
+                                match &stmt.node {
+                                    crate::core::cst::CstStatement::Expression(expr) => walk_cst_expr_inner(expr, span_map),
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
+                }
+                CstExpr::Group { inner, .. } => {
+                    walk_cst_expr_inner(inner, span_map);
+                }
+                CstExpr::Literal(_) => {
+                    // Literals don't contain identifiers
+                }
+                _ => {
+                    // Log unhandled expression types for debugging
+                    log::debug!("Unhandled CstExpr variant in identifier extraction: {:?}", std::mem::discriminant(&expr.node));
+                }
+            }
+        }
+
+        for stmt in statements {
+            match &stmt.node {
+                CstStatement::Let { identifier, expression, .. } => {
+                    span_map
+                        .entry(identifier.node.clone())
+                        .or_insert_with(Vec::new)
+                        .push(cst_to_hir_span(identifier.span));
+                    walk_cst_expr_inner(expression, span_map);
+                }
+                CstStatement::Assign { identifier, expression, .. } => {
+                    span_map
+                        .entry(identifier.node.clone())
+                        .or_insert_with(Vec::new)
+                        .push(cst_to_hir_span(identifier.span));
+                    walk_cst_expr_inner(expression, span_map);
+                }
+                CstStatement::AssignIncrement { identifier, expression, .. } |
+                CstStatement::AssignDecrement { identifier, expression, .. } => {
+                    span_map
+                        .entry(identifier.node.clone())
+                        .or_insert_with(Vec::new)
+                        .push(cst_to_hir_span(identifier.span));
+                    walk_cst_expr_inner(expression, span_map);
+                }
+                CstStatement::Return { expression, .. } => {
+                    walk_cst_expr_inner(expression, span_map);
+                }
+                CstStatement::Expression(expression) => {
+                    walk_cst_expr_inner(expression, span_map);
+                }
+                CstStatement::Break { break_keyword: _, expression } => {
+                    if let Some(expr) = expression {
+                        walk_cst_expr_inner(expr, span_map);
+                    }
+                }
+                CstStatement::If { arms, else_block, .. } => {
+                    for (condition, block) in arms {
+                        walk_cst_expr_inner(condition, span_map);
+                        walk_cst_statements(&block.node.statements, span_map);
+                    }
+                    if let Some(else_block) = else_block {
+                        walk_cst_statements(&else_block.node.statements, span_map);
+                    }
+                }
+                CstStatement::Match { expression, cases, .. } => {
+                    walk_cst_expr_inner(expression, span_map);
+                    for (pattern, block) in cases {
+                        if let Some(pattern) = pattern {
+                            walk_cst_expr_inner(pattern, span_map);
+                        }
+                        walk_cst_statements(&block.node.statements, span_map);
+                    }
+                }
+                CstStatement::While { condition, body, .. } => {
+                    walk_cst_expr_inner(condition, span_map);
+                    walk_cst_statements(&body.node.statements, span_map);
+                }
+                CstStatement::Loop { body, .. } => {
+                    walk_cst_statements(&body.node.statements, span_map);
+                }
+                CstStatement::For { var_name, start, end, body, .. } => {
+                    span_map
+                        .entry(var_name.node.clone())
+                        .or_insert_with(Vec::new)
+                        .push(cst_to_hir_span(var_name.span));
+                    walk_cst_expr_inner(start, span_map);
+                    walk_cst_expr_inner(end, span_map);
+                    walk_cst_statements(&body.node.statements, span_map);
+                }
+                CstStatement::FunctionDeclaration { body, .. } => {
+                    walk_cst_statements(&body.node.statements, span_map);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // Walk through CST blocks and statements
+    for block in &cst.blocks {
+        for stmt in &block.node.statements {
+            match &stmt.node {
+                CstStatement::FunctionDeclaration { identifier, arguments, body, .. } => {
+                    // Extract function name
+                    span_map
+                        .entry(identifier.node.clone())
+                        .or_insert_with(Vec::new)
+                        .push(cst_to_hir_span(identifier.span));
+                    
+                    // Extract function parameter identifiers
+                    for arg in arguments {
+                        // CstArgument has an identifier field
+                        span_map
+                            .entry(arg.node.identifier.node.clone())
+                            .or_insert_with(Vec::new)
+                            .push(cst_to_hir_span(arg.node.identifier.span));
+                    }
+                    
+                    // Also walk the function body to find identifiers inside
+                    walk_cst_statements(&body.node.statements, &mut span_map);
+                }
+                CstStatement::Let { identifier, expression, .. } => {
+                    span_map
+                        .entry(identifier.node.clone())
+                        .or_insert_with(Vec::new)
+                        .push(cst_to_hir_span(identifier.span));
+                    walk_cst_expr(expression, &mut span_map);
+                }
+                CstStatement::Const { identifier, expression, .. } => {
+                    span_map
+                        .entry(identifier.node.clone())
+                        .or_insert_with(Vec::new)
+                        .push(cst_to_hir_span(identifier.span));
+                    walk_cst_expr(expression, &mut span_map);
+                }
+                CstStatement::Assign { identifier, expression, .. } => {
+                    span_map
+                        .entry(identifier.node.clone())
+                        .or_insert_with(Vec::new)
+                        .push(cst_to_hir_span(identifier.span));
+                    walk_cst_expr(expression, &mut span_map);
+                }
+                CstStatement::AssignIncrement { identifier, expression, .. } => {
+                    span_map
+                        .entry(identifier.node.clone())
+                        .or_insert_with(Vec::new)
+                        .push(cst_to_hir_span(identifier.span));
+                    walk_cst_expr(expression, &mut span_map);
+                }
+                CstStatement::AssignDecrement { identifier, expression, .. } => {
+                    span_map
+                        .entry(identifier.node.clone())
+                        .or_insert_with(Vec::new)
+                        .push(cst_to_hir_span(identifier.span));
+                    walk_cst_expr(expression, &mut span_map);
+                }
+                CstStatement::For { var_name, start, end, body, .. } => {
+                    span_map
+                        .entry(var_name.node.clone())
+                        .or_insert_with(Vec::new)
+                        .push(cst_to_hir_span(var_name.span));
+                    walk_cst_expr(start, &mut span_map);
+                    walk_cst_expr(end, &mut span_map);
+                    walk_cst_statements(&body.node.statements, &mut span_map);
+                }
+                CstStatement::Mod { identifier } => {
+                    span_map
+                        .entry(identifier.node.clone())
+                        .or_insert_with(Vec::new)
+                        .push(cst_to_hir_span(identifier.span));
+                }
+                CstStatement::Return { expression, .. } => {
+                    walk_cst_expr(expression, &mut span_map);
+                }
+                CstStatement::If { arms, else_block, .. } => {
+                    for (condition, block) in arms {
+                        walk_cst_expr(condition, &mut span_map);
+                        walk_cst_statements(&block.node.statements, &mut span_map);
+                    }
+                    if let Some(else_block) = else_block {
+                        walk_cst_statements(&else_block.node.statements, &mut span_map);
+                    }
+                }
+                CstStatement::Match { expression, cases, .. } => {
+                    walk_cst_expr(expression, &mut span_map);
+                    for (pattern, block) in cases {
+                        if let Some(pattern) = pattern {
+                            walk_cst_expr(pattern, &mut span_map);
+                        }
+                        walk_cst_statements(&block.node.statements, &mut span_map);
+                    }
+                }
+                CstStatement::While { condition, body, .. } => {
+                    walk_cst_expr(condition, &mut span_map);
+                    walk_cst_statements(&body.node.statements, &mut span_map);
+                }
+                CstStatement::Loop { body, .. } => {
+                    walk_cst_statements(&body.node.statements, &mut span_map);
+                }
+                CstStatement::Expression(expression) => {
+                    walk_cst_expr(expression, &mut span_map);
+                }
+                CstStatement::Break { break_keyword: _, expression } => {
+                    if let Some(expr) = expression {
+                        walk_cst_expr(expr, &mut span_map);
+                    }
+                }
+                CstStatement::Continue { continue_keyword: _ } => {}
+                CstStatement::Use { selector, path, .. } => {
+                    // Extract identifiers from use statement selector
+                    match &selector.node {
+                        crate::core::cst::CstImportSelector::Single(name) => {
+                            span_map
+                                .entry(name.node.clone())
+                                .or_insert_with(Vec::new)
+                                .push(cst_to_hir_span(name.span));
+                        }
+                        crate::core::cst::CstImportSelector::Multiple(names) => {
+                            for name in names {
+                                span_map
+                                    .entry(name.node.clone())
+                                    .or_insert_with(Vec::new)
+                                    .push(cst_to_hir_span(name.span));
+                            }
+                        }
+                        crate::core::cst::CstImportSelector::Wildcard(_) => {
+                            // Wildcard import doesn't have specific identifiers to extract
+                        }
+                    }
+                    
+                    // Extract module path identifiers (e.g., "std" in "use print from std")
+                    for path_segment in path {
+                        span_map
+                            .entry(path_segment.node.clone())
+                            .or_insert_with(Vec::new)
+                            .push(cst_to_hir_span(path_segment.span));
+                    }
+                }
+                CstStatement::Struct { name, fields, .. } => {
+                    // Extract struct name
+                    span_map
+                        .entry(name.node.clone())
+                        .or_insert_with(Vec::new)
+                        .push(cst_to_hir_span(name.span));
+                    
+                    // Extract struct field names
+                    for field in fields {
+                        span_map
+                            .entry(field.node.name.node.clone())
+                            .or_insert_with(Vec::new)
+                            .push(cst_to_hir_span(field.node.name.span));
+                    }
+                }
+            }
+        }
+    }
+
+    span_map
+}
+
 /// Extract identifier spans from AST by walking the tree and finding identifiers in source text.
+/// DEPRECATED: Use extract_identifier_spans_from_cst instead, which has accurate spans from the parser.
 fn extract_identifier_spans(
     ast: &crate::core::ast::Program,
     source: &str,
@@ -408,27 +1072,27 @@ fn extract_identifier_spans(
         for stmt in &block.statements {
             match stmt {
                 crate::core::ast::Statement::FunctionDeclaration { identifier, .. } => {
-                    if let Some(span) = find_identifier_span(identifier, current_pos) {
+                    if let Some(span) = find_identifier_span(&identifier.name, current_pos) {
                         span_map
-                            .entry(identifier.clone())
+                            .entry(identifier.name.clone())
                             .or_insert_with(Vec::new)
                             .push(span);
                         current_pos = span.end;
                     }
                 }
                 crate::core::ast::Statement::Let { identifier, .. } => {
-                    if let Some(span) = find_identifier_span(identifier, current_pos) {
+                    if let Some(span) = find_identifier_span(&identifier.name, current_pos) {
                         span_map
-                            .entry(identifier.clone())
+                            .entry(identifier.name.clone())
                             .or_insert_with(Vec::new)
                             .push(span);
                         current_pos = span.end;
                     }
                 }
                 crate::core::ast::Statement::Const { identifier, .. } => {
-                    if let Some(span) = find_identifier_span(identifier, current_pos) {
+                    if let Some(span) = find_identifier_span(&identifier.name, current_pos) {
                         span_map
-                            .entry(identifier.clone())
+                            .entry(identifier.name.clone())
                             .or_insert_with(Vec::new)
                             .push(span);
                         current_pos = span.end;
@@ -523,9 +1187,9 @@ fn walk_expression_for_spans(
     ) {
         match expr {
             Expression::Identifier(name) => {
-                if let Some(span) = find_identifier_span(name, *current_pos) {
+                if let Some(span) = find_identifier_span(&name.name, *current_pos) {
                     span_map
-                        .entry(name.clone())
+                        .entry(name.name.clone())
                         .or_insert_with(Vec::new)
                         .push(span);
                     *current_pos = span.end;
@@ -549,9 +1213,9 @@ fn walk_expression_for_spans(
             }
             Expression::MemberAccess { object, member, .. } => {
                 walk_expr(object, source, span_map, current_pos, find_identifier_span);
-                if let Some(span) = find_identifier_span(member, *current_pos) {
+                if let Some(span) = find_identifier_span(&member.name, *current_pos) {
                     span_map
-                        .entry(member.clone())
+                        .entry(member.name.clone())
                         .or_insert_with(Vec::new)
                         .push(span);
                     *current_pos = span.end;

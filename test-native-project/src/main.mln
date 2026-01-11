@@ -1,3 +1,0 @@
-use std.print;
-
-print("Hello, world! 🍉")!;

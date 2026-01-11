@@ -1,0 +1,19 @@
+
+[Function 0]
+
+[Function 1]
+
+[Function 2]
+
+[Main]
+  0000: LdConst(0)
+  0001: StVar(0)
+  0002: LdStr("Hello world!")
+  0003: LdFunc(10009)
+  0004: Thunk(1)
+  0005: Invoke
+  0006: Pop
+  0007: LdNum(1.0)
+  0008: LdNum(2.0)
+  0009: AddNum
+  0010: Pop

@@ -23,6 +23,7 @@ lazy_static::lazy_static! {
             impl_fn: Arc::new(|_args, _heap| {
                 panic!("map should only be used as a reducer in pipelines (e.g., xs |> map(fn)) or with partial application");
             }),
+            docs: None,
         },
         StdFunction {
             name: "filter",
@@ -37,6 +38,7 @@ lazy_static::lazy_static! {
             impl_fn: Arc::new(|_args, _heap| {
                 panic!("filter should only be used as a reducer in pipelines (e.g., xs |> filter(pred)) or with partial application");
             }),
+            docs: None,
         },
         StdFunction {
             name: "fold",
@@ -49,6 +51,7 @@ lazy_static::lazy_static! {
             impl_fn: Arc::new(|_args, _heap| {
                 panic!("fold should only be used as a reducer in pipelines (e.g., xs |> fold(init, fn))");
             }),
+            docs: None,
         },
         StdFunction {
             name: "reduce",
@@ -63,10 +66,12 @@ lazy_static::lazy_static! {
                 // This implementation should never be called directly
                 panic!("reduce should only be used as a reducer in pipelines (e.g., xs |> reduce(fn))");
             }),
+            docs: None,
         },
         ]
     },
     structs: vec![],
     submodules: vec![],
+    docs: None,
     };
 }
