@@ -137,12 +137,13 @@ fn generate_semantic_tokens(
     // Build list of all spans with their token types
     let mut span_tokens: Vec<(HirSpan, u32, u32)> = Vec::new(); // (span, token_type, modifiers)
     
-    // CRITICAL: Always generate CST-based tokens first (keywords, literals, operators, identifiers)
+    // CRITICAL: Always generate CST-based tokens first (keywords, literals, operators)
     // This ensures we have tokens even if semantic analysis failed
+    // NOTE: We do NOT extract identifiers from CST here because they will be
+    // provided by the semantic token enhancement below (from symbol table).
+    // Extracting them twice causes duplicate/overlapping tokens.
     if let Some(cst) = snapshot.cst(file_id) {
         extract_cst_tokens(cst, source, &mut span_tokens);
-        // Also extract identifiers from CST for basic highlighting
-        extract_identifiers_from_cst(cst, &mut span_tokens);
     }
     
     // If we have semantic information, enhance tokens with symbol types
@@ -183,7 +184,14 @@ fn generate_semantic_tokens(
         // No semantic information available - log warning but continue with CST tokens
         log::warn!("semantic coverage low — falling back to CST-only tokens for file_id {:?}", file_id);
     }
-    
+
+    // CRITICAL FIX: Filter out invalid single-character tokens
+    // The symbol table is generating corrupted single-char spans which cause wrong highlighting
+    span_tokens.retain(|(span, _, _)| {
+        let len = span.end.saturating_sub(span.start);
+        len >= 2 // Keep tokens that are at least 2 characters long
+    });
+
     // Deduplicate overlapping tokens before conversion
     // Keep only one token per position - prefer semantic tokens (those with higher priority types)
     // Sort by start position, then by span size (smallest first), then by type priority
@@ -195,7 +203,7 @@ fn generate_semantic_tokens(
             // Finally by type priority (functions > variables > keywords)
             .then(b.1.cmp(&a.1))
     });
-    
+
     // Remove overlapping tokens - keep the first (smallest, highest priority) token
     let mut deduplicated = Vec::new();
     for token in span_tokens {
@@ -207,7 +215,7 @@ fn generate_semantic_tokens(
             deduplicated.push(token);
         }
     }
-    
+
     // Convert spans to semantic tokens (relative deltas)
     convert_to_semantic_tokens(deduplicated, &line_index)
 }
