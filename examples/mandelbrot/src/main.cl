@@ -22,8 +22,7 @@ let mandel_iter = fn (cx: num, cy: num) -> num => {
         array.range(0, max_iter)
         |> fold(
             State { zx: 0, zy: 0, iter: 0, escaped: false },
-            fn (state) -> State => {
-
+            fn (state) => {
                 if state.escaped {
                     state
                 } else {

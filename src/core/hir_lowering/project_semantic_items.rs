@@ -342,7 +342,7 @@ pub fn collect_semantic_items(ast: &crate::core::ast::Program, source: &str, hir
                         items.push(SemanticItem::keyword(span));
                         current_pos = span.end;
                     }
-                    if let Some(span) = find_identifier_span(var_name, source, current_pos) {
+                    if let Some(span) = find_identifier_span(&var_name.name, source, current_pos) {
                         items.push(SemanticItem::variable(span));
                         current_pos = span.end;
                     }
@@ -366,7 +366,7 @@ pub fn collect_semantic_items(ast: &crate::core::ast::Program, source: &str, hir
                     }
                     // Highlight module path identifiers
                     for path_part in path {
-                        if let Some(span) = find_identifier_span(path_part, source, current_pos) {
+                        if let Some(span) = find_identifier_span(&path_part.name, source, current_pos) {
                             items.push(SemanticItem::module(span));
                             current_pos = span.end;
                         }
@@ -374,11 +374,11 @@ pub fn collect_semantic_items(ast: &crate::core::ast::Program, source: &str, hir
                     // Highlight imported identifiers
                     match selector {
                         crate::core::ast::ImportSelector::Single(name) => {
-                            if let Some(span) = find_identifier_span(name, source, current_pos) {
+                            if let Some(span) = find_identifier_span(&name.name, source, current_pos) {
                                 // Check if it's a function or constant
-                                let item = if function_names.contains(name) {
+                                let item = if function_names.contains(name.name.as_str()) {
                                     SemanticItem::function(span)
-                                } else if constant_names.contains(name) {
+                                } else if constant_names.contains(name.name.as_str()) {
                                     SemanticItem::variable(span).with_modifiers(SemanticModifiers::READONLY)
                                 } else {
                                     // Unknown - assume it's a function (will be resolved later)
@@ -390,11 +390,11 @@ pub fn collect_semantic_items(ast: &crate::core::ast::Program, source: &str, hir
                         }
                         crate::core::ast::ImportSelector::Multiple(names) => {
                             for name in names {
-                                if let Some(span) = find_identifier_span(name, source, current_pos) {
+                                if let Some(span) = find_identifier_span(&name.name, source, current_pos) {
                                     // Check if it's a function or constant
-                                    let item = if function_names.contains(name) {
+                                    let item = if function_names.contains(name.name.as_str()) {
                                         SemanticItem::function(span)
-                                    } else if constant_names.contains(name) {
+                                    } else if constant_names.contains(name.name.as_str()) {
                                         SemanticItem::variable(span).with_modifiers(SemanticModifiers::READONLY)
                                     } else {
                                         // Unknown - assume it's a function (will be resolved later)
@@ -415,7 +415,7 @@ pub fn collect_semantic_items(ast: &crate::core::ast::Program, source: &str, hir
                         items.push(SemanticItem::keyword(span));
                         current_pos = span.end;
                     }
-                    if let Some(span) = find_identifier_span(identifier, source, current_pos) {
+                    if let Some(span) = find_identifier_span(&identifier.name, source, current_pos) {
                         items.push(SemanticItem::module(span));
                         current_pos = span.end;
                     }

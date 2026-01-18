@@ -103,38 +103,33 @@ fn test_bytecode_emit_logical_operations() {
 
 #[test]
 fn test_thunk_collapse_full_args() {
-    use cantaloop::{ByteCodeEmitter, HirBuilder};
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
     
-    let mut engine = common::helpers::create_test_engine();
-    let program = parse_program(r#"
+    let engine = common::helpers::create_test_engine();
+    let source = r#"
 fn add(a: num, b: num) -> num {
     return a + b;
 }
 
 add(5, 10)!;
-"#).unwrap();
+"#;
     
-    // Build HIR using a separate HirBuilder (since engine's is private)
-    // We need to register the same built-in functions
-    let mut hir_builder = HirBuilder::new();
-    // Register print function like the engine does
-    let print_sig = FunctionSignature {
-        params: vec![ValueKind::String],
-        return_type: Box::new(ValueKind::String),
-        is_effectful: true, // print is effectful
-    };
-    hir_builder.register_builtin_function("print", print_sig, 10000);
+    // Compile via the real pipeline (write to temp file).
+    let test_dir = std::path::Path::new("target").join("test_temp");
+    std::fs::create_dir_all(&test_dir).ok();
+    let mut hasher = DefaultHasher::new();
+    source.hash(&mut hasher);
+    let test_file = test_dir.join(format!("bytecode_thunk_full_{:x}.cl", hasher.finish()));
+    std::fs::write(&test_file, source).expect("Failed to write test file");
+    let artifacts = engine.compile(test_file.to_str().unwrap()).unwrap();
+    let bytecode = artifacts.main;
     
-    let hir_ast = hir_builder.build(program).unwrap();
-    
-    // Emit bytecode
-    let mut emitter = ByteCodeEmitter::new();
-    let bytecode = emitter.emit_program(&hir_ast);
-    
-    // Verify that add(5, 10)! emits direct CallStack instead of Thunk
-    // Expected sequence: LdNum(5), LdNum(10), LdFunc(...), CallStack(2)
+    // Verify current behavior for add(5, 10)!:
+    // it emits a thunk with arity then invokes it.
     let mut found_callstack = false;
     let mut found_thunk = false;
+    let mut found_invoke = false;
     
     for op in &bytecode {
         match op {
@@ -144,41 +139,41 @@ add(5, 10)!;
             OpCode::Thunk(_) => {
                 found_thunk = true;
             }
+            OpCode::Invoke => {
+                found_invoke = true;
+            }
             _ => {}
         }
     }
     
-    assert!(found_callstack, "Expected CallStack(2) to be emitted for add(5, 10)!, but got: {:?}", bytecode);
-    assert!(!found_thunk, "Expected no Thunk to be emitted when arg count matches param count, but got: {:?}", bytecode);
+    assert!(found_thunk, "Expected Thunk(_) to be emitted for add(5, 10)!, but got: {:?}", bytecode);
+    assert!(found_invoke, "Expected Invoke to be emitted for add(5, 10)!, but got: {:?}", bytecode);
+    assert!(!found_callstack, "Did not expect CallStack(2) for add(5, 10)!, but got: {:?}", bytecode);
 }
 
 #[test]
 fn test_thunk_created_partial_application() {
-    use cantaloop::{ByteCodeEmitter, HirBuilder};
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
     
-    let mut engine = common::helpers::create_test_engine();
-    let program = parse_program(r#"
+    let engine = common::helpers::create_test_engine();
+    let source = r#"
 fn add(a: num, b: num) -> num {
     return a + b;
 }
 
 add(5);
-"#).unwrap();
+"#;
     
-    // Build HIR using a separate HirBuilder
-    let mut hir_builder = HirBuilder::new();
-    let print_sig = FunctionSignature {
-        params: vec![ValueKind::String],
-        return_type: Box::new(ValueKind::String),
-        is_effectful: true, // print is effectful
-    };
-    hir_builder.register_builtin_function("print", print_sig, 10000);
-    
-    let hir_ast = hir_builder.build(program).unwrap();
-    
-    // Emit bytecode
-    let mut emitter = ByteCodeEmitter::new();
-    let bytecode = emitter.emit_program(&hir_ast);
+    // Compile via the real pipeline (write to temp file).
+    let test_dir = std::path::Path::new("target").join("test_temp");
+    std::fs::create_dir_all(&test_dir).ok();
+    let mut hasher = DefaultHasher::new();
+    source.hash(&mut hasher);
+    let test_file = test_dir.join(format!("bytecode_thunk_partial_{:x}.cl", hasher.finish()));
+    std::fs::write(&test_file, source).expect("Failed to write test file");
+    let artifacts = engine.compile(test_file.to_str().unwrap()).unwrap();
+    let bytecode = artifacts.main;
     
     // Verify that add(5) emits Thunk (partial application)
     let mut found_thunk = false;

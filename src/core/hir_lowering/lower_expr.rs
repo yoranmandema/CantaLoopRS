@@ -6,6 +6,7 @@
 use serde::Serialize;
 
 use crate::core::ast::{BinaryOp, UnaryOp};
+use crate::core::entity_id::EntityId;
 
 use super::HirBlock;
 
@@ -15,8 +16,8 @@ pub enum HirExpression {
     Number(f64),
     String(String),
     Boolean(bool),
-    Identifier(u32),
-    Constant(u32),
+    Identifier(EntityId),
+    Constant(EntityId),
     Binary {
         lhs: Box<HirExpression>,
         rhs: Box<HirExpression>,
@@ -31,21 +32,21 @@ pub enum HirExpression {
         args: Option<Vec<HirExpression>>, // Optional additional arguments for currying: add5!(10)
     },
     FunctionCall {
-        function_id: u32, // Function ID from functions registry
+        function_id: EntityId, // Function ID from functions registry
         args: Vec<HirExpression>,
         invoke: bool, // true if should invoke immediately (!), false if just prepare
     },
     Loop {
-        init_vars: Vec<(u32, HirExpression)>, // (variable_id, initial_value) for loop initialization variables
+        init_vars: Vec<(EntityId, HirExpression)>, // (variable_id, initial_value) for loop initialization variables
         body: HirBlock,
-        break_slot: Option<u32>, // Variable slot for break value (None for statement loops, Some(slot) for expression loops)
+        break_slot: Option<EntityId>, // Variable slot for break value (None for statement loops, Some(slot) for expression loops)
     },
     ComposeThunk {
         first: Box<HirExpression>,
         second: Box<HirExpression>,
     },
     PartialCall {
-        func_id: u32,                      // Function ID from functions registry
+        func_id: EntityId,                 // Function ID from functions registry
         bound: Vec<Option<HirExpression>>, // None = hole, Some(expr) = bound argument
     },
     Array(Vec<HirExpression>), // Array literal: [expr, expr, ...]
@@ -74,7 +75,7 @@ pub enum HirExpression {
         field_name: String, // Field name to access
     },
     Closure {
-        function_id: u32, // Function ID for the anonymous function
+        function_id: EntityId, // Function ID for the anonymous function
     },
 }
 

@@ -6,6 +6,7 @@ use crate::{
         cst::{CstId, Span, CstProgram, parse_cst_program},
         engine::{BytecodeFunction, NativeFunctionDescriptor, RunArtifacts},
         hir_lowering::{HirAst, HirError, SymbolId},
+        EntityId,
     }, parse_program
 };
 
@@ -18,7 +19,7 @@ pub struct BytecodeArtifacts {
 }
 
 pub struct CompileContext<'a> {
-    pub is_native_function: &'a dyn Fn(u32) -> bool,
+    pub is_native_function: &'a dyn Fn(EntityId) -> bool,
     pub native_functions: &'a [NativeFunctionDescriptor],
 }
 
@@ -319,7 +320,22 @@ impl<'a> CompileSession<'a> {
                 CstStatement::Mod { identifier, .. } => {
                     span_map.insert(identifier.id, identifier.span);
                 }
-                CstStatement::Use { path, .. } => {
+                CstStatement::Use { selector, path, .. } => {
+                    // Record selector span + any contained identifier spans
+                    span_map.insert(selector.id, selector.span);
+                    match &selector.node {
+                        crate::core::cst::CstImportSelector::Single(name) => {
+                            span_map.insert(name.id, name.span);
+                        }
+                        crate::core::cst::CstImportSelector::Multiple(names) => {
+                            for name in names {
+                                span_map.insert(name.id, name.span);
+                            }
+                        }
+                        crate::core::cst::CstImportSelector::Wildcard(_) => {}
+                    }
+
+                    // Record module path segments
                     for p in path {
                         span_map.insert(p.id, p.span);
                     }
@@ -388,7 +404,7 @@ impl<'a> CompileSession<'a> {
     /// math_utils.insert("cube".to_string(), cube_id);
     /// engine.register_module("math.utils", math_utils);
     /// ```
-    pub fn register_module(&mut self, path: &str, functions: HashMap<String, u32>) {
+    pub fn register_module(&mut self, path: &str, functions: HashMap<String, crate::core::EntityId>) {
         self.hir_builder
             .register_module(path, functions, HashMap::new(), HashMap::new());
     }
@@ -397,7 +413,7 @@ impl<'a> CompileSession<'a> {
     pub fn register_module_with_structs(
         &mut self,
         path: &str,
-        functions: HashMap<String, u32>,
+        functions: HashMap<String, crate::core::EntityId>,
         structs: HashMap<String, crate::core::hir_lowering::StructDef>,
     ) {
         self.hir_builder
@@ -412,7 +428,7 @@ impl<'a> CompileSession<'a> {
     /// Get the function ID for a registered function by name.
     ///
     /// Returns None if the function is not found.
-    pub fn get_function_id_by_name(&self, name: &str) -> Option<u32> {
+    pub fn get_function_id_by_name(&self, name: &str) -> Option<crate::core::EntityId> {
         self.hir_builder.resolve_function(&self.context, name)
     }
 
@@ -427,7 +443,7 @@ impl<'a> CompileSession<'a> {
         self.context.native_functions
             .iter()
             .find(|native| native.name == name)
-            .map(|native| native.id)
+            .map(|native| native.id.as_u32())
     }
 
     /// Get constant value from HIR (helper function for VM)
@@ -443,7 +459,7 @@ impl<'a> CompileSession<'a> {
         let c = hir
             .constants
             .iter()
-            .find(|c| c.id == id)
+            .find(|c| c.id == EntityId::new(id))
             .expect(&format!("Constant {} not found in HIR - this indicates invalid bytecode", id));
 
         // Constants no longer contain functions - only data
@@ -458,8 +474,11 @@ impl<'a> CompileSession<'a> {
             (ValueKind::Boolean, _) => panic!("Constant boolean should have a Boolean value"),
             (ValueKind::Any, _) => panic!("Constant should not have Any kind"),
             (ValueKind::Unknown, _) => panic!("Constant should not have Unknown kind"),
+            (ValueKind::TypeVar(_), _) => panic!("Constant should not have TypeVar kind"),
             (ValueKind::Function(_), _) => panic!("Constant should not have Function kind"),
             (ValueKind::Thunk(_), _) => panic!("Constant should not have Thunk kind"),
+            (ValueKind::FnSig { .. }, _) => panic!("Constant should not have FnSig kind"),
+            (ValueKind::ThunkSig { .. }, _) => panic!("Constant should not have ThunkSig kind"),
             (ValueKind::Callable, _) => panic!("Constant should not have Callable kind"),
             (ValueKind::Void, _) => panic!("Constant should not have Void kind"),
             (ValueKind::Struct(_), _) => panic!("Constant should not have Struct kind"),
@@ -488,7 +507,7 @@ impl<'a> CompileSession<'a> {
         for block in &ast.blocks {
             for stmt in &block.statements {
                 if let Statement::Mod { identifier } = stmt {
-                    module_name = Some(identifier.clone());
+                    module_name = Some(identifier.name.clone());
                     break;
                 }
             }
@@ -504,7 +523,7 @@ impl<'a> CompileSession<'a> {
 
         // Register module shell – real IDs are filled during unified build
         self.hir_builder
-            .register_module(&module_name, HashMap::new(), HashMap::new(), HashMap::new());
+            .register_module(module_name.as_str(), HashMap::new(), HashMap::new(), HashMap::new());
 
         Ok(module_name)
     }
@@ -553,7 +572,7 @@ impl<'a> CompileSession<'a> {
                     // Extract the first component of the path as the module name
                     // For example, "utils.add" -> "utils"
                     if let Some(module_name) = path.first() {
-                        dependencies.push(module_name.clone());
+                        dependencies.push(module_name.name.clone());
                     }
                 }
             }
@@ -724,10 +743,7 @@ impl<'a> CompileSession<'a> {
                 .ok_or_else(|| format!("Module '{}' not found in loaded_modules", module))?
                 .clone();
             self.hir_builder.set_current_module(Some(module.clone()));
-            // Phase 3: Set target for binding CST IDs to symbol IDs
-            unsafe {
-                self.hir_builder.set_bind_target(&mut self.cst_id_to_symbol_id);
-            }
+            // SymbolResolver is now part of HirBuilder - no need to set bind target
             self.hir_builder.build_append(&self.context, ast)
                 .map_err(|e| format!("Failed to compile module '{}': {:?}", module, e))?;
         }
@@ -748,10 +764,7 @@ impl<'a> CompileSession<'a> {
         let (ast, _ast_docs) = self.lower_cst_to_ast(cst, cst_docs)
             .map_err(|e| format!("Lowering error in '{}': {}", file_path, e))?;
 
-        // Phase 3: Set target for binding CST IDs to symbol IDs
-        unsafe {
-            self.hir_builder.set_bind_target(&mut self.cst_id_to_symbol_id);
-        }
+        // SymbolResolver is now part of HirBuilder - no need to set bind target
         self.hir_builder.build_append(&self.context, ast.clone())
             .map_err(|e| format!("Failed to compile main file '{}': {:?}", file_path, e))?;
 
@@ -762,7 +775,7 @@ impl<'a> CompileSession<'a> {
         self.final_hir = Some(hir_ast.clone());
 
         // Emit function bodies first
-        let function_ids: Vec<u32> = hir_ast.functions.keys().cloned().collect();
+        let function_ids: Vec<EntityId> = hir_ast.functions.keys().cloned().collect();
         let mut functions: HashMap<u32, Vec<OpCode>> = HashMap::new();
 
         for func_id in &function_ids {
@@ -777,7 +790,7 @@ impl<'a> CompileSession<'a> {
             self.emitter
                 .emit_block(&mut func_code, &func.definition.body, &hir_ast);
 
-            functions.insert(*func_id, func_code.clone());
+            functions.insert(func_id.as_u32(), func_code.clone());
 
             // Leak the bytecode to get a 'static reference - this is acceptable since
             // bytecode is created once and lives for the entire program lifetime
@@ -785,10 +798,10 @@ impl<'a> CompileSession<'a> {
             let code_slice: &'static [OpCode] = Box::leak(code_box);
 
             self.bytecode_functions.insert(
-                *func_id,
+                func_id.as_u32(),
                 BytecodeFunction {
                     code: code_slice,
-                    param_var_ids: func.definition.param_var_ids.clone(),
+                    param_var_ids: func.definition.param_var_ids.iter().map(|id| id.as_u32()).collect(),
                 },
             );
         }

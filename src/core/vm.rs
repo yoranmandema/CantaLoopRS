@@ -535,10 +535,10 @@ impl Value {
 
         // Get Engine from heap (clone Arc to avoid borrow conflicts)
         let engine_arc = heap.engine.as_ref().expect("Engine must be set in ValueHeap to invoke thunks").clone();
-        
+
         // Check if it's a native function (using cloned Arc, so we can borrow heap mutably below)
         let func_id_copy = func_id; // Copy func_id to avoid borrowing engine_arc in closure
-        if let Some(native_func) = engine_arc.functions.get(&func_id_copy) {
+        if let Some(native_func) = engine_arc.functions.get(&crate::core::entity_id::EntityId::new(func_id_copy)) {
             // Call the native function (now we can borrow heap mutably since engine_arc is owned)
             (native_func.func)(final_args, heap)
         } else if let Some(_bytecode_func) = heap.bytecode_functions.get(&func_id_copy) {
@@ -1117,7 +1117,7 @@ impl VM {
             // Get function signature to know total parameter count
             let total_params = if let Some(func) = _vm.bytecode_functions.get(func_id) {
                 func.param_var_ids.len()
-            } else if let Some(native_func) = _vm.engine.functions.get(func_id) {
+            } else if let Some(native_func) = _vm.engine.functions.get(&crate::core::entity_id::EntityId::new(*func_id)) {
                 Self::min_arity(&native_func.arity)
             } else {
                 // Unknown function - use bound_mask to infer: find the highest set bit
@@ -1981,7 +1981,7 @@ impl VM {
         let native_func = self
             .engine
             .functions
-            .get(&func_id)
+            .get(&crate::core::entity_id::EntityId::new(func_id))
             .expect("Native function should exist");
 
         let result = (native_func.func)(forced_args, &mut self.heap);
@@ -2119,7 +2119,7 @@ impl VM {
         } else if let Some(func_id) = thunk_or_func.as_function() {
             // Function: create thunk with arg (and holes for remaining args)
             // Get function arity to create proper holes
-            let arity = if let Some(native_func) = self.engine.functions.get(&func_id) {
+            let arity = if let Some(native_func) = self.engine.functions.get(&crate::core::entity_id::EntityId::new(func_id)) {
                 Self::min_arity(&native_func.arity)
             } else if let Some(bytecode_func) = self.bytecode_functions.get(&func_id) {
                 bytecode_func.param_var_ids.len()
@@ -2287,7 +2287,7 @@ impl VM {
                     Value::thunk_with_heap(nested_func_id, nested_final_args, &mut self.heap)
                 } else if let Some(nested_func_id) = nested_first_val.as_function() {
                     let arity = if let Some(native_func) =
-                        self.engine.functions.get(&nested_func_id)
+                        self.engine.functions.get(&crate::core::entity_id::EntityId::new(nested_func_id))
                     {
                         Self::min_arity(&native_func.arity)
                     } else if let Some(bytecode_func) = self.bytecode_functions.get(&nested_func_id)
@@ -2331,7 +2331,7 @@ impl VM {
                             Value::thunk_with_heap(deep_func_id, deep_final_args, &mut self.heap)
                         } else if let Some(deep_func_id) = deep_first_val.as_function() {
                             let arity = if let Some(native_func) =
-                                self.engine.functions.get(&deep_func_id)
+                                self.engine.functions.get(&crate::core::entity_id::EntityId::new(deep_func_id))
                             {
                                 Self::min_arity(&native_func.arity)
                             } else if let Some(bytecode_func) =
@@ -2369,7 +2369,7 @@ impl VM {
                                 Value::thunk_with_heap(df_id, df_final, &mut self.heap)
                             } else if let Some(df_id) = deep_first_val.as_function() {
                                 let arity =
-                                    if let Some(native_func) = self.engine.functions.get(&df_id) {
+                                    if let Some(native_func) = self.engine.functions.get(&crate::core::entity_id::EntityId::new(df_id)) {
                                         Self::min_arity(&native_func.arity)
                                     } else if let Some(bytecode_func) =
                                         self.bytecode_functions.get(&df_id)
@@ -2406,7 +2406,7 @@ impl VM {
                 return self.invoke_thunk_value_recursive(recomposed);
             } else if let Some(func_id) = second_val.as_function() {
                 // It's a function - create thunk with first_result as arg (and holes for remaining args)
-                let arity = if let Some(native_func) = self.engine.functions.get(&func_id) {
+                let arity = if let Some(native_func) = self.engine.functions.get(&crate::core::entity_id::EntityId::new(func_id)) {
                     Self::min_arity(&native_func.arity)
                 } else if let Some(bytecode_func) = self.bytecode_functions.get(&func_id) {
                     bytecode_func.param_var_ids.len()
@@ -2511,7 +2511,7 @@ impl VM {
             panic!("COMPOSE_ID should not be used directly in call_function");
         }
 
-        if self.engine.functions.contains_key(&func_id) {
+        if self.engine.functions.contains_key(&crate::core::entity_id::EntityId::new(func_id)) {
             // Native function: invoke and get result directly
             self.call_native_function(func_id, args)
         } else {
@@ -2577,7 +2577,7 @@ impl VM {
         //          So invoke_thunk_sync should receive args=[10, 5], not just [5]
 
         // Check if it's a native function or bytecode function
-        if self.engine.functions.contains_key(&func_id) {
+        if self.engine.functions.contains_key(&crate::core::entity_id::EntityId::new(func_id)) {
             // Native function: invoke and get result directly
             self.call_native_function(func_id, args)
         } else {
@@ -2726,7 +2726,7 @@ impl VM {
                             Value::thunk_with_heap(nf_id, nf_final, &mut self.heap)
                         } else if let Some(nf_id) = nested_first_val.as_function() {
                             // Function: create thunk with new arg (and holes for remaining args)
-                            let arity = if let Some(native_func) = self.engine.functions.get(&nf_id)
+                            let arity = if let Some(native_func) = self.engine.functions.get(&crate::core::entity_id::EntityId::new(nf_id))
                             {
                                 Self::min_arity(&native_func.arity)
                             } else if let Some(bytecode_func) = self.bytecode_functions.get(&nf_id)
@@ -2783,7 +2783,7 @@ impl VM {
                                 Value::thunk_with_heap(df_id, df_final, &mut self.heap)
                             } else if let Some(df_id) = deep_first_val.as_function() {
                                 let arity =
-                                    if let Some(native_func) = self.engine.functions.get(&df_id) {
+                                    if let Some(native_func) = self.engine.functions.get(&crate::core::entity_id::EntityId::new(df_id)) {
                                         Self::min_arity(&native_func.arity)
                                     } else if let Some(bytecode_func) =
                                         self.bytecode_functions.get(&df_id)
@@ -2903,7 +2903,7 @@ impl VM {
                     } else if let Some(second_func_id) = second_val.as_function() {
                         // second_val is a function - create a thunk with first_val and new_args
                         let arity =
-                            if let Some(native_func) = self.engine.functions.get(&second_func_id) {
+                            if let Some(native_func) = self.engine.functions.get(&crate::core::entity_id::EntityId::new(second_func_id)) {
                                 Self::min_arity(&native_func.arity)
                             } else if let Some(bytecode_func) =
                                 self.bytecode_functions.get(&second_func_id)
@@ -3008,7 +3008,7 @@ impl VM {
             let new_args: Vec<Value> = pop_n(&mut self.stack, n_args);
 
             // Get the function's arity to create thunk with proper holes
-            let arity = if let Some(native_func) = self.engine.functions.get(&func_id) {
+            let arity = if let Some(native_func) = self.engine.functions.get(&crate::core::entity_id::EntityId::new(func_id)) {
                 Self::min_arity(&native_func.arity)
             } else if let Some(bytecode_func) = self.bytecode_functions.get(&func_id) {
                 bytecode_func.param_var_ids.len()
@@ -3051,9 +3051,9 @@ impl VM {
             .expect("RetInvoke expects Thunk value");
 
         // Get the required number of parameters for this function
-        let required_params = if self.engine.functions.contains_key(&func_id) {
+        let required_params = if self.engine.functions.contains_key(&crate::core::entity_id::EntityId::new(func_id)) {
             // For native functions, use the arity
-            Self::min_arity(&self.engine.functions.get(&func_id).unwrap().arity)
+            Self::min_arity(&self.engine.functions.get(&crate::core::entity_id::EntityId::new(func_id)).unwrap().arity)
         } else if let Some(bytecode_func) = self.bytecode_functions.get(&func_id) {
             bytecode_func.param_var_ids.len()
         } else {
@@ -3065,7 +3065,7 @@ impl VM {
 
         // Check if we need more arguments and pop them from the stack
         let mut extra_args = Vec::new();
-        let is_native = self.engine.functions.contains_key(&func_id);
+        let is_native = self.engine.functions.contains_key(&crate::core::entity_id::EntityId::new(func_id));
         let filled_count = args.iter().filter(|opt| opt.is_some()).count();
         if !is_native {
             // Only bytecode functions support currying (extra arguments)
@@ -3258,7 +3258,7 @@ impl VM {
                     Value::thunk_with_heap(nested_func_id, nested_final_args, &mut self.heap)
                 } else if let Some(nested_func_id) = nested_first_val.as_function() {
                     let arity = if let Some(native_func) =
-                        self.engine.functions.get(&nested_func_id)
+                        self.engine.functions.get(&crate::core::entity_id::EntityId::new(nested_func_id))
                     {
                         Self::min_arity(&native_func.arity)
                     } else if let Some(bytecode_func) = self.bytecode_functions.get(&nested_func_id)
@@ -3285,7 +3285,7 @@ impl VM {
                 return;
             } else if let Some(func_id) = second_val.as_function() {
                 // It's a function - create thunk with first_result as arg
-                let arity = if let Some(native_func) = self.engine.functions.get(&func_id) {
+                let arity = if let Some(native_func) = self.engine.functions.get(&crate::core::entity_id::EntityId::new(func_id)) {
                     Self::min_arity(&native_func.arity)
                 } else if let Some(bytecode_func) = self.bytecode_functions.get(&func_id) {
                     bytecode_func.param_var_ids.len()
@@ -3313,9 +3313,9 @@ impl VM {
         // Get the required number of parameters for this function
         // Extract in separate scope to drop borrow before mutable operations
         let (required_params, is_native) = {
-            if self.engine.functions.contains_key(&func_id) {
+            if self.engine.functions.contains_key(&crate::core::entity_id::EntityId::new(func_id)) {
                 // For native functions, use the arity
-                let arity = &self.engine.functions.get(&func_id).unwrap().arity;
+                let arity = &self.engine.functions.get(&crate::core::entity_id::EntityId::new(func_id)).unwrap().arity;
                 (Self::min_arity(arity), true)
             } else if let Some(bytecode_func) = self.bytecode_functions.get(&func_id) {
                 (bytecode_func.param_var_ids.len(), false)
@@ -3410,7 +3410,7 @@ impl VM {
     fn invoke_function(&mut self, func_id: u32, args: Vec<Value>) {
         // Check if it's a native function or bytecode function
         // IMPORTANT: Check native functions first, but bytecode functions should be the fallback
-        if self.engine.functions.contains_key(&func_id) {
+        if self.engine.functions.contains_key(&crate::core::entity_id::EntityId::new(func_id)) {
             // Native function: convert args to strings and call
             let result = self.call_native_function(func_id, args);
             self.stack.push(result);

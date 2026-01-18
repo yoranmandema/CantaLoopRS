@@ -9,7 +9,7 @@ use super::{FunctionSignature, HirAst, ScopeId, Span, ValueKind};
 use serde::Serialize;
 
 /// Format a function signature as a type string for display.
-fn format_function_type_string(sig: &FunctionSignature) -> String {
+pub fn format_function_type_string(sig: &FunctionSignature) -> String {
     fn format_kind_recursive(kind: &ValueKind) -> String {
         match kind {
             ValueKind::Any => "any".to_string(),
@@ -17,8 +17,33 @@ fn format_function_type_string(sig: &FunctionSignature) -> String {
             ValueKind::String => "string".to_string(),
             ValueKind::Boolean => "bool".to_string(),
             ValueKind::Unknown => "unknown".to_string(),
+            ValueKind::TypeVar(id) => format!("T{}", id),
             ValueKind::Function(ty) => ty.clone(),
             ValueKind::Thunk(ty) => ty.clone(),
+            ValueKind::FnSig { params, return_type, is_effectful } => {
+                let p: Vec<String> = params.iter().map(format_kind_recursive).collect();
+                let param_str = if p.is_empty() {
+                    "()".to_string()
+                } else if p.len() == 1 {
+                    p[0].clone()
+                } else {
+                    format!("({})", p.join(","))
+                };
+                let arrow = if *is_effectful { "~>" } else { "->" };
+                format!("{} {} {}", param_str, arrow, format_kind_recursive(return_type))
+            }
+            ValueKind::ThunkSig { params, return_type, is_effectful } => {
+                let p: Vec<String> = params.iter().map(format_kind_recursive).collect();
+                let param_str = if p.is_empty() {
+                    "()".to_string()
+                } else if p.len() == 1 {
+                    p[0].clone()
+                } else {
+                    format!("({})", p.join(","))
+                };
+                let arrow = if *is_effectful { "~>" } else { "->" };
+                format!("{} {} {}", param_str, arrow, format_kind_recursive(return_type))
+            }
             ValueKind::Callable => "callable".to_string(),
             ValueKind::Void => "void".to_string(),
             ValueKind::Struct(name) => name.clone(),
@@ -60,7 +85,9 @@ pub enum SymbolKind {
     Function,
     Variable,
     Parameter,
+    Field,
     Module,
+    Type,
 }
 
 /// A symbol in the symbol table, representing a named entity in the program.
@@ -69,8 +96,11 @@ pub enum SymbolKind {
 /// not strings. The name is stored for display and debugging, but lookups use IDs.
 #[derive(Debug, Clone, Serialize)]
 pub struct Symbol {
-    /// Unique identifier for this symbol.
+    /// Unique identifier for this symbol (for LSP tracking).
     pub id: SymbolId,
+    /// Entity ID of the underlying compiler entity (function/variable/constant).
+    /// This allows direct lookup without name-based search.
+    pub entity_id: Option<crate::core::EntityId>,
     /// Human-readable name (for display, debugging, and initial lookup).
     /// After symbol resolution, all references use `id`, not `name`.
     pub name: String,
@@ -116,12 +146,15 @@ fn extract_module_name(ast: &crate::core::ast::Program) -> Option<String> {
     for block in &ast.blocks {
         for stmt in &block.statements {
             if let Statement::Mod { identifier } = stmt {
-                return Some(identifier.clone());
+                return Some(identifier.name.clone());
             }
         }
     }
     None
 }
+
+// Note: Reference symbols (identifier usages) are now handled in build_semantic_index
+// in compiler_state.rs by mapping ALL CST identifier spans to symbols from this table
 
 /// Build a symbol table from HIR, extracting spans from CST.
 pub fn build_symbol_table(
@@ -189,6 +222,7 @@ pub fn build_symbol_table(
         // Add symbol with the name from hir.functions (may be qualified or unqualified)
         table.symbols.push(Symbol {
             id: symbol_id,
+            entity_id: Some(*func_id),
             name: qualified_name.clone(),
             kind: SymbolKind::Function,
             ty: ValueKind::Function(format_function_type_string(&func.signature)),
@@ -203,6 +237,7 @@ pub fn build_symbol_table(
             next_symbol_id += 1;
             table.symbols.push(Symbol {
                 id: unqualified_symbol_id,
+                entity_id: Some(*func_id),
                 name: unqualified_name.clone(),
                 kind: SymbolKind::Function,
                 ty: ValueKind::Function(format_function_type_string(&func.signature)),
@@ -237,6 +272,7 @@ pub fn build_symbol_table(
                     let scope = ScopeId(0);
                     table.symbols.push(Symbol {
                         id: symbol_id,
+                        entity_id: Some(var.id),
                         name: name.clone(),
                         kind: SymbolKind::Variable,
                         ty: var.kind.clone(),
@@ -260,6 +296,7 @@ pub fn build_symbol_table(
                 let scope = ScopeId(0);
                 table.symbols.push(Symbol {
                     id: symbol_id,
+                    entity_id: Some(*func_id),
                     name: name.clone(),
                     kind: SymbolKind::Function,
                     ty: func_type,
@@ -328,6 +365,7 @@ pub fn build_symbol_table(
             next_symbol_id += 1;
             table.symbols.push(Symbol {
                 id: symbol_id,
+                entity_id: None,
                 name: module_name.clone(),
                 kind: SymbolKind::Module,
                 ty: ValueKind::Unknown, // Modules don't have types
@@ -338,29 +376,29 @@ pub fn build_symbol_table(
     }
 
     // Add all variables from all scopes
+    // TODO: Properly distinguish parameters from variables by tracking metadata in HIR
+    // For now, mark all as variables since the heuristic was broken
     for (scope_idx, scope) in hir.scopes.scopes.iter().enumerate() {
         let scope_id = ScopeId(scope_idx);
         for var in &scope.vars {
-            // Check if this is a parameter (parameters are usually at function scope start)
-            let kind = if scope.vars.iter().position(|v| v.id == var.id) < Some(3) {
-                // Heuristic: first few variables in a scope are often parameters
-                // This is approximate - ideally we'd track parameter vs variable
-                SymbolKind::Parameter
-            } else {
-                SymbolKind::Variable
-            };
             let symbol_id = SymbolId(next_symbol_id);
             next_symbol_id += 1;
             table.symbols.push(Symbol {
                 id: symbol_id,
+                entity_id: Some(var.id),
                 name: var.name.clone(),
-                kind,
+                kind: SymbolKind::Variable, // All variables for now
                 ty: var.kind.clone(),
                 defined_at: get_span(&var.name),
                 scope: scope_id,
             });
         }
     }
+
+    // ===================================================================
+    // PHASE 2: Add reference symbols by walking the CST
+    // Phase 2: Reference symbols are now handled by build_semantic_index in compiler_state.rs
+    // which maps ALL CST identifier spans to existing symbols from Phase 1
 
     table
 }
@@ -381,6 +419,7 @@ pub fn build_symbol_table_without_spans(hir: &HirAst) -> SymbolTable {
         next_symbol_id += 1;
         table.symbols.push(Symbol {
             id: symbol_id,
+            entity_id: Some(func.id),
             name: func.name.clone(),
             kind: SymbolKind::Function,
             ty: ValueKind::Function(format_function_type_string(&func.signature)),
@@ -413,6 +452,7 @@ pub fn build_symbol_table_without_spans(hir: &HirAst) -> SymbolTable {
                 next_symbol_id += 1;
                 table.symbols.push(Symbol {
                     id: symbol_id,
+                    entity_id: Some(var.id),
                     name: name.clone(),
                     kind: SymbolKind::Variable,
                     ty: var.kind.clone(),
@@ -433,6 +473,7 @@ pub fn build_symbol_table_without_spans(hir: &HirAst) -> SymbolTable {
             next_symbol_id += 1;
             table.symbols.push(Symbol {
                 id: symbol_id,
+                entity_id: Some(*func_id),
                 name: name.clone(),
                 kind: SymbolKind::Function,
                 ty: func_type,
@@ -451,6 +492,7 @@ pub fn build_symbol_table_without_spans(hir: &HirAst) -> SymbolTable {
             next_symbol_id += 1;
             table.symbols.push(Symbol {
                 id: symbol_id,
+                entity_id: Some(var.id),
                 name: var.name.clone(),
                 kind: SymbolKind::Variable,
                 ty: var.kind.clone(),
@@ -619,9 +661,6 @@ pub fn extract_identifier_spans_from_cst(
                 walk_cst_expr(inner, span_map);
             }
             CstExpr::Literal(_) => {}
-            _ => {
-                log::debug!("Unhandled CstExpr variant in walk_cst_expr: {:?}", std::mem::discriminant(&expr.node));
-            }
         }
     }
 
@@ -773,10 +812,6 @@ pub fn extract_identifier_spans_from_cst(
                 }
                 CstExpr::Literal(_) => {
                     // Literals don't contain identifiers
-                }
-                _ => {
-                    // Log unhandled expression types for debugging
-                    log::debug!("Unhandled CstExpr variant in identifier extraction: {:?}", std::mem::discriminant(&expr.node));
                 }
             }
         }
@@ -1101,27 +1136,27 @@ fn extract_identifier_spans(
                 crate::core::ast::Statement::Assign { identifier, .. }
                 | crate::core::ast::Statement::AssignIncrement { identifier, .. }
                 | crate::core::ast::Statement::AssignDecrement { identifier, .. } => {
-                    if let Some(span) = find_identifier_span(identifier, current_pos) {
+                    if let Some(span) = find_identifier_span(&identifier.name, current_pos) {
                         span_map
-                            .entry(identifier.clone())
+                            .entry(identifier.name.clone())
                             .or_insert_with(Vec::new)
                             .push(span);
                         current_pos = span.end;
                     }
                 }
                 crate::core::ast::Statement::For { var_name, .. } => {
-                    if let Some(span) = find_identifier_span(var_name, current_pos) {
+                    if let Some(span) = find_identifier_span(&var_name.name, current_pos) {
                         span_map
-                            .entry(var_name.clone())
+                            .entry(var_name.name.clone())
                             .or_insert_with(Vec::new)
                             .push(span);
                         current_pos = span.end;
                     }
                 }
                 crate::core::ast::Statement::Mod { identifier } => {
-                    if let Some(span) = find_identifier_span(identifier, current_pos) {
+                    if let Some(span) = find_identifier_span(&identifier.name, current_pos) {
                         span_map
-                            .entry(identifier.clone())
+                            .entry(identifier.name.clone())
                             .or_insert_with(Vec::new)
                             .push(span);
                         current_pos = span.end;
@@ -1237,9 +1272,9 @@ fn walk_expression_for_spans(
             }
             Expression::Loop { init_vars, .. } => {
                 for (var_name, _) in init_vars {
-                    if let Some(span) = find_identifier_span(var_name, *current_pos) {
+                    if let Some(span) = find_identifier_span(&var_name.name, *current_pos) {
                         span_map
-                            .entry(var_name.clone())
+                            .entry(var_name.name.clone())
                             .or_insert_with(Vec::new)
                             .push(span);
                         *current_pos = span.end;

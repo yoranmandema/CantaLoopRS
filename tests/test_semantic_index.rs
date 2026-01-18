@@ -114,15 +114,18 @@ let result2 = add(3, 4);
 #[tokio::test]
 async fn test_semantic_index_matches_builtin_functions() {
     let source = r#"
+use print from std;
+use map from functional;
+
 print("hello");
-let mapped = map([1, 2, 3], x => x * 2);
+let mapped = map([1, 2, 3], fn(x) => x * 2);
 print("world");
 "#;
 
     let source_manager = Arc::new(RwLock::new(SourceManager::new()));
     let compiler_state = CompilerState::new(source_manager.clone());
 
-    let uri = tower_lsp::lsp_types::Url::parse("file:///test.cl").unwrap();
+    let uri = tower_lsp::lsp_types::Url::from_file_path(std::env::temp_dir().join("test_semantic_index_builtins.cl")).unwrap();
     let file_id = {
         let mut sm = source_manager.write().await;
         sm.update_file(&uri, source.to_string(), 1)
@@ -191,7 +194,7 @@ let y = add(3, 4);
     let source_manager = Arc::new(RwLock::new(SourceManager::new()));
     let compiler_state = CompilerState::new(source_manager.clone());
 
-    let uri = tower_lsp::lsp_types::Url::parse("file:///test.cl").unwrap();
+    let uri = tower_lsp::lsp_types::Url::from_file_path(std::env::temp_dir().join("test_semantic_index_coverage.cl")).unwrap();
     let file_id = {
         let mut sm = source_manager.write().await;
         sm.update_file(&uri, source.to_string(), 1)

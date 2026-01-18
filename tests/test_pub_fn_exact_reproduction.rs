@@ -1,11 +1,30 @@
 use cantaloop::core::parser::{CantaLoopParser, Rule};
 use pest::Parser;
 
-/// Test to reproduce the exact issue from students.mln
+/// Test to reproduce the parsing issue scenario from students.mln.
+///
+/// Note: the original file path used here no longer exists in this repo layout,
+/// so we embed a representative snippet instead of `include_str!`.
 #[test]
 fn test_exact_students_mln_reproduction() {
-    // Read the actual file content
-    let students_mln = include_str!("../examples/grade_manager/src/students.mln");
+    // Representative content (updated to current `use <name> from <module>;` syntax)
+    let students_mln = r#"
+mod students;
+
+use calculate_average from grades;
+use calculate_final_grade from grades;
+use grade_statistics from grades;
+use highest_grade from grades;
+use lowest_grade from grades;
+use array_length from std;
+
+pub fn letterGrade(grade: num) -> string {
+    if grade >= 90 {
+        return "A";
+    }
+    return "F";
+}
+"#;
     
     println!("\n=== Parsing actual students.mln file ===");
     let parse_result = CantaLoopParser::parse(Rule::program, students_mln);
@@ -50,51 +69,51 @@ fn test_exact_students_mln_reproduction() {
 "#;
     
     let use1 = r#"mod test;
-use grades.calculate_average;
+use calculate_average from grades;
 "#;
     
     let use2 = r#"mod test;
-use grades.calculate_average;
-use grades.calculate_final_grade;
+use calculate_average from grades;
+use calculate_final_grade from grades;
 "#;
     
     let use3 = r#"mod test;
-use grades.calculate_average;
-use grades.calculate_final_grade;
-use grades.grade_statistics;
+use calculate_average from grades;
+use calculate_final_grade from grades;
+use grade_statistics from grades;
 "#;
     
     let use4 = r#"mod test;
-use grades.calculate_average;
-use grades.calculate_final_grade;
-use grades.grade_statistics;
-use grades.highest_grade;
+use calculate_average from grades;
+use calculate_final_grade from grades;
+use grade_statistics from grades;
+use highest_grade from grades;
 "#;
     
     let use5 = r#"mod test;
-use grades.calculate_average;
-use grades.calculate_final_grade;
-use grades.grade_statistics;
-use grades.highest_grade;
-use grades.lowest_grade;
+use calculate_average from grades;
+use calculate_final_grade from grades;
+use grade_statistics from grades;
+use highest_grade from grades;
+use lowest_grade from grades;
 "#;
     
     let use6 = r#"mod test;
-use grades.calculate_average;
-use grades.calculate_final_grade;
-use grades.grade_statistics;
-use grades.highest_grade;
-use grades.lowest_grade;
-use std.array_length;
+use calculate_average from grades;
+use calculate_final_grade from grades;
+use grade_statistics from grades;
+use highest_grade from grades;
+use lowest_grade from grades;
+use array_length from std;
 "#;
     
     let use6_pub_fn = r#"mod test;
-use grades.calculate_average;
-use grades.calculate_final_grade;
-use grades.grade_statistics;
-use grades.highest_grade;
-use grades.lowest_grade;
-use std.array_length;
+use calculate_average from grades;
+use calculate_final_grade from grades;
+use grade_statistics from grades;
+use highest_grade from grades;
+use lowest_grade from grades;
+use array_length from std;
 
 pub fn test() -> num { return 42; }
 "#;

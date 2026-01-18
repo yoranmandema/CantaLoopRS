@@ -12,7 +12,7 @@ struct LoopInfo {
     start: usize,
     end: usize,
     break_positions: Vec<usize>, // Positions of break jumps to patch
-    break_slot: Option<u32>, // Variable slot for break value (None for statement loops, Some(slot) for expression loops)
+    break_slot: Option<crate::core::EntityId>, // Variable slot for break value (None for statement loops, Some(slot) for expression loops)
     continue_target: usize, // Position to jump to on continue (usually start, but for for loops it's the increment)
     continue_positions: Vec<usize>, // Positions of continue jumps to patch (for for loops)
 }
@@ -57,7 +57,7 @@ impl ByteCodeEmitter {
                     // Check if the variable contains a void thunk by looking up its type
                     // Search through all scopes to find the variable
                     for scope in &program.scopes.scopes {
-                        if let Some(v) = scope.vars.iter().find(|v| v.id == *var_id) {
+                        if let Some(v) = scope.vars.iter().find(|v| &v.id == var_id) {
                             // Check if the variable is a thunk type with void return type
                             if let ValueKind::Thunk(type_str) = &v.kind {
                                 // Extract return type from thunk type string (format: "param_type ~> return_type")
@@ -88,7 +88,7 @@ impl ByteCodeEmitter {
                 // Check if variable is statically known to be a number
                 // Search through all scopes to find the variable
                 for scope in &program.scopes.scopes {
-                    if let Some(v) = scope.vars.iter().find(|v| v.id == *var_id) {
+                    if let Some(v) = scope.vars.iter().find(|v| &v.id == var_id) {
                         return matches!(v.kind, ValueKind::Number);
                     }
                 }
@@ -96,7 +96,7 @@ impl ByteCodeEmitter {
             }
             HirExpression::Constant(const_id) => {
                 // Check if constant is a number
-                if let Some(const_val) = program.constants.iter().find(|c| c.id == *const_id) {
+                if let Some(const_val) = program.constants.iter().find(|c| &c.id == const_id) {
                     matches!(const_val.kind, ValueKind::Number)
                 } else {
                     false
@@ -143,13 +143,13 @@ impl ByteCodeEmitter {
     pub fn emit_statement(&mut self, ops: &mut Vec<OpCode>, statement: &HirStmt, program: &HirAst) {
         match statement {
             HirStmt::Assign { slot, value } => {
-                self.emit_stmt_assign(ops, *slot, value, program);
+                self.emit_stmt_assign(ops, slot.as_u32(), value, program);
             }
             HirStmt::AssignIncrement { slot, value } => {
-                self.emit_stmt_assign_increment(ops, *slot, value, program);
+                self.emit_stmt_assign_increment(ops, slot.as_u32(), value, program);
             }
             HirStmt::AssignDecrement { slot, value } => {
-                self.emit_stmt_assign_decrement(ops, *slot, value, program);
+                self.emit_stmt_assign_decrement(ops, slot.as_u32(), value, program);
             }
             HirStmt::If { arms, else_block } => {
                 self.emit_stmt_if(ops, arms, else_block, program);
@@ -165,7 +165,7 @@ impl ByteCodeEmitter {
                 body,
                 break_slot,
             } => {
-                self.emit_stmt_loop(ops, init_vars, body, *break_slot, program);
+                self.emit_stmt_loop(ops, init_vars, body, break_slot.map(crate::core::EntityId::new), program);
             }
             HirStmt::Break { value } => {
                 self.emit_stmt_break(ops, value, program);
@@ -346,7 +346,7 @@ impl ByteCodeEmitter {
             for arg in args {
                 self.emit_expression(ops, arg, program);
             }
-            ops.push(OpCode::LdFunc(*function_id));
+            ops.push(OpCode::LdFunc(function_id.as_u32()));
             let arg_count = args.len() as u32;
             ops.push(OpCode::Thunk(arg_count));
             ops.push(OpCode::RetInvoke);
@@ -360,15 +360,15 @@ impl ByteCodeEmitter {
     fn emit_stmt_loop(
         &mut self,
         ops: &mut Vec<OpCode>,
-        init_vars: &[(u32, HirExpression)],
+        init_vars: &[(crate::core::entity_id::EntityId, HirExpression)],
         body: &HirBlock,
-        break_slot: Option<u32>,
+        break_slot: Option<crate::core::EntityId>,
         program: &HirAst,
     ) {
         // Emit initialization code for loop variables
         for (var_id, init_expr) in init_vars {
             self.emit_expression(ops, init_expr, program);
-            ops.push(OpCode::StVar(*var_id));
+            ops.push(OpCode::StVar(var_id.as_u32()));
         }
 
         let loop_start = ops.len();
@@ -477,7 +477,7 @@ impl ByteCodeEmitter {
                 self.emit_expression(ops, &break_value, program);
                 if let Some(loop_info) = self.loop_stack.last() {
                     if let Some(break_slot) = loop_info.break_slot {
-                        ops.push(OpCode::StVar(break_slot));
+                        ops.push(OpCode::StVar(break_slot.as_u32()));
                     }
                 }
             }
@@ -509,7 +509,7 @@ impl ByteCodeEmitter {
             };
 
             if let Some(slot) = break_slot_val {
-                ops.push(OpCode::LdVar(slot));
+                ops.push(OpCode::LdVar(slot.as_u32()));
             }
         } else {
             // Normal path
@@ -572,7 +572,7 @@ impl ByteCodeEmitter {
             };
 
             if let Some(slot) = break_slot_val {
-                ops.push(OpCode::LdVar(slot));
+                ops.push(OpCode::LdVar(slot.as_u32()));
             }
         }
 
@@ -589,7 +589,7 @@ impl ByteCodeEmitter {
             self.emit_expression(ops, expr, program);
             if let Some(loop_info) = self.loop_stack.last() {
                 if let Some(break_slot) = loop_info.break_slot {
-                    ops.push(OpCode::StVar(break_slot));
+                    ops.push(OpCode::StVar(break_slot.as_u32()));
                 }
             }
         }
@@ -621,8 +621,10 @@ impl ByteCodeEmitter {
         program: &HirAst,
     ) {
         // Skip dummy constants (used for function declarations which don't need bytecode)
-        if let HirExpression::Constant(0) = expr {
-            return;
+        if let HirExpression::Constant(id) = expr {
+            if id.as_u32() == 0 {
+                return;
+            }
         }
         self.emit_expression(ops, expr, program);
         if !self.is_void_expression(expr, program) {
@@ -640,12 +642,12 @@ impl ByteCodeEmitter {
         ops.push(OpCode::LdStr(s.clone()));
     }
 
-    fn emit_expr_identifier(&mut self, ops: &mut Vec<OpCode>, slot: u32) {
-        ops.push(OpCode::LdVar(slot));
+    fn emit_expr_identifier(&mut self, ops: &mut Vec<OpCode>, slot: crate::core::entity_id::EntityId) {
+        ops.push(OpCode::LdVar(slot.as_u32()));
     }
 
-    fn emit_expr_constant(&mut self, ops: &mut Vec<OpCode>, id: u32) {
-        ops.push(OpCode::LdConst(id));
+    fn emit_expr_constant(&mut self, ops: &mut Vec<OpCode>, id: crate::core::entity_id::EntityId) {
+        ops.push(OpCode::LdConst(id.as_u32()));
     }
 
     fn emit_expr_boolean(&mut self, ops: &mut Vec<OpCode>, b: bool) {
@@ -718,7 +720,7 @@ impl ByteCodeEmitter {
     fn emit_expr_function_call(
         &mut self,
         ops: &mut Vec<OpCode>,
-        function_id: u32,
+        function_id: crate::core::entity_id::EntityId,
         args: &[HirExpression],
         invoke: bool,
         program: &HirAst,
@@ -727,7 +729,7 @@ impl ByteCodeEmitter {
         for arg in args {
             self.emit_expression(ops, arg, program);
         }
-        ops.push(OpCode::LdFunc(function_id));
+        ops.push(OpCode::LdFunc(function_id.as_u32()));
         let arg_count = args.len() as u32;
 
         if invoke {
@@ -743,7 +745,7 @@ impl ByteCodeEmitter {
     fn emit_expr_partial_call(
         &mut self,
         ops: &mut Vec<OpCode>,
-        func_id: u32,
+        func_id: crate::core::entity_id::EntityId,
         bound: &[Option<HirExpression>],
         program: &HirAst,
     ) {
@@ -776,7 +778,7 @@ impl ByteCodeEmitter {
 
         // Emit MakePartial opcode
         ops.push(OpCode::MakePartial {
-            func_id,
+            func_id: func_id.as_u32(),
             bound_mask,
             hole_count,
         });
@@ -885,15 +887,15 @@ impl ByteCodeEmitter {
     fn emit_expr_loop(
         &mut self,
         ops: &mut Vec<OpCode>,
-        init_vars: &[(u32, HirExpression)],
+        init_vars: &[(crate::core::entity_id::EntityId, HirExpression)],
         body: &HirBlock,
-        break_slot: Option<u32>,
+        break_slot: Option<crate::core::EntityId>,
         program: &HirAst,
     ) {
         // Emit initialization code for loop variables
         for (var_id, init_expr) in init_vars {
             self.emit_expression(ops, init_expr, program);
-            ops.push(OpCode::StVar(*var_id));
+            ops.push(OpCode::StVar(var_id.as_u32()));
         }
 
         let loop_start = ops.len();
@@ -929,7 +931,7 @@ impl ByteCodeEmitter {
 
         // Push the break_slot value (for expression-valued loops)
         if let Some(slot) = break_slot_val {
-            ops.push(OpCode::LdVar(slot));
+            ops.push(OpCode::LdVar(slot.as_u32()));
         }
 
         // Pop the loop from stack
@@ -1016,10 +1018,10 @@ impl ByteCodeEmitter {
     }
 
     /// Resolve an identifier to a function ID by looking it up in imports
-    fn resolve_identifier_to_function_id(&self, var_id: u32, program: &HirAst) -> Option<u32> {
+    fn resolve_identifier_to_function_id(&self, var_id: crate::core::entity_id::EntityId, program: &HirAst) -> Option<crate::core::entity_id::EntityId> {
         // Look up the variable in scopes to get its name
         for scope in &program.scopes.scopes {
-            if let Some(var) = scope.vars.iter().find(|v| v.id == var_id) {
+            if let Some(var) = scope.vars.iter().find(|v| &v.id == &var_id) {
                 // Look up the variable name in imports
                 for imports in program.module_imports.values() {
                     if let Some(func_id) = imports.get(&var.name) {
@@ -1061,7 +1063,7 @@ impl ByteCodeEmitter {
                     match &reducer_args[0] {
                         HirExpression::Closure { function_id } => {
                             // For closures, load the function directly
-                            ops.push(OpCode::LdFunc(*function_id));
+                            ops.push(OpCode::LdFunc(function_id.as_u32()));
                         }
                         _ => {
                             // For other expressions (like function calls), emit them
@@ -1103,17 +1105,17 @@ impl ByteCodeEmitter {
                 // Emit the function (will be on top)
                 match &reducer_args[1] {
                     HirExpression::Closure { function_id } => {
-                        ops.push(OpCode::LdFunc(*function_id));
+                        ops.push(OpCode::LdFunc(function_id.as_u32()));
                     }
                     HirExpression::FunctionCall { function_id, .. } => {
-                        ops.push(OpCode::LdFunc(*function_id));
+                        ops.push(OpCode::LdFunc(function_id.as_u32()));
                     }
                     HirExpression::Identifier(var_id) => {
                         let func_id = self.resolve_identifier_to_function_id(*var_id, program)
                             .unwrap_or_else(|| {
                                 panic!("fold function must be a function call or imported function identifier");
                             });
-                        ops.push(OpCode::LdFunc(func_id));
+                        ops.push(OpCode::LdFunc(func_id.as_u32()));
                     }
                     _ => panic!("fold function must be a function call or identifier"),
                 }
@@ -1148,12 +1150,13 @@ impl ByteCodeEmitter {
                         // reduce(fn) - use first element as initial value
                         // We'll set this up in the loop
                         (match &reducer_args[0] {
-                            HirExpression::FunctionCall { function_id, .. } => *function_id,
+                            HirExpression::FunctionCall { function_id, .. } => function_id.as_u32(),
                             HirExpression::Identifier(var_id) => {
                                 self.resolve_identifier_to_function_id(*var_id, program)
                                     .unwrap_or_else(|| {
                                         panic!("reduce function must be a function call or imported function identifier");
                                     })
+                                    .as_u32()
                             }
                             _ => panic!("reduce function must be a function call or identifier"),
                         }, false, true)
@@ -1346,7 +1349,7 @@ impl ByteCodeEmitter {
             }
             HirExpression::Closure { function_id } => {
                 // Emit code to load the closure function
-                ops.push(OpCode::LdFunc(*function_id));
+                ops.push(OpCode::LdFunc(function_id.as_u32()));
             }
             HirExpression::Reducer {
                 array,

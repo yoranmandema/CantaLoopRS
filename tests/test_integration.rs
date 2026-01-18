@@ -25,6 +25,8 @@ fn test_integration_simple_expression() {
 fn test_integration_function_declaration_and_call() {
     let mut engine = common::helpers::create_test_engine();
     let code = r#"
+use print from std;
+
 fn greet() -> void {
     print("Hello")!;
 }
@@ -53,6 +55,8 @@ let result = add(10, 20)!;
 fn test_integration_if_statement() {
     let mut engine = common::helpers::create_test_engine();
     let code = r#"
+use print from std;
+
 let x = 10;
 if (x > 5) {
     print("x is greater than 5")!;
@@ -66,6 +70,8 @@ if (x > 5) {
 fn test_integration_if_else_statement() {
     let mut engine = common::helpers::create_test_engine();
     let code = r#"
+use print from std;
+
 let x = 3;
 if (x > 5) {
     print("x is greater than 5")!;
@@ -130,6 +136,8 @@ let z = !true;
 fn test_integration_complex_program() {
     let mut engine = common::helpers::create_test_engine();
     let code = r#"
+use print from std;
+
 let x = 10;
 
 fn calculate(a: num, b: num) -> num {
@@ -194,6 +202,8 @@ x -= 3;
 fn test_integration_nested_conditions() {
     let mut engine = common::helpers::create_test_engine();
     let code = r#"
+use print from std;
+
 let x = 10;
 let y = 20;
 

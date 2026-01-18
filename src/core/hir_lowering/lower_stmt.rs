@@ -10,13 +10,17 @@ use crate::core::ast::{
     UnaryOp,
 };
 use crate::core::cst::CstId;
+use crate::core::entity_id::EntityId;
 use serde::Serialize;
 
 use super::{
     scopes::{HirBlockContext, ScopeArena, ScopeId},
     Constant, ConstantValue, Function, FunctionDefinition, FunctionSignature, HirAst, HirError,
-    HirExpression, ImportTable, Module, ReducerType, StructDef, ValueKind, Variable, SymbolId,
+    HirExpression, ImportTable, Module, ReducerType, StructDef, ValueKind, Variable,
+    SymbolKind,
 };
+use crate::core::symbol_resolver::{SymbolResolver, SymbolMetadata};
+use super::symbols::format_function_type_string;
 
 // Hashable key for constant deduplication
 #[derive(Hash, PartialEq, Eq, Clone)]
@@ -41,15 +45,15 @@ impl ConstantKey {
 #[derive(Debug, Clone, Serialize)]
 pub enum HirStmt {
     Assign {
-        slot: u32, // VarId
+        slot: crate::core::EntityId, // VarId
         value: HirExpression,
     },
     AssignIncrement {
-        slot: u32, // VarId
+        slot: crate::core::EntityId, // VarId
         value: HirExpression,
     },
     AssignDecrement {
-        slot: u32, // VarId
+        slot: crate::core::EntityId, // VarId
         value: HirExpression,
     },
     If {
@@ -64,7 +68,7 @@ pub enum HirStmt {
         value: HirExpression,
     },
     Loop {
-        init_vars: Vec<(u32, HirExpression)>, // (variable_id, initial_value) for loop initialization variables
+        init_vars: Vec<(EntityId, HirExpression)>, // (variable_id, initial_value) for loop initialization variables
         body: HirBlock,
         break_slot: Option<u32>, // Variable slot for break value (None for statement loops, Some(slot) for expression loops)
     },
@@ -90,9 +94,9 @@ pub struct HirBlock {
 pub struct HirBuilder {
     pub ast: HirAst,
     current_scope: ScopeId,
-    next_var_id: u32,
-    next_function_id: u32,
-    constant_map: HashMap<ConstantKey, u32>, // Maps constant value to constant ID
+    /// ID generator for user-defined entities (functions, variables, constants)
+    id_generator: crate::core::EntityIdGenerator,
+    constant_map: HashMap<ConstantKey, EntityId>, // Maps constant value to constant ID
     /// Maps module paths (e.g., "math.utils") to their modules
     pub modules: HashMap<String, Module>,
     /// Maps module name to its import table
@@ -100,16 +104,118 @@ pub struct HirBuilder {
 
     /// The current module being processed
     current_module: Option<String>,
-    
+
     /// Maps variable_id to function_id for variables that contain closures
-    closure_variables: HashMap<u32, u32>,
-    
-    /// Phase 3: Target HashMap for binding CST IDs to symbol IDs during lowering.
-    /// Set by CompileSession to enable identity tracking for LSP.
-    bind_target: Option<*mut HashMap<CstId, SymbolId>>,
+    closure_variables: HashMap<EntityId, EntityId>,
+
+    /// Symbol resolver for identity-first LSP symbol tracking.
+    /// Records CstId → EntityId mappings during HIR lowering.
+    pub symbol_resolver: SymbolResolver,
+
+    /// One-shot contextual typing hints for specific call expressions (keyed by call CST id).
+    /// Used primarily for reducers in pipelines (e.g. `xs |> map(fn(x) => ...)`) where the
+    /// expected closure param type comes from the LHS array element type.
+    call_type_hints: HashMap<CstId, TypeSubst>,
+}
+
+// --- Internal-only generics / unification (for stdlib/native signatures) ---
+#[derive(Debug, Default, Clone)]
+struct TypeSubst {
+    map: HashMap<u32, ValueKind>,
 }
 
 impl HirBuilder {
+    fn apply_subst(kind: &ValueKind, subst: &TypeSubst) -> ValueKind {
+        match kind {
+            ValueKind::TypeVar(id) => subst.map.get(id).cloned().unwrap_or(ValueKind::TypeVar(*id)),
+            ValueKind::Array(inner) => ValueKind::Array(Box::new(Self::apply_subst(inner, subst))),
+            ValueKind::Struct(s) => ValueKind::Struct(s.clone()),
+            ValueKind::FnSig { params, return_type, is_effectful } => ValueKind::FnSig {
+                params: params.iter().map(|p| Self::apply_subst(p, subst)).collect(),
+                return_type: Box::new(Self::apply_subst(return_type, subst)),
+                is_effectful: *is_effectful,
+            },
+            ValueKind::ThunkSig { params, return_type, is_effectful } => ValueKind::ThunkSig {
+                params: params.iter().map(|p| Self::apply_subst(p, subst)).collect(),
+                return_type: Box::new(Self::apply_subst(return_type, subst)),
+                is_effectful: *is_effectful,
+            },
+            // Leaf / display-only kinds
+            ValueKind::Any => ValueKind::Any,
+            ValueKind::Unknown => ValueKind::Unknown,
+            ValueKind::Number => ValueKind::Number,
+            ValueKind::String => ValueKind::String,
+            ValueKind::Boolean => ValueKind::Boolean,
+            ValueKind::Void => ValueKind::Void,
+            ValueKind::Function(s) => ValueKind::Function(s.clone()),
+            ValueKind::Thunk(s) => ValueKind::Thunk(s.clone()),
+            ValueKind::Callable => ValueKind::Callable,
+        }
+    }
+
+    fn unify_types(expected: &ValueKind, actual: &ValueKind, subst: &mut TypeSubst) -> bool {
+        match (expected, actual) {
+            (ValueKind::TypeVar(id), a) => {
+                if let Some(bound) = subst.map.get(id).cloned() {
+                    return Self::unify_types(&bound, a, subst);
+                }
+                subst.map.insert(*id, a.clone());
+                true
+            }
+            (ValueKind::Array(ei), ValueKind::Array(ai)) => Self::unify_types(ei, ai, subst),
+            (ValueKind::Struct(a), ValueKind::Struct(b)) => a == b,
+            (ValueKind::Number, ValueKind::Number) => true,
+            (ValueKind::String, ValueKind::String) => true,
+            (ValueKind::Boolean, ValueKind::Boolean) => true,
+            (ValueKind::Void, ValueKind::Void) => true,
+            (ValueKind::Any, _) => true,
+            (ValueKind::Unknown, _) => true,
+            (_, ValueKind::Any) => true,
+            (ValueKind::FnSig { params: ep, return_type: er, .. }, ValueKind::FnSig { params: ap, return_type: ar, .. })
+            | (ValueKind::ThunkSig { params: ep, return_type: er, .. }, ValueKind::ThunkSig { params: ap, return_type: ar, .. })
+            | (ValueKind::FnSig { params: ep, return_type: er, .. }, ValueKind::ThunkSig { params: ap, return_type: ar, .. })
+            | (ValueKind::ThunkSig { params: ep, return_type: er, .. }, ValueKind::FnSig { params: ap, return_type: ar, .. }) => {
+                ep.len() == ap.len()
+                    && ep.iter().zip(ap.iter()).all(|(e, a)| Self::unify_types(e, a, subst))
+                    && Self::unify_types(er, ar, subst)
+            }
+            _ => false,
+        }
+    }
+
+    fn function_signature_for_call(
+        &self,
+        ctx: &crate::core::compileSession::CompileContext,
+        function_id: EntityId,
+    ) -> Option<FunctionSignature> {
+        // Native functions first (stdlib + native modules).
+        if (ctx.is_native_function)(function_id) {
+            if let Some(native_func) = ctx.native_functions.iter().find(|f| f.id == function_id) {
+                return Some(native_func.signature.clone());
+            }
+        }
+        // User-defined functions.
+        self.ast.functions.get(&function_id).map(|f| f.signature.clone())
+    }
+
+    fn type_string_for_value_kind(kind: &ValueKind) -> String {
+        // Produce a type string that matches *user-facing* type annotation syntax.
+        // (Notably, arrays are written as `[T]`, not `T[]`.)
+        match kind {
+            ValueKind::Number => "num".to_string(),
+            ValueKind::String => "string".to_string(),
+            ValueKind::Boolean => "bool".to_string(),
+            ValueKind::Void => "void".to_string(),
+            ValueKind::Struct(name) => name.clone(),
+            ValueKind::Array(inner) => format!("[{}]", Self::type_string_for_value_kind(inner)),
+            // We don't expose generics or structured callables in user annotations yet.
+            ValueKind::TypeVar(_) | ValueKind::FnSig { .. } | ValueKind::ThunkSig { .. } => "any".to_string(),
+            ValueKind::Any | ValueKind::Unknown | ValueKind::Callable => "any".to_string(),
+            // Fallback: keep existing strings (e.g. native-provided signatures).
+            ValueKind::Function(s) | ValueKind::Thunk(s) => s.clone(),
+        }
+    }
+
     pub fn new() -> Self {
         let mut scopes = ScopeArena { scopes: Vec::new() };
 
@@ -122,14 +228,14 @@ impl HirBuilder {
         Self {
             ast: HirAst::default(),
             current_scope: root,
-            next_var_id: 0,
-            next_function_id: 0,
+            id_generator: crate::core::EntityIdGenerator::new(),
             constant_map: HashMap::new(),
             modules: HashMap::new(),
             module_imports: HashMap::new(),
             current_module: None,
             closure_variables: HashMap::new(),
-            bind_target: None,
+            symbol_resolver: SymbolResolver::new(),
+            call_type_hints: HashMap::new(),
         }
     }
 
@@ -153,11 +259,11 @@ impl HirBuilder {
             parent: None,
         });
         self.current_scope = ScopeId(0);
-        self.next_var_id = 0;
-        self.next_function_id = 0;
+        self.id_generator = crate::core::EntityIdGenerator::new();
         self.constant_map.clear();
         self.closure_variables.clear();
         self.current_module = None;
+        self.call_type_hints.clear();
     }
 
     /// Check if the HirBuilder has any active scopes beyond the root scope.
@@ -188,18 +294,17 @@ impl HirBuilder {
     /// 
     /// # Safety
     /// The pointer must remain valid for the lifetime of the HirBuilder.
-    pub unsafe fn set_bind_target(&mut self, target: &mut HashMap<CstId, SymbolId>) {
-        self.bind_target = Some(target as *mut HashMap<CstId, SymbolId>);
+    /// Record a symbol definition in the symbol resolver.
+    /// This replaces the old unsafe bind_cst_to_symbol mechanism.
+    fn record_symbol_definition(&mut self, cst_id: CstId, entity_id: EntityId, name: &str, kind: SymbolKind, value_kind: ValueKind) {
+        let metadata = SymbolMetadata::new(name.to_string(), kind, value_kind);
+        self.symbol_resolver.define(cst_id, entity_id, metadata);
     }
 
-    /// Phase 3: Helper method to bind a CST ID to a symbol ID.
-    /// Called whenever a symbol is resolved during lowering.
-    fn bind_cst_to_symbol(&mut self, cst_id: CstId, symbol_id: SymbolId) {
-        if let Some(target_ptr) = self.bind_target {
-            unsafe {
-                (*target_ptr).insert(cst_id, symbol_id);
-            }
-        }
+    /// Record a symbol reference in the symbol resolver.
+    fn record_symbol_reference(&mut self, cst_id: CstId, entity_id: EntityId) {
+        eprintln!("[HIR] record_symbol_reference: cst_id={:?}, entity_id={:?}", cst_id, entity_id);
+        self.symbol_resolver.reference(cst_id, entity_id);
     }
 
     /// Get the import table for the current module
@@ -210,16 +315,16 @@ impl HirBuilder {
     }
 
     /// Resolve an imported symbol in the current module
-    /// 
+    ///
     /// Checks both module_imports (primary) and Module.imports (for consistency).
     /// This ensures per-module import scoping works correctly.
-    fn resolve_import_in_current_module(&self, name: &str) -> Option<u32> {
+    fn resolve_import_in_current_module(&self, name: &str) -> Option<EntityId> {
         // First check module_imports (primary storage)
         if let Some(id) = self.get_current_imports()
             .and_then(|imports| imports.get(name).copied()) {
             return Some(id);
         }
-        
+
         // Also check Module.imports for consistency
         self.current_module
             .as_ref()
@@ -228,7 +333,7 @@ impl HirBuilder {
     }
 
     /// Add a symbol to the current module's import table
-    fn add_import_to_current_module(&mut self, name: String, id: u32) -> Result<(), HirError> {
+    fn add_import_to_current_module(&mut self, name: String, id: EntityId) -> Result<(), HirError> {
         let module_name = self.current_module.clone().ok_or_else(|| {
             HirError::TypeError {
                 message: "Cannot import symbols without a module declaration".to_string(),
@@ -258,9 +363,9 @@ impl HirBuilder {
         Ok(())
     }
 
-    pub fn resolve_var(&self, name: &str) -> Option<u32> {
+    pub fn resolve_var(&self, name: &str) -> Option<EntityId> {
         eprintln!("[HIR] resolve_var: name={}, scope={:?}", name, self.current_scope);
-        
+
         let mut scope = Some(self.current_scope);
         let mut depth = 0;
         let max_depth = 100; // Safety limit to prevent infinite loops
@@ -268,20 +373,20 @@ impl HirBuilder {
 
         while let Some(id) = scope {
             eprintln!("[HIR] Checking scope {:?} (depth={})", id, depth);
-            
+
             // Check for circular reference
             if !visited_scopes.insert(id) {
                 eprintln!("[HIR] ⚠️⚠️⚠️ CIRCULAR SCOPE DETECTED: {:?} ⚠️⚠️⚠️", id);
                 eprintln!("[HIR] Scope chain appears to be circular!");
                 return None;
             }
-            
+
             if depth > max_depth {
                 eprintln!("[HIR] ⚠️⚠️⚠️ MAX DEPTH REACHED - INFINITE LOOP DETECTED ⚠️⚠️⚠️");
                 eprintln!("[HIR] Scope chain appears to be infinite!");
                 return None;
             }
-            
+
             let scope_idx = id.as_usize();
             if scope_idx >= self.ast.scopes.scopes.len() {
                 eprintln!("[HIR] ⚠️ Scope {:?} out of bounds (len={})", id, self.ast.scopes.scopes.len());
@@ -289,7 +394,7 @@ impl HirBuilder {
             }
             let ctx = &self.ast.scopes.scopes[scope_idx];
             eprintln!("[HIR] Scope {:?} has {} variables", id, ctx.vars.len());
-            
+
             if let Some(v) = ctx.vars.iter().find(|v| v.name == name) {
                 eprintln!("[HIR] Found variable {} in scope {:?} (id={})", name, id, v.id);
                 return Some(v.id);
@@ -314,7 +419,7 @@ impl HirBuilder {
     }
 
     /// Resolve a variable by searching from the root scope (for LSP queries)
-    pub fn resolve_var_from_root(&self, name: &str) -> Option<u32> {
+    pub fn resolve_var_from_root(&self, name: &str) -> Option<EntityId> {
         // Search all scopes starting from root (scope 0)
         for scope_idx in 0..self.ast.scopes.scopes.len() {
             let ctx = &self.ast.scopes.scopes[scope_idx];
@@ -327,7 +432,7 @@ impl HirBuilder {
 
     /// Resolve a variable by searching from current scope, then all scopes
     /// This is more aggressive than resolve_var and ensures we find function parameters
-    pub fn resolve_var_aggressive(&self, name: &str) -> Option<u32> {
+    pub fn resolve_var_aggressive(&self, name: &str) -> Option<EntityId> {
         // First try current scope chain (fast path)
         if let Some(var_id) = self.resolve_var(name) {
             return Some(var_id);
@@ -336,7 +441,7 @@ impl HirBuilder {
         self.resolve_var_from_root(name)
     }
 
-    pub fn get_var_kind(&self, var_id: u32) -> Option<ValueKind> {
+    pub fn get_var_kind(&self, var_id: EntityId) -> Option<ValueKind> {
         let mut scope = Some(self.current_scope);
         while let Some(scope_id) = scope {
             let scope_idx = scope_id.as_usize();
@@ -353,7 +458,7 @@ impl HirBuilder {
     }
 
     /// Get variable kind by searching all scopes (for LSP queries)
-    pub fn get_var_kind_from_id(&self, var_id: u32) -> Option<ValueKind> {
+    pub fn get_var_kind_from_id(&self, var_id: EntityId) -> Option<ValueKind> {
         // Search all scopes
         for scope_idx in 0..self.ast.scopes.scopes.len() {
             let ctx = &self.ast.scopes.scopes[scope_idx];
@@ -371,8 +476,33 @@ impl HirBuilder {
             ValueKind::String => "string".to_string(),
             ValueKind::Boolean => "bool".to_string(),
             ValueKind::Unknown => "unknown".to_string(),
+            ValueKind::TypeVar(id) => format!("T{}", id),
             ValueKind::Function(ty) => ty.clone(),
             ValueKind::Thunk(ty) => ty.clone(),
+            ValueKind::FnSig { params, return_type, is_effectful } => {
+                let p: Vec<String> = params.iter().map(Self::format_value_kind_for_type).collect();
+                let param_str = if p.is_empty() {
+                    "()".to_string()
+                } else if p.len() == 1 {
+                    p[0].clone()
+                } else {
+                    format!("({})", p.join(","))
+                };
+                let arrow = if *is_effectful { "~>" } else { "->" };
+                format!("{} {} {}", param_str, arrow, Self::format_value_kind_for_type(return_type))
+            }
+            ValueKind::ThunkSig { params, return_type, is_effectful } => {
+                let p: Vec<String> = params.iter().map(Self::format_value_kind_for_type).collect();
+                let param_str = if p.is_empty() {
+                    "()".to_string()
+                } else if p.len() == 1 {
+                    p[0].clone()
+                } else {
+                    format!("({})", p.join(","))
+                };
+                let arrow = if *is_effectful { "~>" } else { "->" };
+                format!("{} {} {}", param_str, arrow, Self::format_value_kind_for_type(return_type))
+            }
             ValueKind::Callable => "callable".to_string(),
             ValueKind::Void => "void".to_string(),
             ValueKind::Array(inner) => {
@@ -436,8 +566,33 @@ impl HirBuilder {
             ValueKind::String => "String".to_string(),
             ValueKind::Boolean => "Boolean".to_string(),
             ValueKind::Unknown => "Unknown".to_string(),
+            ValueKind::TypeVar(id) => format!("T{}", id),
             ValueKind::Function(ty) => ty.clone(),
             ValueKind::Thunk(ty) => ty.clone(),
+            ValueKind::FnSig { params, return_type, is_effectful } => {
+                let p: Vec<String> = params.iter().map(Self::format_value_kind).collect();
+                let param_str = if p.is_empty() {
+                    "()".to_string()
+                } else if p.len() == 1 {
+                    p[0].clone()
+                } else {
+                    format!("({})", p.join(","))
+                };
+                let arrow = if *is_effectful { "~>" } else { "->" };
+                format!("{} {} {}", param_str, arrow, Self::format_value_kind(return_type))
+            }
+            ValueKind::ThunkSig { params, return_type, is_effectful } => {
+                let p: Vec<String> = params.iter().map(Self::format_value_kind).collect();
+                let param_str = if p.is_empty() {
+                    "()".to_string()
+                } else if p.len() == 1 {
+                    p[0].clone()
+                } else {
+                    format!("({})", p.join(","))
+                };
+                let arrow = if *is_effectful { "~>" } else { "->" };
+                format!("{} {} {}", param_str, arrow, Self::format_value_kind(return_type))
+            }
             ValueKind::Callable => "Callable".to_string(),
             ValueKind::Void => "void".to_string(),
             ValueKind::Struct(name) => name.clone(),
@@ -454,6 +609,8 @@ impl HirBuilder {
             (ValueKind::Number, ValueKind::Number) => true,
             (ValueKind::String, ValueKind::String) => true,
             (ValueKind::Boolean, ValueKind::Boolean) => true,
+            (ValueKind::Struct(a), ValueKind::Struct(b)) => a == b,
+            (ValueKind::TypeVar(_), _) => true, // handled by unification in call checking
             (ValueKind::Function(expected_ty), ValueKind::Function(actual_ty)) => {
                 // Use structural comparison for function types
                 Self::check_callable_type_compatibility(expected_ty, actual_ty)
@@ -462,6 +619,20 @@ impl HirBuilder {
                 // Use structural comparison for thunk types
                 Self::check_callable_type_compatibility(expected_ty, actual_ty)
             }
+            (
+                ValueKind::FnSig { params: ep, return_type: er, is_effectful: ee },
+                ValueKind::FnSig { params: ap, return_type: ar, is_effectful: ae },
+            ) => ee == ae
+                && ep.len() == ap.len()
+                && ep.iter().zip(ap.iter()).all(|(e, a)| Self::check_type_compatibility(e, a))
+                && Self::check_type_compatibility(er, ar),
+            (
+                ValueKind::ThunkSig { params: ep, return_type: er, is_effectful: ee },
+                ValueKind::ThunkSig { params: ap, return_type: ar, is_effectful: ae },
+            ) => ee == ae
+                && ep.len() == ap.len()
+                && ep.iter().zip(ap.iter()).all(|(e, a)| Self::check_type_compatibility(e, a))
+                && Self::check_type_compatibility(er, ar),
             (ValueKind::Array(expected_inner), ValueKind::Array(actual_inner)) => {
                 // Arrays are compatible if their inner types are compatible
                 Self::check_type_compatibility(expected_inner, actual_inner)
@@ -485,14 +656,27 @@ impl HirBuilder {
         ctx.vars.iter().any(|v| v.name == name)
     }
 
-    pub fn init_var(&mut self, name: &str, kind: ValueKind) -> u32 {
+    pub fn init_var(&mut self, name: &str, kind: ValueKind) -> EntityId {
         self.init_var_with_cst_id(name, kind, None)
     }
 
     /// Initialize a variable with an optional CST ID for identity tracking.
-    pub fn init_var_with_cst_id(&mut self, name: &str, kind: ValueKind, cst_id: Option<CstId>) -> u32 {
-        let id = self.next_var_id;
-        self.next_var_id += 1;
+    pub fn init_var_with_cst_id(&mut self, name: &str, kind: ValueKind, cst_id: Option<CstId>) -> EntityId {
+        self.init_var_with_cst_id_and_symbol_kind(name, kind, cst_id, SymbolKind::Variable)
+    }
+
+    /// Initialize a variable-like binding with optional CST ID and explicit symbol kind.
+    ///
+    /// Use this for parameters to ensure they are recorded as `SymbolKind::Parameter`
+    /// (so LSP can distinguish them from locals).
+    pub fn init_var_with_cst_id_and_symbol_kind(
+        &mut self,
+        name: &str,
+        kind: ValueKind,
+        cst_id: Option<CstId>,
+        symbol_kind: SymbolKind,
+    ) -> EntityId {
+        let id = self.id_generator.next_user();
 
         let scope_idx = self.current_scope.as_usize();
         // Ensure scope exists - if not, create it (defensive programming for LSP)
@@ -518,12 +702,12 @@ impl HirBuilder {
         ctx.vars.push(Variable {
             id,
             name: name.to_string(),
-            kind,
+            kind: kind.clone(),
         });
 
-        // Phase 3: Bind CST ID to variable symbol ID if provided
+        // Record symbol definition in resolver
         if let Some(cst_id) = cst_id {
-            self.bind_cst_to_symbol(cst_id, SymbolId(id));
+            self.record_symbol_definition(cst_id, id, name, symbol_kind, kind);
         }
 
         id
@@ -631,7 +815,7 @@ impl HirBuilder {
     }
 
     /// Infer type for a FunctionCall expression
-    fn infer_function_call_kind(&self, function_id: u32, invoke: bool) -> ValueKind {
+    fn infer_function_call_kind(&self, function_id: EntityId, invoke: bool) -> ValueKind {
         if let Some(func) = self.ast.functions.get(&function_id) {
             if !invoke {
                 // This is a thunk (prepared call) - return a Thunk type
@@ -778,7 +962,7 @@ impl HirBuilder {
 
     fn infer_partial_call_kind(
         &self,
-        func_id: &u32,
+        func_id: &EntityId,
         bound: &Vec<Option<HirExpression>>,
     ) -> ValueKind {
         // Try to get function signature from ast.functions first
@@ -882,13 +1066,15 @@ impl HirBuilder {
             HirExpression::StructInit { struct_name, .. } => {
                 ValueKind::Struct(struct_name.clone())
             }
-            HirExpression::FieldAccess { base, field_name: _ } => {
-                // Infer the struct type from the base expression
+            HirExpression::FieldAccess { base, field_name } => {
                 let base_type = self.infer_variable_kind(base);
                 match base_type {
-                    ValueKind::Struct(_) => {
-                        // For now, return Unknown - in a full implementation,
-                        // we'd look up the struct definition and return the field type
+                    ValueKind::Struct(struct_name) => {
+                        if let Some(def) = self.ast.structs.get(&struct_name) {
+                            if let Some((_, ty)) = def.fields.iter().find(|(n, _)| n == field_name) {
+                                return ty.clone();
+                            }
+                        }
                         ValueKind::Unknown
                     }
                     _ => ValueKind::Unknown,
@@ -928,6 +1114,20 @@ impl HirBuilder {
                 reducer_args,
                 ..
             } => {
+                fn callable_return(hir: &HirAst, expr: &HirExpression) -> Option<ValueKind> {
+                    match expr {
+                        HirExpression::Closure { function_id } => hir
+                            .functions
+                            .get(function_id)
+                            .map(|f| (*f.signature.return_type).clone()),
+                        HirExpression::FunctionCall { function_id, invoke: false, .. } => hir
+                            .functions
+                            .get(function_id)
+                            .map(|f| (*f.signature.return_type).clone()),
+                        _ => None,
+                    }
+                }
+
                 // Reducer returns different types based on reducer type
                 match reducer_type {
                     ReducerType::Sum => ValueKind::Number, // sum always returns number
@@ -940,15 +1140,13 @@ impl HirBuilder {
                         }
                     }
                     ReducerType::Map => {
-                        // map(fn) returns array of transformed elements
-                        // Infer the return type from the function, but for now return same array type
                         let array_type = self.infer_variable_kind(array);
+                        let out = reducer_args
+                            .first()
+                            .and_then(|f| callable_return(&self.ast, f))
+                            .unwrap_or(ValueKind::Unknown);
                         match array_type {
-                            ValueKind::Array(inner_type) => {
-                                // For map, we'd ideally infer the return type of the function
-                                // For now, return array with same inner type (will be refined later)
-                                ValueKind::Array(inner_type)
-                            }
+                            ValueKind::Array(_) => ValueKind::Array(Box::new(out)),
                             _ => ValueKind::Array(Box::new(ValueKind::Unknown)),
                         }
                     }
@@ -961,16 +1159,25 @@ impl HirBuilder {
                         }
                     }
                     ReducerType::Reduce => {
-                        // reduce(fn) returns the accumulator type (same as fold, but uses first element)
-                        // For now, return Unknown - in practice, this would be the return type of fn
-                        ValueKind::Unknown
+                        // reduce(fn) returns the accumulator type (typically same as element type)
+                        let array_type = self.infer_variable_kind(array);
+                        if let Some(out) = reducer_args
+                            .first()
+                            .and_then(|f| callable_return(&self.ast, f))
+                        {
+                            return out;
+                        }
+                        match array_type {
+                            ValueKind::Array(inner_type) => *inner_type,
+                            _ => ValueKind::Unknown,
+                        }
                     }
                 }
             }
         }
     }
 
-    fn resolve_const(&self, name: &str) -> Option<u32> {
+    fn resolve_const(&self, name: &str) -> Option<EntityId> {
         // Only resolve data constants (not functions)
         self.ast
             .constants
@@ -980,7 +1187,7 @@ impl HirBuilder {
             .map(|c| c.id)
     }
 
-    pub fn resolve_function(&self, ctx: &crate::core::compileSession::CompileContext, name: &str) -> Option<u32> {
+    pub fn resolve_function(&self, ctx: &crate::core::compileSession::CompileContext, name: &str) -> Option<EntityId> {
         // 1. Imports first
         if let Some(imported_id) = self.resolve_import_in_current_module(name) {
             // Check if it's a native function OR if it's in ast.functions
@@ -997,7 +1204,29 @@ impl HirBuilder {
         }
 
         // 2. Find function by name
-        let (func_id, _) = self.ast.functions.iter().find(|(_, f)| f.name == name)?;
+        // CRITICAL: User-defined functions (EntityId < 10000) should shadow stdlib functions (EntityId >= 10000)
+        // So we prioritize user functions when multiple functions have the same name
+        eprintln!("[HIR] resolve_function: Searching in {} functions for '{}'", self.ast.functions.len(), name);
+
+        // First try to find a user-defined function (EntityId < 10000)
+        let user_function = self.ast.functions.iter()
+            .find(|(id, f)| f.name == name && id.as_u32() < 10000);
+
+        // If no user function found, try stdlib functions (EntityId >= 10000)
+        let (func_id, _) = match user_function.or_else(|| {
+            self.ast.functions.iter().find(|(_, f)| f.name == name)
+        }) {
+            Some(result) => {
+                eprintln!("[HIR] resolve_function: Found function '{}' with id={:?}", name, result.0);
+                result
+            }
+            None => {
+                eprintln!("[HIR] resolve_function: Function '{}' not found in ast.functions", name);
+                let available: Vec<&str> = self.ast.functions.values().map(|f| f.name.as_str()).take(5).collect();
+                eprintln!("[HIR] resolve_function: Available functions (sample): {:?}", available);
+                return None;
+            }
+        };
 
         // 3. Check module ownership
         // If current_module is set, check if the function belongs to it (or is a local function)
@@ -1040,7 +1269,7 @@ impl HirBuilder {
     fn should_eagerly_invoke(
         &self,
         ctx: &crate::core::compileSession::CompileContext,
-        function_id: u32,
+        function_id: EntityId,
         arg_count: usize,
     ) -> bool {
         // First check if it's a native function
@@ -1049,17 +1278,17 @@ impl HirBuilder {
                 return !native_func.signature.is_effectful && arg_count == native_func.signature.params.len();
             }
         }
-        
+
         // Otherwise check user-defined functions
         if let Some(func) = self.ast.functions.get(&function_id) {
             return !func.signature.is_effectful && arg_count == func.signature.params.len();
         }
-        
+
         // Unknown function - don't eagerly invoke
         false
     }
 
-    pub fn register_builtin_function(&mut self, name: &str, signature: FunctionSignature, id: u32) {
+    pub fn register_builtin_function(&mut self, name: &str, signature: FunctionSignature, id: EntityId) {
         // Register a built-in function (from CompileContext) in the HIR function registry
         // Create a dummy function definition since built-ins are handled in the VM
         let dummy_def = FunctionDefinition {
@@ -1083,7 +1312,7 @@ impl HirBuilder {
 
     /// Add a symbol to the current module's import table
     /// This replaces the old add_to_import_table method
-    pub fn add_to_import_table(&mut self, name: String, id: u32) {
+    pub fn add_to_import_table(&mut self, name: String, id: EntityId) {
         // This method should now be scoped to the current module
         if let Err(e) = self.add_import_to_current_module(name, id) {
             // Log error or handle appropriately
@@ -1101,8 +1330,8 @@ impl HirBuilder {
     pub fn register_module(
         &mut self,
         path: &str,
-        functions: HashMap<String, u32>,
-        constants: HashMap<String, u32>,
+        functions: HashMap<String, EntityId>,
+        constants: HashMap<String, EntityId>,
         structs: HashMap<String, StructDef>,
     ) {
         // Also add structs to ast.structs so they're available for type registry and pretty printing
@@ -1149,10 +1378,14 @@ impl HirBuilder {
     /// Functions return function IDs, constants return constant IDs.
     fn resolve_import(
         &self,
-        path: &[String],
+        path: &[crate::core::ast::AstIdent],
         selector: &crate::core::ast::ImportSelector,
     ) -> Result<ImportTable, HirError> {
-        let module_path = path.join(".");
+        let module_path = path
+            .iter()
+            .map(|p| p.name.as_str())
+            .collect::<Vec<_>>()
+            .join(".");
 
         let module = self
             .modules
@@ -1167,18 +1400,18 @@ impl HirBuilder {
         match selector {
             crate::core::ast::ImportSelector::Single(name) => {
                 // Check functions first, then constants, then structs
-                if let Some(func_id) = module.functions.get(name) {
-                    imports.insert(name.clone(), *func_id);
-                } else if let Some(const_id) = module.constants.get(name) {
+                if let Some(func_id) = module.functions.get(&name.name) {
+                    imports.insert(name.name.clone(), *func_id);
+                } else if let Some(const_id) = module.constants.get(&name.name) {
                     // Constants are stored as constant IDs
-                    imports.insert(name.clone(), *const_id);
-                } else if module.structs.contains_key(name) {
+                    imports.insert(name.name.clone(), *const_id);
+                } else if module.structs.contains_key(&name.name) {
                     // Structs are handled separately - they don't need to be in the import table
                     // The struct handling code (after resolve_import) will copy them to ast.structs
                     // So we just skip them here without error
                 } else {
                     return Err(HirError::FunctionNotFound {
-                        name: name.clone(),
+                        name: name.name.clone(),
                         span: HirError::synthetic_span(),
                     });
                 }
@@ -1186,18 +1419,18 @@ impl HirBuilder {
             crate::core::ast::ImportSelector::Multiple(names) => {
                 for name in names {
                     // Check functions first, then constants, then structs
-                    if let Some(func_id) = module.functions.get(name) {
-                        imports.insert(name.clone(), *func_id);
-                    } else if let Some(const_id) = module.constants.get(name) {
+                    if let Some(func_id) = module.functions.get(&name.name) {
+                        imports.insert(name.name.clone(), *func_id);
+                    } else if let Some(const_id) = module.constants.get(&name.name) {
                         // Constants are stored as variable IDs, import them as such
-                        imports.insert(name.clone(), *const_id);
-                    } else if module.structs.contains_key(name) {
+                        imports.insert(name.name.clone(), *const_id);
+                    } else if module.structs.contains_key(&name.name) {
                         // Structs are handled separately - they don't need to be in the import table
                         // The struct handling code (after resolve_import) will copy them to ast.structs
                         // So we just skip them here without error
                     } else {
                         return Err(HirError::FunctionNotFound {
-                            name: name.clone(),
+                            name: name.name.clone(),
                             span: HirError::synthetic_span(),
                         });
                     }
@@ -1260,7 +1493,15 @@ impl HirBuilder {
             "boolean" | "bool" => ValueKind::Boolean,
             "void" => ValueKind::Void,
             "any" | "" => ValueKind::Unknown,
-            _ => ValueKind::Unknown,
+            _ => {
+                // User-defined struct types
+                // NOTE: structs are identified by name and must have been declared earlier.
+                if self.ast.structs.contains_key(trimmed) {
+                    ValueKind::Struct(trimmed.to_string())
+                } else {
+                    ValueKind::Unknown
+                }
+            }
         }
     }
 
@@ -1275,12 +1516,18 @@ impl HirBuilder {
         let mut in_parens = false;
         let mut paren_depth = 0;
 
-        for ch in trimmed.chars() {
+        // Also canonicalize builtin type identifiers while we normalize.
+        // This keeps type strings consistent across the compiler (`num` vs `number`, etc.).
+        let mut i = 0usize;
+        let chars: Vec<char> = trimmed.chars().collect();
+        while i < chars.len() {
+            let ch = chars[i];
             match ch {
                 '(' => {
                     in_parens = true;
                     paren_depth += 1;
                     result.push(ch);
+                    i += 1;
                 }
                 ')' => {
                     paren_depth -= 1;
@@ -1288,6 +1535,7 @@ impl HirBuilder {
                         in_parens = false;
                     }
                     result.push(ch);
+                    i += 1;
                 }
                 ',' => {
                     result.push(ch);
@@ -1295,6 +1543,7 @@ impl HirBuilder {
                     if !in_parens || paren_depth == 1 {
                         // Don't add space - keep compact
                     }
+                    i += 1;
                 }
                 c if c.is_whitespace() => {
                     // Only preserve whitespace around -> and ~>
@@ -1309,14 +1558,40 @@ impl HirBuilder {
                         // Already have space
                     } else {
                         // Check if next non-whitespace is -> or ~>
-                        let remaining = trimmed[result.len()..].trim_start();
+                        let remaining: String = chars[i..].iter().collect();
+                        let remaining = remaining.trim_start();
                         if remaining.starts_with("->") || remaining.starts_with("~>") {
                             result.push(' ');
                         }
                     }
+                    i += 1;
+                }
+                c if c.is_ascii_alphabetic() || c == '_' => {
+                    let start = i;
+                    i += 1;
+                    while i < chars.len() {
+                        let c2 = chars[i];
+                        if c2.is_ascii_alphanumeric() || c2 == '_' {
+                            i += 1;
+                        } else {
+                            break;
+                        }
+                    }
+                    let ident: String = chars[start..i].iter().collect();
+                    let canon = match ident.to_lowercase().as_str() {
+                        "num" | "number" | "int" | "float" => "num",
+                        "str" | "string" => "string",
+                        "bool" | "boolean" => "bool",
+                        "any" => "any",
+                        "unknown" => "unknown",
+                        "void" => "void",
+                        _ => ident.as_str(),
+                    };
+                    result.push_str(canon);
                 }
                 _ => {
                     result.push(ch);
+                    i += 1;
                 }
             }
         }
@@ -1336,7 +1611,7 @@ impl HirBuilder {
     #[allow(dead_code)]
     pub fn check_thunk_completeness(
         &self,
-        var_id: u32,
+        var_id: EntityId,
         additional_args: usize,
     ) -> Option<(bool, usize, usize)> {
         let var_kind = self.get_var_kind_from_id(var_id)?;
@@ -1629,7 +1904,7 @@ impl HirBuilder {
     // }
 
     /// Intern a constant value (for constant folding and constant declarations).
-    fn intern_constant_value(&mut self, value: ConstantValue) -> u32 {
+    fn intern_constant_value(&mut self, value: ConstantValue) -> EntityId {
         // Create hashable key for deduplication
         let key = ConstantKey::from_constant_value(&value);
 
@@ -1639,7 +1914,10 @@ impl HirBuilder {
         }
 
         // Create new constant
-        let id = self.ast.constants.len() as u32;
+        //
+        // CRITICAL: Use the unified EntityId generator to avoid collisions with
+        // user-defined functions/variables (which also live in the user ID range).
+        let id = self.id_generator.next_user();
         let kind = match &value {
             ConstantValue::String(_) => ValueKind::String,
             ConstantValue::Number(_) => ValueKind::Number,
@@ -1648,7 +1926,7 @@ impl HirBuilder {
         };
         self.ast.constants.push(Constant {
             id,
-            name: format!("const_{}", id), // Generic name for folded constants
+            name: format!("const_{}", id.as_u32()), // Generic name for folded constants
             kind,
             value: value.clone(),
         });
@@ -1782,50 +2060,53 @@ impl HirBuilder {
     fn process_assignment(
         &mut self,
         ctx: &crate::core::compileSession::CompileContext,
-        identifier: String,
+        identifier: crate::core::ast::AstIdent,
         expression: Expression,
         require_exists: bool,
-    ) -> Result<(u32, HirExpression), HirError> {
+    ) -> Result<(EntityId, HirExpression), HirError> {
         let expr = self.process_expression(ctx, expression)?;
         let actual_kind = self.infer_variable_kind(&expr);
+        let identifier_name = identifier.name.clone();
 
         let slot = if require_exists {
             // For assign operations, variable must already exist
-            match self.resolve_var(&identifier) {
+            match self.resolve_var(&identifier_name) {
                 Some(id) => {
                     let expected_kind = self.get_var_kind(id).ok_or_else(|| {
                         HirError::UnknownVariable {
-                            name: identifier.clone(),
+                            name: identifier_name.clone(),
                             span: HirError::synthetic_span(),
                         }
                     })?;
 
                     if !Self::check_type_compatibility(&expected_kind, &actual_kind) {
                         return Err(HirError::TypeMismatch {
-                            variable: identifier,
+                            variable: identifier_name,
                             expected: expected_kind,
                             actual: actual_kind,
                             span: HirError::synthetic_span(),
                         });
                     }
+                    // Record a reference on the assignment LHS identifier span
+                    self.record_symbol_reference(identifier.cst_id, id);
                     id
                 }
                 None => {
                     return Err(HirError::UnknownVariable {
-                        name: identifier,
+                        name: identifier_name,
                         span: HirError::synthetic_span(),
                     });
                 }
             }
         } else {
             // For let, variable must not already exist in the current scope
-            if self.var_exists_in_current_scope(&identifier) {
+            if self.var_exists_in_current_scope(&identifier_name) {
                 return Err(HirError::VariableAlreadyDeclared {
-                    name: identifier,
+                    name: identifier_name,
                     span: HirError::synthetic_span(),
                 });
             }
-            self.init_var(&identifier, actual_kind)
+            self.init_var_with_cst_id(&identifier_name, actual_kind, Some(identifier.cst_id))
         };
 
         Ok((slot, expr))
@@ -1863,7 +2144,10 @@ impl HirBuilder {
         }
 
         // Create a constant entry
-        let const_id = self.ast.constants.len() as u32;
+        //
+        // CRITICAL: Use the unified EntityId generator to avoid collisions with
+        // user-defined functions/variables (which also live in the user ID range).
+        let new_const_id = self.id_generator.next_user();
         let key = ConstantKey::from_constant_value(&constant_value);
 
         // Check if constant already exists (deduplication)
@@ -1871,21 +2155,29 @@ impl HirBuilder {
             existing_id
         } else {
             self.ast.constants.push(Constant {
-                id: const_id,
+                id: new_const_id,
                 name: identifier.name.clone(),
                 kind: kind.clone(),
                 value: constant_value,
             });
-            self.constant_map.insert(key, const_id);
-            const_id
+            self.constant_map.insert(key, new_const_id);
+            new_const_id
         };
 
-        // Phase 3: Bind CST ID to constant symbol ID
-        self.bind_cst_to_symbol(identifier.cst_id, SymbolId(const_id));
+        // Record constant definition in resolver
+        self.record_symbol_definition(
+            identifier.cst_id,
+            const_id,
+            &identifier.name,
+            SymbolKind::Variable, // Constants are stored as variables in HIR
+            kind.clone(),
+        );
 
-        // Create a variable for the constant (so it can be referenced)
-        // Phase 3: Use init_var_with_cst_id to bind CST ID (constant already bound above)
-        let slot = self.init_var_with_cst_id(&identifier.name, kind, Some(identifier.cst_id));
+        // Create a storage slot for the constant (so it can be referenced).
+        //
+        // IMPORTANT: Do NOT bind the declaration's CST ID to this storage slot.
+        // The CST ID should map to the semantic constant entity (`const_id`) above.
+        let slot = self.init_var(&identifier.name, kind);
 
         // Register pub constants in the module registry
         // Store constant ID (not variable slot ID) - imports need the constant, not the storage
@@ -2219,7 +2511,7 @@ impl HirBuilder {
     fn process_assign_statement(
         &mut self,
         ctx: &crate::core::compileSession::CompileContext,
-        identifier: String,
+        identifier: crate::core::ast::AstIdent,
         expression: Expression,
     ) -> Result<HirStmt, HirError> {
         let (slot, expr) = self.process_assignment(ctx, identifier, expression, true)?;
@@ -2230,7 +2522,7 @@ impl HirBuilder {
     fn process_assign_decrement_statement(
         &mut self,
         ctx: &crate::core::compileSession::CompileContext,
-        identifier: String,
+        identifier: crate::core::ast::AstIdent,
         expression: Expression,
     ) -> Result<HirStmt, HirError> {
         let (slot, expr) = self.process_assignment(ctx, identifier, expression, true)?;
@@ -2241,7 +2533,7 @@ impl HirBuilder {
     fn process_assign_increment_statement(
         &mut self,
         ctx: &crate::core::compileSession::CompileContext,
-        identifier: String,
+        identifier: crate::core::ast::AstIdent,
         expression: Expression,
     ) -> Result<HirStmt, HirError> {
         let (slot, expr) = self.process_assignment(ctx, identifier, expression, true)?;
@@ -2318,6 +2610,20 @@ impl HirBuilder {
         body: Block,
         pub_visibility: bool,
     ) -> Result<HirStmt, HirError> {
+        // Enforce explicit parameter types for named functions.
+        // CantaLoop is not weakly typed: missing param types are an error.
+        for arg in &arguments {
+            if arg.kind.trim().is_empty() {
+                return Err(HirError::TypeError {
+                    message: format!(
+                        "Function parameter '{}' must have a type annotation",
+                        arg.identifier.name
+                    ),
+                    span: HirError::synthetic_span(),
+                });
+            }
+        }
+
         // Parse argument types
         let mut param_types = Vec::new();
         for arg in &arguments {
@@ -2349,8 +2655,7 @@ impl HirBuilder {
         };
 
         // Assign a function ID
-        let func_id = self.next_function_id;
-        self.next_function_id += 1;
+        let func_id = self.id_generator.next_user();
 
         // Save current scope
         let parent_scope = self.current_scope;
@@ -2369,7 +2674,13 @@ impl HirBuilder {
         let mut param_var_ids = Vec::new();
         for arg in &arguments {
             let param_kind = self.parse_type_string(&arg.kind);
-            let var_id = self.init_var(&arg.identifier.name, param_kind);
+            // CRITICAL: Pass the parameter's CST ID so it gets recorded in SymbolResolver
+            let var_id = self.init_var_with_cst_id_and_symbol_kind(
+                &arg.identifier.name,
+                param_kind,
+                Some(arg.identifier.cst_id),
+                SymbolKind::Parameter,
+            );
             param_var_ids.push(var_id);
         }
 
@@ -2384,6 +2695,7 @@ impl HirBuilder {
             scope_id: func_scope_id,
         };
 
+        let signature_clone = signature.clone();
         let function = Function {
             id: func_id,
             name: identifier.name.clone(),
@@ -2393,8 +2705,16 @@ impl HirBuilder {
 
         self.ast.functions.insert(func_id, function);
 
-        // Phase 3: Bind CST ID to function symbol ID
-        self.bind_cst_to_symbol(identifier.cst_id, SymbolId(func_id));
+        // Record function definition in resolver
+        let func_type_str = format_function_type_string(&signature_clone);
+        let func_type = ValueKind::Function(func_type_str);
+        self.record_symbol_definition(
+            identifier.cst_id,
+            func_id,
+            &identifier.name,
+            SymbolKind::Function,
+            func_type,
+        );
 
         // Register pub functions in the module registry
         if pub_visibility {
@@ -2424,7 +2744,7 @@ impl HirBuilder {
         self.current_scope = parent_scope;
 
         // Return a no-op statement since the function is now registered
-        Ok(HirStmt::Expression(HirExpression::Constant(0))) // Dummy constant, not used
+        Ok(HirStmt::Nop)
     }
 
     /// Process a return statement
@@ -2518,7 +2838,7 @@ impl HirBuilder {
     fn process_for_statement(
         &mut self,
         ctx: &crate::core::compileSession::CompileContext,
-        var_name: String,
+        var_name: crate::core::ast::AstIdent,
         start: Expression,
         end: Expression,
         body: Block,
@@ -2539,7 +2859,7 @@ impl HirBuilder {
 
         // Initialize the loop variable
         let var_kind = self.infer_variable_kind(&start_expr);
-        let var_id = self.init_var(&var_name, var_kind);
+        let var_id = self.init_var_with_cst_id(&var_name.name, var_kind, Some(var_name.cst_id));
 
         // Create condition check: if var >= end { break; }
         let var_ref = HirExpression::Identifier(var_id);
@@ -2602,7 +2922,7 @@ impl HirBuilder {
     fn process_loop_statement(
         &mut self,
         ctx: &crate::core::compileSession::CompileContext,
-        init_vars: Vec<(String, Expression)>,
+        init_vars: Vec<(crate::core::ast::AstIdent, Expression)>,
         body: Block,
     ) -> Result<HirStmt, HirError> {
         let parent_scope = self.current_scope;
@@ -2613,7 +2933,7 @@ impl HirBuilder {
         for (var_name, init_expr) in init_vars {
             let expr = self.process_expression(ctx, init_expr)?;
             let actual_kind = self.infer_variable_kind(&expr);
-            let var_id = self.init_var(&var_name, actual_kind);
+            let var_id = self.init_var_with_cst_id(&var_name.name, actual_kind, Some(var_name.cst_id));
             hir_init_vars.push((var_id, expr));
         }
 
@@ -2739,42 +3059,125 @@ impl HirBuilder {
                         .insert("__main__".to_string(), HashMap::new());
                 }
 
-                let module_path = path.join(".");
-                let module = self
-                    .modules
-                    .get(&module_path)
-                    .ok_or_else(|| HirError::ModuleNotFound {
-                module_path: module_path.clone(),
-                span: HirError::synthetic_span(),
-            })?;
+                let module_path = path
+                    .iter()
+                    .map(|p| p.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(".");
+                if !self.modules.contains_key(&module_path) {
+                    return Err(HirError::ModuleNotFound {
+                        module_path: module_path.clone(),
+                        span: HirError::synthetic_span(),
+                    });
+                }
+
+                // Record module path segments as Module symbols for semantic tokens.
+                // These are synthetic entities in the native type/module ID range.
+                fn module_entity_id(module_path: &str) -> EntityId {
+                    // FNV-1a 32-bit hash, mapped into 20000-29999.
+                    let mut hash: u32 = 2166136261;
+                    for b in module_path.as_bytes() {
+                        hash ^= *b as u32;
+                        hash = hash.wrapping_mul(16777619);
+                    }
+                    EntityId::new(20000 + (hash % 10000))
+                }
+
+                // e.g., ["math","utils"] records "math" and "math.utils"
+                for i in 0..path.len() {
+                    let prefix = path
+                        .iter()
+                        .take(i + 1)
+                        .map(|p| p.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(".");
+                    let id = module_entity_id(&prefix);
+                    // Treat each module segment occurrence as a (synthetic) definition so it gets metadata/kind.
+                    let cst_id = path[i].cst_id;
+                    if self.symbol_resolver.get_metadata(id).is_none() {
+                        self.record_symbol_definition(cst_id, id, &prefix, SymbolKind::Module, ValueKind::Unknown);
+                    } else {
+                        self.record_symbol_reference(cst_id, id);
+                    }
+                }
 
                 let imports = self.resolve_import(&path, &selector)?;
 
-                // Handle struct imports by copying struct definitions to HirAst.structs
-                match selector {
+                // Record references for imported identifiers (the selector names) so they get semantic tokens.
+                match &selector {
                     crate::core::ast::ImportSelector::Single(name) => {
-                        if let Some(struct_def) = module.structs.get(&name) {
-                            // Copy struct definition to HirAst.structs
-                            if self.ast.structs.contains_key(&name) {
-                                return Err(HirError::TypeError {
-                                    message: format!("Struct '{}' already defined", name),
-                                    span: HirError::synthetic_span(),
-                                });
+                        let resolved = self.modules.get(&module_path).and_then(|m| {
+                            if let Some(id) = m.functions.get(&name.name).copied() {
+                                Some((id, SymbolKind::Function))
+                            } else if let Some(id) = m.constants.get(&name.name).copied() {
+                                Some((id, SymbolKind::Variable))
+                            } else {
+                                None
                             }
-                            self.ast.structs.insert(name.clone(), struct_def.clone());
+                        });
+                        if let Some((id, kind)) = resolved {
+                            // Imported symbols often have no metadata (native). Ensure they have a kind/name.
+                            if self.symbol_resolver.get_metadata(id).is_none() {
+                                self.record_symbol_definition(name.cst_id, id, &name.name, kind, ValueKind::Unknown);
+                            } else {
+                                self.record_symbol_reference(name.cst_id, id);
+                            }
                         }
                     }
                     crate::core::ast::ImportSelector::Multiple(names) => {
                         for name in names {
-                            if let Some(struct_def) = module.structs.get(&name) {
-                                // Copy struct definition to HirAst.structs
-                                if self.ast.structs.contains_key(&name) {
+                            let resolved = self.modules.get(&module_path).and_then(|m| {
+                                if let Some(id) = m.functions.get(&name.name).copied() {
+                                    Some((id, SymbolKind::Function))
+                                } else if let Some(id) = m.constants.get(&name.name).copied() {
+                                    Some((id, SymbolKind::Variable))
+                                } else {
+                                    None
+                                }
+                            });
+                            if let Some((id, kind)) = resolved {
+                                if self.symbol_resolver.get_metadata(id).is_none() {
+                                    self.record_symbol_definition(name.cst_id, id, &name.name, kind, ValueKind::Unknown);
+                                } else {
+                                    self.record_symbol_reference(name.cst_id, id);
+                                }
+                            }
+                        }
+                    }
+                    crate::core::ast::ImportSelector::Wildcard => {}
+                }
+
+                // Borrow module only in this block (avoid holding an immutable borrow across resolver writes)
+                let module = self
+                    .modules
+                    .get(&module_path)
+                    .expect("module existence checked above");
+
+                // Handle struct imports by copying struct definitions to HirAst.structs
+                match selector {
+                    crate::core::ast::ImportSelector::Single(name) => {
+                        if let Some(struct_def) = module.structs.get(&name.name) {
+                            // Copy struct definition to HirAst.structs
+                            if self.ast.structs.contains_key(&name.name) {
                                 return Err(HirError::TypeError {
-                                    message: format!("Struct '{}' already defined", name),
+                                    message: format!("Struct '{}' already defined", name.name),
+                                    span: HirError::synthetic_span(),
+                                });
+                            }
+                            self.ast.structs.insert(name.name.clone(), struct_def.clone());
+                        }
+                    }
+                    crate::core::ast::ImportSelector::Multiple(names) => {
+                        for name in names {
+                            if let Some(struct_def) = module.structs.get(&name.name) {
+                                // Copy struct definition to HirAst.structs
+                                if self.ast.structs.contains_key(&name.name) {
+                                return Err(HirError::TypeError {
+                                    message: format!("Struct '{}' already defined", name.name),
                                     span: HirError::synthetic_span(),
                                 });
                                 }
-                                self.ast.structs.insert(name.clone(), struct_def.clone());
+                                self.ast.structs.insert(name.name.clone(), struct_def.clone());
                             }
                         }
                     }
@@ -2839,11 +3242,12 @@ impl HirBuilder {
     fn process_identifier_invoke(
         &mut self,
         ctx: &crate::core::compileSession::CompileContext,
-        identifier: String,
+        identifier: crate::core::ast::AstIdent,
         args: Option<Vec<Expression>>,
     ) -> Result<HirExpression, HirError> {
+        let identifier_name = identifier.name.clone();
         // Try to resolve as imported symbol first (module-scoped)
-        if let Some(imported_id) = self.resolve_import_in_current_module(&identifier) {
+        if let Some(imported_id) = self.resolve_import_in_current_module(&identifier_name) {
             // Check if it's a variable (thunk)
             if self
                 .ast
@@ -2852,6 +3256,7 @@ impl HirBuilder {
                 .iter()
                 .any(|scope| scope.vars.iter().any(|v| v.id == imported_id))
             {
+                self.record_symbol_reference(identifier.cst_id, imported_id);
                 let processed_args = self.process_invoke_args(ctx, args)?;
                 return Ok(HirExpression::PostfixInvoke {
                     operand: Box::new(HirExpression::Identifier(imported_id)),
@@ -2865,7 +3270,8 @@ impl HirBuilder {
         }
 
         // Try to resolve as variable (for thunks stored in variables)
-        if let Some(var_id) = self.resolve_var_aggressive(&identifier) {
+        if let Some(var_id) = self.resolve_var_aggressive(&identifier_name) {
+            self.record_symbol_reference(identifier.cst_id, var_id);
             let processed_args = self.process_invoke_args(ctx, args)?;
             return Ok(HirExpression::PostfixInvoke {
                 operand: Box::new(HirExpression::Identifier(var_id)),
@@ -2878,18 +3284,18 @@ impl HirBuilder {
         }
 
         // Check if it's a function (should error - can't use ! on functions)
-        if self.resolve_function(ctx, &identifier).is_some() {
+        if self.resolve_function(ctx, &identifier_name).is_some() {
             return Err(HirError::TypeError {
                 message: format!(
                     "Cannot use thunk invocation syntax '{}!' on a function. Use '{}' with parentheses to call the function.",
-                    identifier, identifier
+                    identifier_name, identifier_name
                 ),
                 span: HirError::synthetic_span(),
             });
         }
 
         Err(HirError::UnknownVariable {
-            name: identifier.clone(),
+            name: identifier_name,
             span: HirError::synthetic_span(),
         })
     }
@@ -2902,10 +3308,14 @@ impl HirBuilder {
     fn extract_cst_id_from_expr(expr: &Expression) -> crate::core::cst::CstId {
         match expr {
             Expression::Identifier(ident) => ident.cst_id,
-            Expression::MemberAccess { cst_id, .. } => *cst_id,
+            // CRITICAL: For member/field access, prefer the *identifier* CstId (the right-most segment),
+            // not the whole expression. Pipe desugaring uses this to create synthetic call-site IDs, and
+            // mapping the whole `module.member` span to a function causes hover/highlighting on `module`
+            // to resolve as the member function (and can make only parts highlight in VSCode).
+            Expression::MemberAccess { member, .. } => member.cst_id,
             Expression::FunctionCall { cst_id, .. } => *cst_id,
             Expression::StructInit { cst_id, .. } => *cst_id,
-            Expression::FieldAccess { cst_id, .. } => *cst_id,
+            Expression::FieldAccess { field, .. } => field.cst_id,
             _ => crate::core::cst::CstId::new(0), // No CstId available - this is a synthetic node
         }
     }
@@ -3055,26 +3465,68 @@ impl HirBuilder {
         &mut self,
         ctx: &crate::core::compileSession::CompileContext,
         object: Expression,
-        member: String,
+        member: crate::core::ast::AstIdent,
     ) -> Result<HirExpression, HirError> {
-        // First, check if the object is an identifier that resolves to a variable
-        // If so, this is a struct field access, not a module member access
+        // Record the module segment itself as a Module symbol for semantic tokens (TYPE).
+        // This mirrors `use ... from ...` handling: module names are not values, but we still
+        // want stable, resolution-driven highlighting for their spans.
+        fn module_entity_id(module_path: &str) -> EntityId {
+            // FNV-1a 32-bit hash, mapped into 20000-29999.
+            let mut hash: u32 = 2166136261;
+            for b in module_path.as_bytes() {
+                hash ^= *b as u32;
+                hash = hash.wrapping_mul(16777619);
+            }
+            EntityId::new(20000 + (hash % 10000))
+        }
+
+        // Prefer module member access when the left-hand side matches a known module.
+        // This avoids misclassifying `math.floor` as a struct field access when `math`
+        // happens to be resolvable as a value in some contexts.
         if let Expression::Identifier(ident) = &object {
-            // Check if it's a variable (struct instance) first
-            if self.resolve_var_aggressive(&ident.name).is_some() {
-                // It's a variable - treat as field access
+            if !self.modules.contains_key(&ident.name) && self.resolve_var_aggressive(&ident.name).is_some() {
+                // It's a variable (struct instance) - treat as field access
                 let base_expr = self.process_expression(ctx, object)?;
+                // Bind field symbol if base is a struct (first-class field symbols).
+                if let ValueKind::Struct(struct_name) = self.infer_variable_kind(&base_expr) {
+                    fn field_entity_id(struct_name: &str, field_name: &str) -> EntityId {
+                        let mut hash: u32 = 2166136261;
+                        for b in format!("{}::{}", struct_name, field_name).as_bytes() {
+                            hash ^= *b as u32;
+                            hash = hash.wrapping_mul(16777619);
+                        }
+                        EntityId::new(40000 + (hash % 10000))
+                    }
+
+                    // Record the member identifier as a field symbol reference whenever we know the receiver is a struct.
+                    // If the field isn't found, still record it as Unknown so hover/highlighting stay stable,
+                    // and let the type checker (or later stages) report the actual error.
+                    let field_ty = self
+                        .ast
+                        .structs
+                        .get(&struct_name)
+                        .and_then(|def| def.fields.iter().find(|(n, _)| n == &member.name).map(|(_, ty)| ty.clone()))
+                        .unwrap_or(ValueKind::Unknown);
+
+                    let fid = field_entity_id(&struct_name, &member.name);
+                    let fq_name = format!("{}.{}", struct_name, member.name);
+                    if self.symbol_resolver.get_metadata(fid).is_none() {
+                        self.record_symbol_definition(member.cst_id, fid, &fq_name, SymbolKind::Field, field_ty);
+                    } else {
+                        self.record_symbol_reference(member.cst_id, fid);
+                    }
+                }
                 return Ok(HirExpression::FieldAccess {
                     base: Box::new(base_expr),
-                    field_name: member,
+                    field_name: member.name,
                 });
             }
         }
 
         // The object should be an identifier (module name)
         // We extract the name directly without processing it, since modules aren't values
-        let module_name = match object {
-            Expression::Identifier(ident) => ident.name.clone(),
+        let module_ident = match object {
+            Expression::Identifier(ident) => ident,
             _ => {
                 return Err(HirError::TypeError {
                     message: format!("Member access object must be an identifier (module name), got: {:?}", object),
@@ -3082,45 +3534,91 @@ impl HirBuilder {
                 });
             }
         };
+        let module_name = module_ident.name.clone();
 
-        // Look up the module
-        let module = self
+        // Ensure module has metadata so it can be colored as TYPE.
+        let mod_id = module_entity_id(&module_name);
+        if self.symbol_resolver.get_metadata(mod_id).is_none() {
+            self.record_symbol_definition(module_ident.cst_id, mod_id, &module_name, SymbolKind::Module, ValueKind::Unknown);
+        } else {
+            self.record_symbol_reference(module_ident.cst_id, mod_id);
+        }
+
+        // Look up the member in the module without holding a long-lived borrow on `self.modules`
+        let function_id = self
             .modules
             .get(&module_name)
             .ok_or_else(|| HirError::ModuleNotFound {
                 module_path: module_name.clone(),
                 span: HirError::synthetic_span(),
-            })?;
+            })?
+            .functions
+            .get(&member.name)
+            .copied();
 
-        // Look up the member in the module
-        // member is already String (passed as member.name from call site at line 3841)
-        if let Some(function_id) = module.functions.get(&member) {
+        if let Some(function_id) = function_id {
+            // Record reference for the member identifier itself (e.g., "add" in "utils.add").
+            // Native functions often have no metadata; ensure they get a kind/name so semantic tokens can type them.
+            if self.symbol_resolver.get_metadata(function_id).is_none() {
+                self.record_symbol_definition(member.cst_id, function_id, &member.name, SymbolKind::Function, ValueKind::Unknown);
+            } else {
+                self.record_symbol_reference(member.cst_id, function_id);
+            }
             // It's a function - return a FunctionCall with empty args
             // The actual arguments will be added by process_function_call_expression
             Ok(HirExpression::FunctionCall {
-                function_id: *function_id,
+                function_id,
                 args: Vec::new(),
                 invoke: false})
-        } else if let Some(constant_id) = module.constants.get(&member) {
+        } else {
+            let constant_id = self
+                .modules
+                .get(&module_name)
+                .ok_or_else(|| HirError::ModuleNotFound {
+                    module_path: module_name.clone(),
+                    span: HirError::synthetic_span(),
+                })?
+                .constants
+                .get(&member.name)
+                .copied();
+
+            if let Some(constant_id) = constant_id {
+                // Record reference for the member identifier itself.
+                // Native constants often have no metadata; ensure they get a kind/name so semantic tokens can type them.
+                if self.symbol_resolver.get_metadata(constant_id).is_none() {
+                    self.record_symbol_definition(member.cst_id, constant_id, &member.name, SymbolKind::Variable, ValueKind::Unknown);
+                } else {
+                    self.record_symbol_reference(member.cst_id, constant_id);
+                }
             // It's a constant - return the constant ID directly
             // The constant ID is stored in modules.constants (not variable slot ID)
-            Ok(HirExpression::Constant(*constant_id))
-        } else if module.structs.contains_key(&member) {
+                Ok(HirExpression::Constant(constant_id))
+            } else if self
+                .modules
+                .get(&module_name)
+                .ok_or_else(|| HirError::ModuleNotFound {
+                    module_path: module_name.clone(),
+                    span: HirError::synthetic_span(),
+                })?
+                .structs
+                .contains_key(&member.name)
+            {
             // It's a struct type - structs can't be used as values, only as types
             Err(HirError::TypeError {
                 message: format!(
                     "'{}' is a struct type in module '{}' and cannot be used as a value. Use it in type annotations or struct initialization.",
-                    member, module_name
+                    member.name, module_name
                 ),
                 span: HirError::synthetic_span(),
             })
-        } else {
+            } else {
             // TODO: Also check variables
             Err(HirError::MemberNotFound {
-                member: member.clone(),
+                member: member.name.clone(),
                 object_type: module_name.clone(),
                 span: HirError::synthetic_span(),
             })
+            }
         }
     }
 
@@ -3140,12 +3638,12 @@ impl HirBuilder {
             // Check if this is a constant ID or function ID
             // Constants are stored in hir_ast.constants, functions are in hir_ast.functions
             if self.ast.constants.iter().any(|c| c.id == imported_id) {
-                // It's a constant - bind CST ID to symbol ID
-                self.bind_cst_to_symbol(identifier.cst_id, SymbolId(imported_id));
+                // It's a constant - record reference
+                self.record_symbol_reference(identifier.cst_id, imported_id);
                 return Ok(HirExpression::Constant(imported_id));
             } else {
-                // It's a function - bind CST ID to symbol ID
-                self.bind_cst_to_symbol(identifier.cst_id, SymbolId(imported_id));
+                // It's a function - record reference
+                self.record_symbol_reference(identifier.cst_id, imported_id);
                 // Convert to thunk by calling with no args
                 return Ok(HirExpression::FunctionCall {
                     function_id: imported_id,
@@ -3167,21 +3665,25 @@ impl HirBuilder {
         
         if let Some(slot) = symbol_result {
             eprintln!("[HIR] Found variable: {} (id={})", identifier_name, slot);
-            // Bind CST ID to variable symbol ID
-            self.bind_cst_to_symbol(identifier.cst_id, SymbolId(slot));
+            // Record variable reference
+            self.record_symbol_reference(identifier.cst_id, slot);
             return Ok(HirExpression::Identifier(slot));
         }
-        
+
         eprintln!("[HIR] Variable {} not found, checking constants...", identifier_name);
         if let Some(const_id) = self.resolve_const(identifier_name) {
-            // Bind CST ID to constant symbol ID
-            self.bind_cst_to_symbol(identifier.cst_id, SymbolId(const_id));
+            // Record constant reference
+            self.record_symbol_reference(identifier.cst_id, const_id);
             return Ok(HirExpression::Constant(const_id));
         }
 
         if let Some(function_id) = self.resolve_function(ctx, identifier_name) {
-            // Bind CST ID to function symbol ID
-            self.bind_cst_to_symbol(identifier.cst_id, SymbolId(function_id));
+            // Record function reference; ensure native functions have metadata for hover/tokens.
+            if self.symbol_resolver.get_metadata(function_id).is_none() {
+                self.record_symbol_definition(identifier.cst_id, function_id, identifier_name, SymbolKind::Function, ValueKind::Unknown);
+            } else {
+                self.record_symbol_reference(identifier.cst_id, function_id);
+            }
             // Function name used as identifier - convert to thunk by calling with no args
             // This allows functions to be used in compositions like: square <| add10
             return Ok(HirExpression::FunctionCall {
@@ -3326,6 +3828,14 @@ impl HirBuilder {
                             })?
                     };
 
+                    // Record reference for the member identifier itself (e.g., "add" in "matrix.add!")
+                    // Native functions often have no metadata; ensure they get a kind/name so hover/tokens work.
+                    if self.symbol_resolver.get_metadata(function_id).is_none() {
+                        self.record_symbol_definition(member.cst_id, function_id, &member.name, SymbolKind::Function, ValueKind::Unknown);
+                    } else {
+                        self.record_symbol_reference(member.cst_id, function_id);
+                    }
+
                     // Process invoke arguments (now that we've released the borrow on self.modules)
                     let processed_args = self.process_invoke_args(ctx, args)?;
                     
@@ -3337,7 +3847,7 @@ impl HirBuilder {
 
                 // If lhs is an Identifier, check if it's a variable first
                 if let Expression::Identifier(identifier) = lhs {
-                    return self.process_identifier_invoke(ctx, identifier.name, args);
+                    return self.process_identifier_invoke(ctx, identifier, args);
                 }
 
                 // For other expressions, process normally
@@ -3384,8 +3894,8 @@ impl HirBuilder {
             let identifier_name = &ident.name;
             // First, try to resolve as a variable with function/thunk type (closures should be callable like functions)
             if let Some(var_id) = self.resolve_var_aggressive(identifier_name) {
-                // Bind CST ID to variable symbol ID (for the callee identifier)
-                self.bind_cst_to_symbol(ident.cst_id, SymbolId(var_id));
+                // Record variable reference (for the callee identifier)
+                self.record_symbol_reference(ident.cst_id, var_id);
                 let var_expr = HirExpression::Identifier(var_id);
                 let var_kind = self.infer_variable_kind(&var_expr);
                 
@@ -3466,8 +3976,8 @@ impl HirBuilder {
                         }
                     }
                     
-                    // Bind CST ID for the function call itself (not just the callee)
-                    self.bind_cst_to_symbol(cst_id, SymbolId(var_id));
+                    // Record reference for the function call itself (not just the callee)
+                    self.record_symbol_reference(cst_id, var_id);
                     
                     // Create a PostfixInvoke for the callable variable
                     return Ok(HirExpression::PostfixInvoke {
@@ -3478,22 +3988,188 @@ impl HirBuilder {
             }
             
             // Try to resolve as a function name
+            eprintln!("[HIR] process_function_call: Attempting to resolve '{}' as function", identifier_name);
             if let Some(function_id) = self.resolve_function(ctx, identifier_name) {
-                // Bind CST ID for the callee identifier
-                self.bind_cst_to_symbol(ident.cst_id, SymbolId(function_id));
-                // Bind CST ID for the function call itself
-                self.bind_cst_to_symbol(cst_id, SymbolId(function_id));
-                let args = arguments
-                    .into_iter()
-                    .map(|arg| self.process_expression(ctx, arg))
-                    .collect::<Result<Vec<_>, _>>()?;
+                eprintln!("[HIR] process_function_call: Successfully resolved '{}' as function {:?}", identifier_name, function_id);
+                // Record function reference for the callee identifier
+                // NOTE: We only record the identifier's CST ID, not the function call's CST ID,
+                // because hover should work on the identifier itself, not the entire call expression
+                if self.symbol_resolver.get_metadata(function_id).is_none() {
+                    self.record_symbol_definition(ident.cst_id, function_id, identifier_name, SymbolKind::Function, ValueKind::Unknown);
+                } else {
+                    self.record_symbol_reference(ident.cst_id, function_id);
+                }
+                let signature = self.function_signature_for_call(ctx, function_id);
+                let mut subst = self.call_type_hints.remove(&cst_id).unwrap_or_default();
+                let mut args_hir = Vec::new();
+
+                // Process args left-to-right so earlier args can bind type vars for later (contextual typing).
+                for (i, arg_expr) in arguments.into_iter().enumerate() {
+                    let expected = signature
+                        .as_ref()
+                        .and_then(|sig| sig.params.get(i))
+                        .map(|k| Self::apply_subst(k, &subst));
+
+                    // Contextual typing for closures: fill missing param types from expected callable type.
+                    let mut was_closure = false;
+                    let mut arg_expr = arg_expr;
+                    if let Some(exp) = expected.as_ref() {
+                        match exp {
+                            ValueKind::FnSig { params, return_type, .. } => {
+                                if let Expression::Closure {
+                                    arguments: mut closure_args,
+                                    return_type: mut closure_return_type,
+                                    body,
+                                } = arg_expr
+                                {
+                                    was_closure = true;
+                                    if !params.is_empty() {
+                                        if closure_args.len() != params.len() {
+                                            return Err(HirError::TypeError {
+                                                message: format!(
+                                                    "Closure expects {} parameter(s) in this context, but {} were provided",
+                                                    params.len(),
+                                                    closure_args.len()
+                                                ),
+                                                span: HirError::synthetic_span(),
+                                            });
+                                        }
+                                        for (a, pty) in closure_args.iter_mut().zip(params.iter()) {
+                                            if a.kind.trim().is_empty() && a.identifier.name != "?" {
+                                                a.kind = Self::type_string_for_value_kind(pty);
+                                            }
+                                        }
+                                    }
+                                    if closure_return_type
+                                        .as_ref()
+                                        .map(|s| s.trim().is_empty())
+                                        .unwrap_or(true)
+                                        && !matches!(return_type.as_ref(), ValueKind::TypeVar(_))
+                                    {
+                                        closure_return_type = Some(Self::type_string_for_value_kind(return_type.as_ref()));
+                                    }
+                                    arg_expr = Expression::Closure {
+                                        arguments: closure_args,
+                                        return_type: closure_return_type,
+                                        body,
+                                    };
+                                }
+                            }
+                            ValueKind::ThunkSig { params, return_type, .. } => {
+                                if let Expression::Closure {
+                                    arguments: mut closure_args,
+                                    return_type: mut closure_return_type,
+                                    body,
+                                } = arg_expr
+                                {
+                                    was_closure = true;
+                                    if !params.is_empty() {
+                                        if closure_args.len() != params.len() {
+                                            return Err(HirError::TypeError {
+                                                message: format!(
+                                                    "Closure expects {} parameter(s) in this context, but {} were provided",
+                                                    params.len(),
+                                                    closure_args.len()
+                                                ),
+                                                span: HirError::synthetic_span(),
+                                            });
+                                        }
+                                        for (a, pty) in closure_args.iter_mut().zip(params.iter()) {
+                                            if a.kind.trim().is_empty() && a.identifier.name != "?" {
+                                                a.kind = Self::type_string_for_value_kind(pty);
+                                            }
+                                        }
+                                    }
+                                    if closure_return_type
+                                        .as_ref()
+                                        .map(|s| s.trim().is_empty())
+                                        .unwrap_or(true)
+                                        && !matches!(return_type.as_ref(), ValueKind::TypeVar(_))
+                                    {
+                                        closure_return_type = Some(Self::type_string_for_value_kind(return_type.as_ref()));
+                                    }
+                                    arg_expr = Expression::Closure {
+                                        arguments: closure_args,
+                                        return_type: closure_return_type,
+                                        body,
+                                    };
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    let hir_arg = self.process_expression(ctx, arg_expr)?;
+                    let actual_kind = self.infer_variable_kind(&hir_arg);
+
+                    if let Some(exp) = expected.as_ref() {
+                        // Closures don't have a structured value type in HIR (they become a function id),
+                        // so we skip unifying the callable value itself. The contextual typing above
+                        // already forced its parameter/return annotations.
+                        if !(was_closure && matches!(exp, ValueKind::FnSig { .. } | ValueKind::ThunkSig { .. })) {
+                            let actual_for_unify = match (exp, &actual_kind) {
+                                (ValueKind::FnSig { .. } | ValueKind::ThunkSig { .. }, ValueKind::Function(s) | ValueKind::Thunk(s)) => {
+                                    if let Some((param_types, ret, is_effectful)) = Self::parse_callable_type(s) {
+                                        let params = param_types
+                                            .iter()
+                                            .map(|t| Self::parse_type_string_static(t))
+                                            .collect::<Vec<_>>();
+                                        let ret_kind = Self::parse_type_string_static(&ret);
+                                        ValueKind::FnSig {
+                                            params,
+                                            return_type: Box::new(ret_kind),
+                                            is_effectful,
+                                        }
+                                    } else {
+                                        actual_kind.clone()
+                                    }
+                                }
+                                _ => actual_kind.clone(),
+                            };
+
+                            if !Self::unify_types(exp, &actual_for_unify, &mut subst) {
+                                return Err(HirError::TypeError {
+                                    message: format!(
+                                        "Type mismatch in argument {} of function '{}': expected {}, got {}",
+                                        i + 1,
+                                        identifier_name,
+                                        Self::format_value_kind_for_type(exp),
+                                        Self::format_value_kind_for_type(&actual_kind)
+                                    ),
+                                    span: HirError::synthetic_span(),
+                                });
+                            }
+                        }
+                    }
+
+                    args_hir.push(hir_arg);
+                }
+
+                // Basic arity check (skip for reducers which are variadic/partial in stdlib metadata).
+                if let Some(sig) = &signature {
+                    let is_known_reducer = matches!(identifier_name.as_str(), "map" | "filter" | "fold" | "reduce" | "sum");
+                    // Non-reducer calls support thunk creation via partial application:
+                    // `add(1)` is valid if `add` expects 2 params (returns a thunk).
+                    // But providing MORE args than the function's arity is always an error.
+                    if !is_known_reducer && args_hir.len() > sig.params.len() {
+                        return Err(HirError::TypeError {
+                            message: format!(
+                                "Function '{}' expects {} argument(s), but {} were provided",
+                                identifier_name,
+                                sig.params.len(),
+                                args_hir.len()
+                            ),
+                            span: HirError::synthetic_span(),
+                        });
+                    }
+                }
 
                 // Check if function is pure and has all arguments - if so, eagerly invoke
-                let should_invoke = self.should_eagerly_invoke(ctx, function_id, args.len());
+                let should_invoke = self.should_eagerly_invoke(ctx, function_id, args_hir.len());
 
                 return Ok(HirExpression::FunctionCall {
                     function_id,
-                    args,
+                    args: args_hir,
                     invoke: should_invoke});
             }
             
@@ -3507,9 +4183,21 @@ impl HirBuilder {
 
         // Member access callee (e.g., matrix.add): handle directly to avoid processing module name as identifier
         if let Expression::MemberAccess { object, member, cst_id: _ } = callee {
-            // Extract module name directly without processing it as an identifier
-            let module_name = match *object {
-                Expression::Identifier(ident) => ident.name.clone(),
+            fn module_entity_id(module_path: &str) -> EntityId {
+                // FNV-1a 32-bit hash, mapped into 20000-29999.
+                let mut hash: u32 = 2166136261;
+                for b in module_path.as_bytes() {
+                    hash ^= *b as u32;
+                    hash = hash.wrapping_mul(16777619);
+                }
+                EntityId::new(20000 + (hash % 10000))
+            }
+
+            // Extract module identifier and record it as a Module symbol.
+            // This is critical for pipes like `bevy.app |> bevy.with_default_plugins` where we create a synthetic call:
+            // without a module symbol on the `bevy` span, hover/highlighting on `bevy` resolves to the member function.
+            let module_ident = match *object {
+                Expression::Identifier(ident) => ident,
                 other => {
                     return Err(HirError::TypeError {
                         message: format!(
@@ -3520,6 +4208,14 @@ impl HirBuilder {
                     });
                 }
             };
+            let module_name = module_ident.name.clone();
+
+            let mod_id = module_entity_id(&module_name);
+            if self.symbol_resolver.get_metadata(mod_id).is_none() {
+                self.record_symbol_definition(module_ident.cst_id, mod_id, &module_name, SymbolKind::Module, ValueKind::Unknown);
+            } else {
+                self.record_symbol_reference(module_ident.cst_id, mod_id);
+            }
 
             // Look up the module and get the function ID
             let function_id = {
@@ -3538,21 +4234,167 @@ impl HirBuilder {
                     })?
             };
 
-            // Process arguments (now that we've released the borrow on self.modules)
-            let args = arguments
-                .into_iter()
-                .map(|arg| self.process_expression(ctx, arg))
-                .collect::<Result<Vec<_>, _>>()?;
+            // Record reference on the member identifier span ("add" in "matrix.add(...)")
+            // Native functions often have no metadata; ensure they get a kind/name so hover/tokens work.
+            if self.symbol_resolver.get_metadata(function_id).is_none() {
+                self.record_symbol_definition(member.cst_id, function_id, &member.name, SymbolKind::Function, ValueKind::Unknown);
+            } else {
+                self.record_symbol_reference(member.cst_id, function_id);
+            }
 
-            // Bind CST ID for the function call (member access)
-            self.bind_cst_to_symbol(cst_id, SymbolId(function_id));
+            let signature = self.function_signature_for_call(ctx, function_id);
+            let mut subst = self.call_type_hints.remove(&cst_id).unwrap_or_default();
+            let mut args_hir = Vec::new();
+
+            for (i, arg_expr) in arguments.into_iter().enumerate() {
+                let expected = signature
+                    .as_ref()
+                    .and_then(|sig| sig.params.get(i))
+                    .map(|k| Self::apply_subst(k, &subst));
+
+                let mut was_closure = false;
+                let mut arg_expr = arg_expr;
+                if let Some(exp) = expected.as_ref() {
+                    match exp {
+                        ValueKind::FnSig { params, return_type, .. } => {
+                            if let Expression::Closure {
+                                arguments: mut closure_args,
+                                return_type: mut closure_return_type,
+                                body,
+                            } = arg_expr
+                            {
+                                was_closure = true;
+                                if !params.is_empty() {
+                                    if closure_args.len() != params.len() {
+                                        return Err(HirError::TypeError {
+                                            message: format!(
+                                                "Closure expects {} parameter(s) in this context, but {} were provided",
+                                                params.len(),
+                                                closure_args.len()
+                                            ),
+                                            span: HirError::synthetic_span(),
+                                        });
+                                    }
+                                    for (a, pty) in closure_args.iter_mut().zip(params.iter()) {
+                                        if a.kind.trim().is_empty() && a.identifier.name != "?" {
+                                            a.kind = Self::type_string_for_value_kind(pty);
+                                        }
+                                    }
+                                }
+                                if closure_return_type
+                                    .as_ref()
+                                    .map(|s| s.trim().is_empty())
+                                    .unwrap_or(true)
+                                    && !matches!(return_type.as_ref(), ValueKind::TypeVar(_))
+                                {
+                                    closure_return_type =
+                                        Some(Self::type_string_for_value_kind(return_type.as_ref()));
+                                }
+                                arg_expr = Expression::Closure {
+                                    arguments: closure_args,
+                                    return_type: closure_return_type,
+                                    body,
+                                };
+                            }
+                        }
+                        ValueKind::ThunkSig { params, return_type, .. } => {
+                            if let Expression::Closure {
+                                arguments: mut closure_args,
+                                return_type: mut closure_return_type,
+                                body,
+                            } = arg_expr
+                            {
+                                was_closure = true;
+                                if !params.is_empty() {
+                                    if closure_args.len() != params.len() {
+                                        return Err(HirError::TypeError {
+                                            message: format!(
+                                                "Closure expects {} parameter(s) in this context, but {} were provided",
+                                                params.len(),
+                                                closure_args.len()
+                                            ),
+                                            span: HirError::synthetic_span(),
+                                        });
+                                    }
+                                    for (a, pty) in closure_args.iter_mut().zip(params.iter()) {
+                                        if a.kind.trim().is_empty() && a.identifier.name != "?" {
+                                            a.kind = Self::type_string_for_value_kind(pty);
+                                        }
+                                    }
+                                }
+                                if closure_return_type
+                                    .as_ref()
+                                    .map(|s| s.trim().is_empty())
+                                    .unwrap_or(true)
+                                    && !matches!(return_type.as_ref(), ValueKind::TypeVar(_))
+                                {
+                                    closure_return_type =
+                                        Some(Self::type_string_for_value_kind(return_type.as_ref()));
+                                }
+                                arg_expr = Expression::Closure {
+                                    arguments: closure_args,
+                                    return_type: closure_return_type,
+                                    body,
+                                };
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+
+                let hir_arg = self.process_expression(ctx, arg_expr)?;
+                let actual_kind = self.infer_variable_kind(&hir_arg);
+                if let Some(exp) = expected.as_ref() {
+                    if !(was_closure && matches!(exp, ValueKind::FnSig { .. } | ValueKind::ThunkSig { .. }))
+                        && {
+                            let actual_for_unify = match (exp, &actual_kind) {
+                                (ValueKind::FnSig { .. } | ValueKind::ThunkSig { .. }, ValueKind::Function(s) | ValueKind::Thunk(s)) => {
+                                    if let Some((param_types, ret, is_effectful)) = Self::parse_callable_type(s) {
+                                        let params = param_types
+                                            .iter()
+                                            .map(|t| Self::parse_type_string_static(t))
+                                            .collect::<Vec<_>>();
+                                        let ret_kind = Self::parse_type_string_static(&ret);
+                                        ValueKind::FnSig {
+                                            params,
+                                            return_type: Box::new(ret_kind),
+                                            is_effectful,
+                                        }
+                                    } else {
+                                        actual_kind.clone()
+                                    }
+                                }
+                                _ => actual_kind.clone(),
+                            };
+                            !Self::unify_types(exp, &actual_for_unify, &mut subst)
+                        }
+                    {
+                        return Err(HirError::TypeError {
+                            message: format!(
+                                "Type mismatch in argument {} of function '{}': expected {}, got {}",
+                                i + 1,
+                                member.name,
+                                Self::format_value_kind_for_type(exp),
+                                Self::format_value_kind_for_type(&actual_kind)
+                            ),
+                            span: HirError::synthetic_span(),
+                        });
+                    }
+                }
+                args_hir.push(hir_arg);
+            }
+
+            // IMPORTANT: Do NOT bind the *call expression* span to the callee symbol.
+            // The call span includes arguments (e.g. `array.range(0, width)`), and mapping it to the
+            // function symbol causes arguments like `0`/`width` to be highlighted as functions and
+            // breaks hover (it will often pick the call span over the identifier span).
             
             // Check if function is pure and has all arguments - if so, eagerly invoke
-            let should_invoke = self.should_eagerly_invoke(ctx, function_id, args.len());
+            let should_invoke = self.should_eagerly_invoke(ctx, function_id, args_hir.len());
 
             return Ok(HirExpression::FunctionCall {
                 function_id,
-                args,
+                args: args_hir,
                 invoke: should_invoke});
         }
 
@@ -3597,17 +4439,25 @@ impl HirBuilder {
         func: Expression,
         args: Vec<CallArgument>,
     ) -> Result<HirExpression, HirError> {
-        // Process the function identifier
-        let func_id = if let Expression::Identifier(ref ident) = func {
+        // Process the function identifier.
+        // Keep the user-facing callee name around for diagnostics.
+        let (func_id, callee_name) = if let Expression::Identifier(ref ident) = func {
             let identifier_name = &ident.name;
-            // Try to resolve as a function declaration first (for backwards compatibility)
-            if let Some(function_id) = self.resolve_function(ctx, identifier_name) {
-                function_id
-            } else if let Some(var_id) = self.resolve_var_aggressive(identifier_name) {
+
+            // CRITICAL: Prefer lexical variable resolution first.
+            // This ensures `let scale = fn ...; scale(?, ...)` binds to the local closure,
+            // not a stdlib/global function with the same name (e.g. `matrix.scale`).
+            if let Some(var_id) = self.resolve_var_aggressive(identifier_name) {
                 // Variable exists - check if it contains a closure
-                if let Some(closure_func_id) = self.closure_variables.get(&var_id) {
+                if let Some(&closure_func_id) = self.closure_variables.get(&var_id) {
+                    // Record reference for the identifier to the closure's function ID.
+                    if self.symbol_resolver.get_metadata(closure_func_id).is_none() {
+                        self.record_symbol_definition(ident.cst_id, closure_func_id, &ident.name, SymbolKind::Function, ValueKind::Unknown);
+                    } else {
+                        self.record_symbol_reference(ident.cst_id, closure_func_id);
+                    }
                     // Variable contains a closure - use its function_id
-                    *closure_func_id
+                    (closure_func_id, identifier_name.clone())
                 } else {
                     // Variable exists but is not a closure - partial calls only work with closures or functions
                     // First try to see if it's actually a function that wasn't found
@@ -3621,6 +4471,21 @@ impl HirBuilder {
                         span: HirError::synthetic_span(),
                     });
                 }
+            } else if let Some(function_id) = self.resolve_function(ctx, identifier_name) {
+                // Fall back to resolving as a function declaration (native or user-defined).
+                // Record reference for the function identifier span so hover/tokens work.
+                if self.symbol_resolver.get_metadata(function_id).is_none() {
+                    self.record_symbol_definition(
+                        ident.cst_id,
+                        function_id,
+                        &ident.name,
+                        SymbolKind::Function,
+                        ValueKind::Unknown,
+                    );
+                } else {
+                    self.record_symbol_reference(ident.cst_id, function_id);
+                }
+                (function_id, identifier_name.clone())
             } else {
                 // Function not found - provide better error message
                 let available_functions: Vec<String> = self.ast.functions.values()
@@ -3649,6 +4514,25 @@ impl HirBuilder {
                 CallArgument::Expr(expr) => {
                     bound.push(Some(self.process_expression(ctx, expr)?));
                 }
+            }
+        }
+
+        // Enforce partial-call arity when we have a signature for the resolved callee.
+        // Per language convention, holes are explicit; so the arg list length must match the parameter count.
+        //
+        // IMPORTANT: This guards against cases where a name accidentally resolves to a different function
+        // (e.g. stdlib `scale`) and we'd otherwise proceed with a nonsense `unknown` thunk type.
+        if let Some(func) = self.ast.functions.get(&func_id) {
+            let expected = func.signature.params.len();
+            let provided = bound.len();
+            if provided > expected {
+                return Err(HirError::TypeError {
+                    message: format!(
+                        "Partial call provides too many arguments for '{}': expected {}, got {}",
+                        callee_name, expected, provided
+                    ),
+                    span: HirError::synthetic_span(),
+                });
             }
         }
 
@@ -3807,6 +4691,38 @@ impl HirBuilder {
                     cst_id: call_cst_id });
                 }
                 // If it's a reducer, fall through to let reducer detection handle it
+            }
+
+            // Reducer pipelines (e.g. `xs |> map(fn(x) => ...)`) need contextual typing from the LHS.
+            // The RHS call does not contain the array argument, so we pre-bind type variables for the call
+            // from the inferred element type of the LHS.
+            if let Expression::FunctionCall { callee, arguments, cst_id } = &rhs {
+                let is_reducer = self.is_ast_reducer(callee, arguments.len());
+                if is_reducer {
+                    let reducer_name = match &**callee {
+                        Expression::Identifier(id) => id.name.as_str(),
+                        Expression::MemberAccess { member, .. } => member.name.as_str(),
+                        _ => "",
+                    };
+
+                    if matches!(reducer_name, "map" | "filter" | "reduce") {
+                        let first_expr = self.process_expression(ctx, lhs.clone())?;
+                        let first_kind = self.infer_variable_kind(&first_expr);
+                        if let ValueKind::Array(inner) = first_kind {
+                            let mut subst = TypeSubst::default();
+                            subst.map.insert(0, *inner);
+                            self.call_type_hints.insert(*cst_id, subst);
+                        }
+                        let second_expr = self.process_expression(ctx, rhs.clone())?;
+                        if let Some((reducer_type, reducer_args)) = self.detect_reducer(&second_expr)? {
+                            return Ok(HirExpression::Reducer {
+                                array: Box::new(first_expr),
+                                reducer_type,
+                                reducer_args,
+                            });
+                        }
+                    }
+                }
             }
             
             // Check if RHS is an identifier or member access (function reference)
@@ -4091,7 +5007,7 @@ impl HirBuilder {
     fn process_loop_expression(
         &mut self,
         ctx: &crate::core::compileSession::CompileContext,
-        init_vars: Vec<(String, Expression)>,
+        init_vars: Vec<(crate::core::ast::AstIdent, Expression)>,
         body: Block,
     ) -> Result<HirExpression, HirError> {
         let parent_scope = self.current_scope;
@@ -4102,17 +5018,16 @@ impl HirBuilder {
         for (var_name, init_expr) in init_vars {
             let expr = self.process_expression(ctx, init_expr)?;
             let actual_kind = self.infer_variable_kind(&expr);
-            let var_id = self.init_var(&var_name, actual_kind);
+            let var_id = self.init_var_with_cst_id(&var_name.name, actual_kind, Some(var_name.cst_id));
             hir_init_vars.push((var_id, expr));
         }
 
         // Allocate a break_slot for expression-valued loops
-        let break_slot = Some(self.next_var_id);
-        self.next_var_id += 1;
-
         // Create a temporary variable for the break slot
-        let break_slot_name = format!("__break_slot_{}", break_slot.unwrap());
-        self.init_var(&break_slot_name, ValueKind::Unknown);
+        let break_var_id = self.id_generator.next_user();
+        let break_slot_name = format!("__break_slot_{}", break_var_id.as_u32());
+        let actual_break_var_id = self.init_var(&break_slot_name, ValueKind::Unknown);
+        let break_slot = Some(actual_break_var_id);
 
         // Process the loop body in the loop scope
         let hir_body = self.process_block(ctx, body)?;
@@ -4179,7 +5094,7 @@ impl HirBuilder {
                 }
                 Expression::Identifier(identifier) => self.process_identifier_expression(ctx, identifier)?,
                 Expression::MemberAccess { object, member, cst_id: _ } => {
-                    self.process_member_access_expression(ctx, *object, member.name)?
+                    self.process_member_access_expression(ctx, *object, member)?
                 }
                 Expression::Infix { lhs, op, rhs } => self.process_infix_expression(ctx, *lhs, op, *rhs)?,
                 Expression::Prefix { op, rhs } => self.process_prefix_expression(ctx, op, *rhs)?,
@@ -4198,10 +5113,33 @@ impl HirBuilder {
                 }
                 Expression::Loop { init_vars, body } => self.process_loop_expression(ctx, init_vars, body)?,
                 Expression::StructInit { struct_name, fields, cst_id: _ } => {
+                    // Record the struct name occurrence as a type reference so it highlights as TYPE and supports hover.
+                    fn type_entity_id(type_name: &str) -> EntityId {
+                        // FNV-1a 32-bit hash, mapped into 30000-39999.
+                        let mut hash: u32 = 2166136261;
+                        for b in type_name.as_bytes() {
+                            hash ^= *b as u32;
+                            hash = hash.wrapping_mul(16777619);
+                        }
+                        EntityId::new(30000 + (hash % 10000))
+                    }
+                    let tid = type_entity_id(&struct_name.name);
+                    if self.symbol_resolver.get_metadata(tid).is_none() {
+                        self.record_symbol_definition(
+                            struct_name.cst_id,
+                            tid,
+                            &struct_name.name,
+                            SymbolKind::Type,
+                            ValueKind::Struct(struct_name.name.clone()),
+                        );
+                    } else {
+                        self.record_symbol_reference(struct_name.cst_id, tid);
+                    }
+
                     self.process_struct_init_expression(ctx, struct_name.name, fields.into_iter().map(|(f, e)| (f.name, e)).collect())?
                 }
                 Expression::FieldAccess { object, field, cst_id: _ } => {
-                    self.process_field_access_expression(ctx, *object, field.name)?
+                    self.process_field_access_expression(ctx, *object, field)?
                 }
                 Expression::Closure { arguments, return_type, body } => {
                     self.process_closure_expression(ctx, arguments, return_type, body)?
@@ -4217,25 +5155,74 @@ impl HirBuilder {
 
     fn process_struct_statement(
         &mut self,
-        name: String,
-        fields: Vec<(String, String)>,
+        name: crate::core::ast::AstIdent,
+        fields: Vec<(crate::core::ast::AstIdent, String)>,
         pub_visibility: bool,
     ) -> Result<HirStmt, HirError> {
         use super::StructDef;
+
+        fn type_entity_id(type_name: &str) -> EntityId {
+            // FNV-1a 32-bit hash, mapped into 30000-39999.
+            let mut hash: u32 = 2166136261;
+            for b in type_name.as_bytes() {
+                hash ^= *b as u32;
+                hash = hash.wrapping_mul(16777619);
+            }
+            EntityId::new(30000 + (hash % 10000))
+        }
+
+        fn field_entity_id(struct_name: &str, field_name: &str) -> EntityId {
+            // FNV-1a 32-bit hash, mapped into 40000-49999.
+            let mut hash: u32 = 2166136261;
+            for b in format!("{}::{}", struct_name, field_name).as_bytes() {
+                hash ^= *b as u32;
+                hash = hash.wrapping_mul(16777619);
+            }
+            EntityId::new(40000 + (hash % 10000))
+        }
         
         // Parse field types
         let mut parsed_fields = Vec::new();
         for (field_name, type_str) in fields {
             let field_type = self.parse_struct_type_string(&type_str)?;
-            parsed_fields.push((field_name, field_type));
+            // Record the struct field symbol as a first-class symbol (definition).
+            // Name is qualified to avoid collisions across structs.
+            let fq_name = format!("{}.{}", name.name, field_name.name);
+            let fid = field_entity_id(&name.name, &field_name.name);
+            if self.symbol_resolver.get_metadata(fid).is_none() {
+                self.record_symbol_definition(
+                    field_name.cst_id,
+                    fid,
+                    &fq_name,
+                    SymbolKind::Field,
+                    field_type.clone(),
+                );
+            } else {
+                self.record_symbol_reference(field_name.cst_id, fid);
+            }
+            parsed_fields.push((field_name.name, field_type));
         }
         
         // Store struct definition
         let struct_def = StructDef {
-            name: name.clone(),
+            name: name.name.clone(),
             fields: parsed_fields.clone(),
         };
-        self.ast.structs.insert(name.clone(), struct_def.clone());
+        self.ast.structs.insert(name.name.clone(), struct_def.clone());
+
+        // Record the struct type symbol for LSP (highlighting + hover).
+        let tid = type_entity_id(&name.name);
+        if self.symbol_resolver.get_metadata(tid).is_none() {
+            self.record_symbol_definition(
+                name.cst_id,
+                tid,
+                &name.name,
+                SymbolKind::Type,
+                ValueKind::Struct(name.name.clone()),
+            );
+        } else {
+            self.record_symbol_reference(name.cst_id, tid);
+        }
         
         // Register pub structs in the module registry
         if pub_visibility {
@@ -4249,7 +5236,7 @@ impl HirBuilder {
                         imports: HashMap::new(),
                     })
                     .structs
-                    .insert(name.clone(), struct_def);
+                    .insert(name.name.clone(), struct_def);
             }
         }
         
@@ -4293,8 +5280,17 @@ impl HirBuilder {
         // Parse argument types
         let mut param_types = Vec::new();
         for arg in &arguments {
-            let param_kind = if arg.kind.is_empty() {
-                // No type annotation - infer as Any for now
+            if arg.kind.trim().is_empty() && arg.identifier.name != "?" {
+                return Err(HirError::TypeError {
+                    message: format!(
+                        "Closure parameter '{}' must have a type annotation (or be inferable from context)",
+                        arg.identifier.name
+                    ),
+                    span: HirError::synthetic_span(),
+                });
+            }
+            let param_kind = if arg.kind.trim().is_empty() {
+                // placeholder
                 ValueKind::Any
             } else {
                 self.parse_type_string(&arg.kind)
@@ -4302,23 +5298,22 @@ impl HirBuilder {
             param_types.push(param_kind);
         }
 
-        // Parse return type (default to Any if not specified)
-        let return_kind = if let Some(return_type_str) = return_type {
-            self.parse_type_string(&return_type_str)
+        // Parse return type (infer from body if not specified)
+        let (return_kind, should_infer_return) = if let Some(return_type_str) = return_type {
+            (self.parse_type_string(&return_type_str), false)
         } else {
-            ValueKind::Any
+            (ValueKind::Any, true)
         };
 
         // Create function signature
-        let signature = FunctionSignature {
+        let mut signature = FunctionSignature {
             params: param_types,
             return_type: Box::new(return_kind),
             is_effectful: false, // Closures are pure by default
         };
 
         // Assign a function ID
-        let func_id = self.next_function_id;
-        self.next_function_id += 1;
+        let func_id = self.id_generator.next_user();
 
         // Save current scope
         let parent_scope = self.current_scope;
@@ -4341,7 +5336,12 @@ impl HirBuilder {
             } else {
                 self.parse_type_string(&arg.kind)
             };
-            let var_id = self.init_var(&arg.identifier.name, param_kind);
+            let var_id = self.init_var_with_cst_id_and_symbol_kind(
+                &arg.identifier.name,
+                param_kind,
+                Some(arg.identifier.cst_id),
+                SymbolKind::Parameter,
+            );
             param_var_ids.push(var_id);
         }
 
@@ -4361,6 +5361,17 @@ impl HirBuilder {
             }
         };
 
+        if should_infer_return {
+            // Infer return type from the last return statement in the lowered body, if any.
+            let mut inferred: Option<ValueKind> = None;
+            for stmt in &closure_body.statements {
+                if let HirStmt::Return { value } = stmt {
+                    inferred = Some(self.infer_variable_kind(value));
+                }
+            }
+            signature.return_type = Box::new(inferred.unwrap_or(ValueKind::Void));
+        }
+
         // Create and store the closure function
         let closure_def = FunctionDefinition {
             body: closure_body,
@@ -4370,7 +5381,7 @@ impl HirBuilder {
 
         let function = Function {
             id: func_id,
-            name: format!("<closure_{}>", func_id), // Anonymous function name
+            name: format!("<closure_{}>", func_id.as_u32()), // Anonymous function name
             signature,
             definition: closure_def,
         };
@@ -4388,12 +5399,31 @@ impl HirBuilder {
         &mut self,
         ctx: &crate::core::compileSession::CompileContext,
         object: Expression,
-        field: String,
+        field: crate::core::ast::AstIdent,
     ) -> Result<HirExpression, HirError> {
+        // Record the module segment itself as a Module symbol (TYPE) when this is module access.
+        fn module_entity_id(module_path: &str) -> EntityId {
+            // FNV-1a 32-bit hash, mapped into 20000-29999.
+            let mut hash: u32 = 2166136261;
+            for b in module_path.as_bytes() {
+                hash ^= *b as u32;
+                hash = hash.wrapping_mul(16777619);
+            }
+            EntityId::new(20000 + (hash % 10000))
+        }
+
         // Check if the object is an identifier that's a module name
         // If so, treat this as a MemberAccess (module member access) rather than FieldAccess (struct field access)
         if let Expression::Identifier(module_name) = object {
             if self.modules.contains_key(&module_name.name) {
+                // Ensure the module identifier itself gets Module metadata so it highlights as TYPE.
+                let mod_id = module_entity_id(&module_name.name);
+                if self.symbol_resolver.get_metadata(mod_id).is_none() {
+                    self.record_symbol_definition(module_name.cst_id, mod_id, &module_name.name, SymbolKind::Module, ValueKind::Unknown);
+                } else {
+                    self.record_symbol_reference(module_name.cst_id, mod_id);
+                }
+
                 // This is a module member access, not a struct field access
                 // Look up the module and get the function ID
                 let function_id = {
@@ -4405,12 +5435,20 @@ impl HirBuilder {
                 span: HirError::synthetic_span(),
             })?;
 
-                    *module.functions.get(&field)
+                    *module.functions.get(&field.name)
                         .ok_or_else(|| HirError::FunctionNotFound {
-                            name: field.clone(),
+                            name: field.name.clone(),
                             span: HirError::synthetic_span(),
                         })?
                 };
+
+                // Record reference for the member identifier itself.
+                // Native functions often have no metadata; ensure they get a kind/name so semantic tokens can type them.
+                if self.symbol_resolver.get_metadata(function_id).is_none() {
+                    self.record_symbol_definition(field.cst_id, function_id, &field.name, SymbolKind::Function, ValueKind::Unknown);
+                } else {
+                    self.record_symbol_reference(field.cst_id, function_id);
+                }
 
                 // Return a FunctionCall with empty args (the actual arguments will be added by the caller)
                 return Ok(HirExpression::FunctionCall {
@@ -4421,18 +5459,80 @@ impl HirBuilder {
             // If it's not a module, fall through to process as field access
             // We need to process the identifier as an expression first
             let base_expr = self.process_expression(ctx, Expression::Identifier(module_name))?;
+
+            // Bind field symbol if base is a struct (first-class field symbols).
+            if let ValueKind::Struct(struct_name) = self.infer_variable_kind(&base_expr) {
+                fn field_entity_id(struct_name: &str, field_name: &str) -> EntityId {
+                    let mut hash: u32 = 2166136261;
+                    for b in format!("{}::{}", struct_name, field_name).as_bytes() {
+                        hash ^= *b as u32;
+                        hash = hash.wrapping_mul(16777619);
+                    }
+                    EntityId::new(40000 + (hash % 10000))
+                }
+
+                if let Some(def) = self.ast.structs.get(&struct_name) {
+                    if let Some((_, field_ty)) = def.fields.iter().find(|(n, _)| n == &field.name) {
+                        let fid = field_entity_id(&struct_name, &field.name);
+                        let fq_name = format!("{}.{}", struct_name, field.name);
+                        if self.symbol_resolver.get_metadata(fid).is_none() {
+                            self.record_symbol_definition(field.cst_id, fid, &fq_name, SymbolKind::Field, field_ty.clone());
+                        } else {
+                            self.record_symbol_reference(field.cst_id, fid);
+                        }
+                    }
+                }
+            }
+
             return Ok(HirExpression::FieldAccess {
                 base: Box::new(base_expr),
-                field_name: field,
+                field_name: field.name,
             });
         }
 
         // It's a regular struct field access
         let base_expr = self.process_expression(ctx, object)?;
-        
+
+        // If we can infer the base as a struct, bind the field as a proper symbol reference and type-check it.
+        if let ValueKind::Struct(struct_name) = self.infer_variable_kind(&base_expr) {
+            fn field_entity_id(struct_name: &str, field_name: &str) -> EntityId {
+                let mut hash: u32 = 2166136261;
+                for b in format!("{}::{}", struct_name, field_name).as_bytes() {
+                    hash ^= *b as u32;
+                    hash = hash.wrapping_mul(16777619);
+                }
+                EntityId::new(40000 + (hash % 10000))
+            }
+
+            let def = self.ast.structs.get(&struct_name).ok_or_else(|| HirError::TypeError {
+                message: format!("Unknown struct type: {}", struct_name),
+                span: HirError::synthetic_span(),
+            })?;
+
+            let field_ty = def
+                .fields
+                .iter()
+                .find(|(n, _)| n == &field.name)
+                .map(|(_, ty)| ty.clone())
+                .ok_or_else(|| HirError::TypeError {
+                    message: format!("Unknown field '{}' on struct {}", field.name, struct_name),
+                    span: HirError::synthetic_span(),
+                })?;
+
+            let fq_name = format!("{}.{}", struct_name, field.name);
+            let fid = field_entity_id(&struct_name, &field.name);
+            if self.symbol_resolver.get_metadata(fid).is_none() {
+                // Best-effort: if the field symbol wasn't defined (e.g. native struct),
+                // define it here so hover/tokens still work.
+                self.record_symbol_definition(field.cst_id, fid, &fq_name, SymbolKind::Field, field_ty);
+            } else {
+                self.record_symbol_reference(field.cst_id, fid);
+            }
+        }
+
         Ok(HirExpression::FieldAccess {
             base: Box::new(base_expr),
-            field_name: field,
+            field_name: field.name,
         })
     }
 

@@ -12,7 +12,7 @@
 //!
 //! ## Conversion Paths
 //!
-//! ```
+//! ```text
 //! CST Span (u32) → Canonical Span → HIR Span (usize) → LSP Range (line/col)
 //!      ↓              ↓                    ↓
 //!   (pest)     (canonical)          (semantic index)

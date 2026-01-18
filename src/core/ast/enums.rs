@@ -61,7 +61,7 @@ pub enum Expression {
     #[allow(dead_code)]
     Group(Box<Expression>),
     Loop {
-        init_vars: Vec<(String, Expression)>, // (variable_name, initial_value)
+        init_vars: Vec<(AstIdent, Expression)>, // (variable_name, initial_value) - Phase 3: var carries CstId
         body: Block,
     },
     Compose {
@@ -190,7 +190,7 @@ pub enum ClosureBody {
 #[derive(Debug, Clone, Serialize)]
 pub enum Statement {
     Mod {
-        identifier: String,
+        identifier: AstIdent, // Phase 3: identifier carries CstId for identity tracking
     },
     Let {
         identifier: AstIdent, // Phase 3: identifier carries CstId for identity tracking
@@ -204,15 +204,15 @@ pub enum Statement {
         pub_visibility: bool,
     },
     Assign {
-        identifier: String,
+        identifier: AstIdent, // Phase 3: identifier carries CstId for identity tracking
         expression: Expression,
     },
     AssignIncrement {
-        identifier: String,
+        identifier: AstIdent, // Phase 3: identifier carries CstId for identity tracking
         expression: Expression,
     },
     AssignDecrement {
-        identifier: String,
+        identifier: AstIdent, // Phase 3: identifier carries CstId for identity tracking
         expression: Expression,
     },
     If {
@@ -235,7 +235,7 @@ pub enum Statement {
         expression: Expression,
     },
     Loop {
-        init_vars: Vec<(String, Expression)>, // (variable_name, initial_value)
+        init_vars: Vec<(AstIdent, Expression)>, // (variable_name, initial_value) - Phase 3: var carries CstId
         body: Block,
     },
     While {
@@ -243,7 +243,7 @@ pub enum Statement {
         body: Block,
     },
     For {
-        var_name: String,
+        var_name: AstIdent, // Phase 3: var_name carries CstId for identity tracking
         start: Expression,
         end: Expression,
         body: Block,
@@ -253,12 +253,12 @@ pub enum Statement {
     },
     Continue,
     Use {
-        path: Vec<String>, // Dot-separated path like ["math", "utils"]
+        path: Vec<AstIdent>, // Dot-separated path like ["math", "utils"] - Phase 3: each segment carries CstId
         selector: ImportSelector,
     },
     Struct {
-        name: String,
-        fields: Vec<(String, String)>, // (field_name, type_annotation)
+        name: AstIdent, // Phase 3: name carries CstId for identity tracking
+        fields: Vec<(AstIdent, String)>, // (field_name, type_annotation) - Phase 3: field_name carries CstId
         pub_visibility: bool,
     },
     Expression(Expression),
@@ -268,9 +268,9 @@ pub enum Statement {
 #[derive(Debug, Clone, Serialize)]
 pub enum ImportSelector {
     /// Import a single name: `use math.utils.square;`
-    Single(String),
+    Single(AstIdent),
     /// Import multiple names: `use math.utils.{cube, pow};`
-    Multiple(Vec<String>),
+    Multiple(Vec<AstIdent>),
     /// Import all: `use math.utils.*;`
     Wildcard,
 }

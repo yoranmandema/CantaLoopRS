@@ -7,7 +7,7 @@ fn test_fn_without_pub_parses() {
     let src = r#"
 mod test;
 
-use std.print;
+use print from std;
 
 fn test_function() -> num {
     return 42;
@@ -22,7 +22,7 @@ fn test_function() -> num {
     for block in &program.blocks {
         for stmt in &block.statements {
             if let Statement::FunctionDeclaration { identifier, .. } = stmt {
-                if identifier == "test_function" {
+                if identifier.name == "test_function" {
                     found_function = true;
                 }
             }
@@ -37,7 +37,7 @@ fn test_pub_fn_parses() {
     let src = r#"
 mod test;
 
-use std.print;
+use print from std;
 
 pub fn test_function() -> num {
     return 42;
@@ -53,7 +53,7 @@ pub fn test_function() -> num {
     for block in &program.blocks {
         for stmt in &block.statements {
             if let Statement::FunctionDeclaration { identifier, pub_visibility, .. } = stmt {
-                if identifier == "test_function" {
+                if identifier.name == "test_function" {
                     found_function = true;
                     is_public = *pub_visibility;
                 }
@@ -71,12 +71,12 @@ fn test_pub_fn_after_multiple_use_statements() {
     let src = r#"
 mod test;
 
-use grades.calculate_average;
-use grades.calculate_final_grade;
-use grades.grade_statistics;
-use grades.highest_grade;
-use grades.lowest_grade;
-use std.array_length;
+use calculate_average from grades;
+use calculate_final_grade from grades;
+use grade_statistics from grades;
+use highest_grade from grades;
+use lowest_grade from grades;
+use array_length from std;
 
 pub fn letterGrade(grade: num) -> string {
     if grade >= 90 {
@@ -94,7 +94,7 @@ pub fn letterGrade(grade: num) -> string {
     for block in &program.blocks {
         for stmt in &block.statements {
             if let Statement::FunctionDeclaration { identifier, .. } = stmt {
-                if identifier == "letterGrade" {
+                if identifier.name == "letterGrade" {
                     found_function = true;
                 }
             }
@@ -110,8 +110,8 @@ fn test_fn_without_pub_after_multiple_use_statements() {
     let src = r#"
 mod test;
 
-use std.array_length;
-use math.sum;
+use array_length from std;
+use sum from math;
 
 fn calculate_average(grades: [num]) -> num {
     let len = array_length(grades)!;
@@ -131,7 +131,7 @@ fn calculate_average(grades: [num]) -> num {
     for block in &program.blocks {
         for stmt in &block.statements {
             if let Statement::FunctionDeclaration { identifier, .. } = stmt {
-                if identifier == "calculate_average" {
+                if identifier.name == "calculate_average" {
                     found_function = true;
                 }
             }
@@ -146,12 +146,12 @@ fn test_students_mln_exact_content() {
     let src = r#"
 mod students;
 
-use grades.calculate_average;
-use grades.calculate_final_grade;
-use grades.grade_statistics;
-use grades.highest_grade;
-use grades.lowest_grade;
-use std.array_length;
+use calculate_average from grades;
+use calculate_final_grade from grades;
+use grade_statistics from grades;
+use highest_grade from grades;
+use lowest_grade from grades;
+use array_length from std;
 
 // Convert numeric grade to letter grade
 pub fn letterGrade(grade: num) -> string {
@@ -179,7 +179,7 @@ pub fn letterGrade(grade: num) -> string {
     for block in &program.blocks {
         for stmt in &block.statements {
             if let Statement::FunctionDeclaration { identifier, .. } = stmt {
-                if identifier == "letterGrade" {
+                if identifier.name == "letterGrade" {
                     found_function = true;
                 }
             }
@@ -194,8 +194,8 @@ fn test_grades_mln_exact_content() {
     let src = r#"
 mod grades;
 
-use std.array_length;
-use math.sum;
+use array_length from std;
+use sum from math;
 
 // Calculate the average of a list of grades
 fn calculate_average(grades: [num]) -> num {
@@ -216,7 +216,7 @@ fn calculate_average(grades: [num]) -> num {
     for block in &program.blocks {
         for stmt in &block.statements {
             if let Statement::FunctionDeclaration { identifier, .. } = stmt {
-                if identifier == "calculate_average" {
+                if identifier.name == "calculate_average" {
                     found_function = true;
                 }
             }
@@ -230,13 +230,13 @@ fn calculate_average(grades: [num]) -> num {
 fn test_compare_ast_structure() {
     let working_src = r#"
 mod test;
-use std.print;
+use print from std;
 fn test() -> num { return 42; }
 "#;
     
     let non_working_src = r#"
 mod test;
-use std.print;
+use print from std;
 pub fn test() -> num { return 42; }
 "#;
     
@@ -256,7 +256,7 @@ pub fn test() -> num { return 42; }
         .flat_map(|b| &b.statements)
         .filter_map(|s| {
             if let Statement::FunctionDeclaration { identifier, .. } = s {
-                Some(identifier.as_str())
+                Some(identifier.name.as_str())
             } else {
                 None
             }
@@ -267,7 +267,7 @@ pub fn test() -> num { return 42; }
         .flat_map(|b| &b.statements)
         .filter_map(|s| {
             if let Statement::FunctionDeclaration { identifier, .. } = s {
-                Some(identifier.as_str())
+                Some(identifier.name.as_str())
             } else {
                 None
             }

@@ -13,8 +13,15 @@ lazy_static::lazy_static! {
         StdFunction {
             name: "map",
             signature: FunctionSignature {
-                params: vec![ValueKind::Thunk("Any ~> Any".to_string()), ValueKind::Array(Box::new(ValueKind::Any))],
-                return_type: Box::new(ValueKind::Array(Box::new(ValueKind::Any))),
+                // Generic reducer:
+                // map: (T -> U) -> U[]
+                // In pipelines, `xs` is supplied by `|>` and `T` is inferred from the LHS array element type.
+                params: vec![ValueKind::ThunkSig {
+                    params: vec![ValueKind::TypeVar(0)],
+                    return_type: Box::new(ValueKind::TypeVar(1)),
+                    is_effectful: false,
+                }],
+                return_type: Box::new(ValueKind::Array(Box::new(ValueKind::TypeVar(1)))),
                 is_effectful: false,
             },
             // Support partial application: map(fn) creates a thunk, map(fn, xs) applies immediately
@@ -28,8 +35,15 @@ lazy_static::lazy_static! {
         StdFunction {
             name: "filter",
             signature: FunctionSignature {
-                params: vec![ValueKind::Thunk("Any ~> Boolean".to_string()), ValueKind::Array(Box::new(ValueKind::Any))],
-                return_type: Box::new(ValueKind::Array(Box::new(ValueKind::Any))),
+                // Generic reducer:
+                // filter: (T -> bool) -> T[]
+                // In pipelines, `T` is inferred from the LHS array element type.
+                params: vec![ValueKind::ThunkSig {
+                    params: vec![ValueKind::TypeVar(0)],
+                    return_type: Box::new(ValueKind::Boolean),
+                    is_effectful: false,
+                }],
+                return_type: Box::new(ValueKind::Array(Box::new(ValueKind::TypeVar(0)))),
                 is_effectful: false,
             },
             // Support partial application: filter(pred) creates a thunk, filter(pred, xs) applies immediately
@@ -43,8 +57,18 @@ lazy_static::lazy_static! {
         StdFunction {
             name: "fold",
             signature: FunctionSignature {
-                params: vec![ValueKind::Unknown, ValueKind::Function("(num, num) -> num".to_string())],
-                return_type: Box::new(ValueKind::Unknown),
+                // Generic reducer:
+                // fold: (init: T, f: (T -> T)) -> T
+                // In pipelines, the array is supplied by `|>`; `T` is inferred from `init`.
+                params: vec![
+                    ValueKind::TypeVar(0),
+                    ValueKind::FnSig {
+                        params: vec![ValueKind::TypeVar(0)],
+                        return_type: Box::new(ValueKind::TypeVar(0)),
+                        is_effectful: false,
+                    },
+                ],
+                return_type: Box::new(ValueKind::TypeVar(0)),
                 is_effectful: false,
             },
             arity: Arity::Fixed(2),
@@ -56,8 +80,15 @@ lazy_static::lazy_static! {
         StdFunction {
             name: "reduce",
             signature: FunctionSignature {
-                params: vec![ValueKind::Function("(num, num) -> num".to_string())],
-                return_type: Box::new(ValueKind::Unknown),
+                // Generic reducer:
+                // reduce: (f: ((T, T) -> T)) -> T
+                // In pipelines, `T` is inferred from the LHS array element type.
+                params: vec![ValueKind::FnSig {
+                    params: vec![ValueKind::TypeVar(0), ValueKind::TypeVar(0)],
+                    return_type: Box::new(ValueKind::TypeVar(0)),
+                    is_effectful: false,
+                }],
+                return_type: Box::new(ValueKind::TypeVar(0)),
                 is_effectful: false,
             },
             arity: Arity::Fixed(1),

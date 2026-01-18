@@ -77,7 +77,7 @@ fn lower_statement(
             let doc = cst_docs.get(&identifier.span).cloned();
             Ok((
                 Statement::Mod {
-                    identifier: identifier.node.clone(),
+                    identifier: make_ast_ident(&identifier),
                 },
                 doc.map(|d| (identifier.node, d)),
             ))
@@ -126,7 +126,7 @@ fn lower_statement(
             ..
         } => Ok((
             Statement::Assign {
-                identifier: identifier.node,
+                identifier: make_ast_ident(&identifier),
                 expression: lower_expr(expression, cst_docs)?,
             },
             None,
@@ -137,7 +137,7 @@ fn lower_statement(
             ..
         } => Ok((
             Statement::AssignIncrement {
-                identifier: identifier.node,
+                identifier: make_ast_ident(&identifier),
                 expression: lower_expr(expression, cst_docs)?,
             },
             None,
@@ -148,7 +148,7 @@ fn lower_statement(
             ..
         } => Ok((
             Statement::AssignDecrement {
-                identifier: identifier.node,
+                identifier: make_ast_ident(&identifier),
                 expression: lower_expr(expression, cst_docs)?,
             },
             None,
@@ -249,7 +249,7 @@ fn lower_statement(
         } => {
             let mut ast_init_vars = Vec::new();
             for (var, _, expr) in init_vars {
-                ast_init_vars.push((var.node, lower_expr(expr, cst_docs)?));
+                ast_init_vars.push((make_ast_ident(&var), lower_expr(expr, cst_docs)?));
             }
 
             let (body_block, _) = lower_block(body, cst_docs)?;
@@ -286,7 +286,7 @@ fn lower_statement(
 
             Ok((
                 Statement::For {
-                    var_name: var_name.node,
+                    var_name: make_ast_ident(&var_name),
                     start: lower_expr(start, cst_docs)?,
                     end: lower_expr(end, cst_docs)?,
                     body: body_block,
@@ -303,16 +303,16 @@ fn lower_statement(
         CstStatement::Continue { .. } => Ok((Statement::Continue, None)),
         CstStatement::Use { selector, path, .. } => {
             let ast_selector = match selector.node {
-                CstImportSelector::Single(name) => ImportSelector::Single(name.node),
+                CstImportSelector::Single(name) => ImportSelector::Single(make_ast_ident(&name)),
                 CstImportSelector::Multiple(names) => {
-                    ImportSelector::Multiple(names.into_iter().map(|n| n.node).collect())
+                    ImportSelector::Multiple(names.into_iter().map(|n| make_ast_ident(&n)).collect())
                 }
                 CstImportSelector::Wildcard(_) => ImportSelector::Wildcard,
             };
 
             Ok((
                 Statement::Use {
-                    path: path.into_iter().map(|p| p.node).collect(),
+                    path: path.into_iter().map(|p| make_ast_ident(&p)).collect(),
                     selector: ast_selector,
                 },
                 None,
@@ -329,12 +329,12 @@ fn lower_statement(
 
             let mut ast_fields = Vec::new();
             for field in fields {
-                ast_fields.push((field.node.name.node, field.node.type_annotation.node));
+                ast_fields.push((make_ast_ident(&field.node.name), field.node.type_annotation.node));
             }
 
             Ok((
                 Statement::Struct {
-                    name: name.node.clone(),
+                    name: make_ast_ident(&name),
                     fields: ast_fields,
                     pub_visibility,
                 },
@@ -444,7 +444,7 @@ fn lower_expr(
         } => {
             let mut ast_init_vars = Vec::new();
             for (var, _, expr) in init_vars {
-                ast_init_vars.push((var.node, lower_expr(expr, cst_docs)?));
+                ast_init_vars.push((make_ast_ident(&var), lower_expr(expr, cst_docs)?));
             }
             let (body_block, _) = lower_block(body, cst_docs)?;
             Ok(Expression::Loop {

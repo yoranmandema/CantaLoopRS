@@ -57,6 +57,19 @@ pub fn handle_initialize(_params: InitializeParams) -> tower_lsp::jsonrpc::Resul
                 }),
                 file_operations: None,
             }),
+            completion_provider: Some(CompletionOptions {
+                trigger_characters: Some(vec![".".to_string(), ":".to_string()]),
+                all_commit_characters: None,
+                resolve_provider: Some(false),
+                work_done_progress_options: WorkDoneProgressOptions {
+                    work_done_progress: None,
+                },
+                completion_item: None,
+            }),
+            document_symbol_provider: Some(OneOf::Left(true)),
+            code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
+            document_formatting_provider: Some(OneOf::Left(true)),
+            document_range_formatting_provider: Some(OneOf::Left(true)),
             ..Default::default()
         },
     })

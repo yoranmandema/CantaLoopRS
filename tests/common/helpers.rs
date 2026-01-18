@@ -1,24 +1,12 @@
-use cantaloop::{
-    Engine,
-    FunctionSignature,
-    ValueKind,
-};
-use cantaloop::core::engine::Arity;
+use cantaloop::Engine;
 
 /// Helper function to create a test engine with basic functions
 pub fn create_test_engine() -> Engine {
     let mut engine = Engine::new();
 
-    // Add a print function that captures output for testing
-    let print_sig = FunctionSignature {
-        params: vec![ValueKind::String],
-        return_type: Box::new(ValueKind::String),
-        is_effectful: true, // print is effectful
-    };
-    engine.add_string_function("print", print_sig, Arity::Fixed(1), |args| {
-        println!("{}", args[0]);
-        "".to_string()
-    });
+    // Load the full stdlib so compile-time stdlib registration can find native descriptors.
+    // Many compilation paths panic if stdlib functions (e.g. math.round) are not present.
+    cantaloop::stdlib::load_stdlib_runtime(&mut engine);
 
     engine
 }
@@ -49,6 +37,7 @@ pub fn run_code(engine: &mut Engine, code: &str) {
     use std::path::Path;
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
+    use std::sync::Arc;
     
     // Create a temporary test file
     let test_dir = Path::new("target").join("test_temp");
@@ -64,7 +53,10 @@ pub fn run_code(engine: &mut Engine, code: &str) {
     fs::write(&test_file, code).expect("Failed to write test file");
     
     // Run the file
-    engine.run(test_file.to_str().unwrap());
+    // Engine execution now runs from compiled artifacts via an Arc<Engine>.
+    // Move the current engine into an Arc temporarily (leaving an empty Engine behind).
+    let engine_arc = Arc::new(std::mem::replace(engine, Engine::new()));
+    engine_arc.compile_and_run(test_file.to_str().unwrap());
     
     // Clean up (ignore errors)
     fs::remove_file(&test_file).ok();

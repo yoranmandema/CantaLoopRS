@@ -1,0 +1,8 @@
+use print from std;
+
+fn printAdd(a, b) -> num {
+    print(a + b)
+    a + b
+}
+
+!printAdd(5, 3);

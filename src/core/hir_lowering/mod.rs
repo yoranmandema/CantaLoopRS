@@ -18,6 +18,7 @@ pub use project_semantic_items::{SemanticItem, SemanticItemKind, SemanticModifie
 pub use scopes::{HirBlockContext, Scope, ScopeArena, ScopeId, ScopeIdOld};
 use serde::Serialize;
 pub use symbols::{Symbol, SymbolId, SymbolKind, SymbolTable, TypeId};
+use crate::core::EntityId;
 pub use symbol_occurrences::{SymbolOccurrence, SymbolOccurrences, SymbolRole};
 
 // Core types that belong in the main module
@@ -50,10 +51,25 @@ pub enum ValueKind {
     Boolean,
     Unknown,
     Void,
+    /// Internal-only generic type variable (no user-facing syntax yet).
+    /// Used for stdlib/native polymorphic signatures (e.g. reducers).
+    TypeVar(u32),
     // Function type: stores the full type string like "num -> num" or "(num, num) -> num"
     Function(String),
     // Thunk type: stores the full type string like "num ~> num" or "(num, num) ~> num"
     Thunk(String),
+    /// Structured function type (for contextual typing/unification).
+    FnSig {
+        params: Vec<ValueKind>,
+        return_type: Box<ValueKind>,
+        is_effectful: bool,
+    },
+    /// Structured thunk type (for contextual typing/unification).
+    ThunkSig {
+        params: Vec<ValueKind>,
+        return_type: Box<ValueKind>,
+        is_effectful: bool,
+    },
     // Callable type: represents anything that can be called (function, thunk, or closure)
     // Used in native function signatures to accept callable arguments
     Callable,
@@ -74,7 +90,7 @@ pub enum ConstantValue {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Constant {
-    pub id: u32,
+    pub id: crate::core::EntityId,
     pub name: String,
     pub value: ConstantValue,
     pub kind: ValueKind,
@@ -82,7 +98,7 @@ pub struct Constant {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Variable {
-    pub id: u32,
+    pub id: crate::core::EntityId,
     pub name: String,
     pub kind: ValueKind,
 }
@@ -90,7 +106,7 @@ pub struct Variable {
 #[derive(Debug, Clone, Serialize)]
 pub struct FunctionDefinition {
     pub body: HirBlock,
-    pub param_var_ids: Vec<u32>, // Variable IDs for parameters, in order
+    pub param_var_ids: Vec<crate::core::EntityId>, // Variable EntityIds for parameters, in order
     #[allow(dead_code)]
     pub scope_id: scopes::ScopeId, // The function's scope ID
 }
@@ -98,7 +114,7 @@ pub struct FunctionDefinition {
 #[derive(Debug, Clone, Serialize)]
 pub struct Function {
     #[allow(dead_code)]
-    pub id: u32,
+    pub id: crate::core::EntityId,
     pub name: String,
     pub signature: FunctionSignature,
     pub definition: FunctionDefinition,
@@ -128,7 +144,7 @@ pub struct HirAst {
     pub constants: Vec<Constant>,
     pub blocks: Vec<HirBlock>,
     pub scopes: ScopeArena,
-    pub functions: std::collections::HashMap<u32, Function>, // Function ID -> Function struct
+    pub functions: std::collections::HashMap<crate::core::EntityId, Function>, // EntityId -> Function struct
     pub structs: HashMap<String, StructDef>, // Struct name -> StructDef
     pub module_imports: HashMap<String, ImportTable>,
     /// Maps imported constant names to their values (for LSP hover)
@@ -153,9 +169,9 @@ impl Default for HirAst {
 impl HirAst {
     /// Get the function signature for a thunk variable to determine total args needed
     /// This helps determine if a thunk will be fully applied
-    pub fn get_thunk_function_info(&self, var_id: u32) -> Option<(u32, usize)> {
+    pub fn get_thunk_function_info(&self, var_id: u32) -> Option<(EntityId, usize)> {
         // Try to find the original function by looking at the variable's assigned expression
-        if let Some(expr) = self.get_var_assigned_expression(var_id) {
+        if let Some(expr) = self.get_var_assigned_expression(EntityId::new(var_id)) {
             if let HirExpression::FunctionCall {
                 function_id,
                 args: _,
@@ -173,7 +189,7 @@ impl HirAst {
     }
 
     /// Find the expression assigned to a variable (for LSP queries to detect thunks)
-    pub fn get_var_assigned_expression(&self, var_id: u32) -> Option<&HirExpression> {
+    pub fn get_var_assigned_expression(&self, var_id: crate::core::EntityId) -> Option<&HirExpression> {
         // Search through all blocks and statements to find the assignment
         for block in &self.blocks {
             for stmt in &block.statements {
@@ -188,7 +204,7 @@ impl HirAst {
     }
 
     /// Get all imports from all modules as a flat iterator
-    pub fn all_imports(&self) -> impl Iterator<Item = (&String, &u32)> {
+    pub fn all_imports(&self) -> impl Iterator<Item = (&String, &crate::core::EntityId)> {
         self.module_imports
             .values()
             .flat_map(|imports| imports.iter())
@@ -361,7 +377,7 @@ impl HirError {
 
 /// Maps imported symbol names to their function IDs.
 /// Used for compile-time resolution of imports.
-pub type ImportTable = HashMap<String, u32>; // symbol_name -> function_id
+pub type ImportTable = HashMap<String, crate::core::EntityId>; // symbol_name -> function_id
 
 /// Represents a module that can be imported from.
 /// A module is a collection of functions, constants, and structs identified by dot-separated paths.
@@ -369,14 +385,14 @@ pub type ImportTable = HashMap<String, u32>; // symbol_name -> function_id
 #[derive(Debug, Clone, Serialize)]
 pub struct Module {
     /// Functions in this module: function_name -> function_id
-    pub functions: HashMap<String, u32>,
+    pub functions: HashMap<String, crate::core::EntityId>,
     /// Constants in this module: constant_name -> constant_id
-    pub constants: HashMap<String, u32>,
+    pub constants: HashMap<String, crate::core::EntityId>,
     /// Structs in this module: struct_name -> StructDef
     pub structs: HashMap<String, StructDef>,
     /// Imported symbols in this module: symbol_name -> function_id
     /// This is per-module to avoid collisions when the same symbol is imported in different files.
-    pub imports: HashMap<String, u32>,
+    pub imports: HashMap<String, crate::core::EntityId>,
 }
 
 /// Compiler state containing all semantic information from compilation.
@@ -541,7 +557,7 @@ impl CompilerState {
                         }
                     }
                     crate::core::ast::Statement::Struct { name, .. } 
-                        if name == identifier => {
+                        if name.name == identifier => {
                         if let Some(span) = self.find_cst_span_for_declaration(identifier) {
                             if let Some(idx) = &self.line_index {
                                 let (line, _) = idx.lookup(span.start as usize);
@@ -550,7 +566,7 @@ impl CompilerState {
                         }
                     }
                     crate::core::ast::Statement::Mod { identifier: name } 
-                        if name == identifier => {
+                        if name.name == identifier => {
                         if let Some(span) = self.find_cst_span_for_declaration(identifier) {
                             if let Some(idx) = &self.line_index {
                                 let (line, _) = idx.lookup(span.start as usize);

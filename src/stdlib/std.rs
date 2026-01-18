@@ -4,7 +4,8 @@ use crate::core::vm::Value;
 lazy_static::lazy_static! {
     pub static ref STD_MODULE: StdModule = crate::melon_module! {
     module std {
-        fn print(s: str) ~> str {
+        // `print` is effectful and accepts any value (it stringifies at runtime).
+        fn print(v: any) ~> str {
             |args, heap| {
                 let s = args[0].value_to_string(heap);
                 println!("{}", s);

@@ -1,0 +1,27 @@
+# Build artifacts
+target/
+*.lock
+Cargo.lock
+
+# Git
+.git/
+.github.wiki/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Dependencies
+node_modules/
+
+# Temporary files
+*.tmp
+*.bak
+*.log

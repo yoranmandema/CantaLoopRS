@@ -9,16 +9,18 @@
 //! ```rust,no_run
 //! use cantaloop::{Engine, FunctionSignature, ValueKind};
 //! use cantaloop::core::engine::Arity;
+//! use std::sync::Arc;
 //!
 //! let mut engine = Engine::new();
 //! engine.add_string_function("print", FunctionSignature {
 //!     params: vec![ValueKind::String],
 //!     return_type: Box::new(ValueKind::String),
+//!     is_effectful: true,
 //! }, Arity::Fixed(1), |args| {
 //!     println!("{}", args[0]);
 //!     "".to_string()
 //! });
-//! engine.run("examples/helloworld.mln");
+//! Arc::new(engine).compile_and_run("examples/helloworld.cl");
 //! ```
 
 #![allow(non_snake_case)]

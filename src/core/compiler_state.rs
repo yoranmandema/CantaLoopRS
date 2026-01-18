@@ -49,8 +49,10 @@ pub struct CompilerState {
     /// Key: FileId, Value: Last known good snapshot
     /// Note: This still uses RwLock because we need to update per-file snapshots atomically
     last_good_snapshots: Arc<RwLock<HashMap<FileId, CompilerSnapshot>>>,
-    /// Engine with stdlib loaded (for native functions)
+    /// Default engine with stdlib loaded (for native functions)
     engine: Arc<Engine>,
+    /// Per-project engines with project-native modules loaded (e.g. examples/*/native)
+    engines_by_root: Arc<RwLock<HashMap<PathBuf, Arc<Engine>>>>,
     /// Root files that were opened via didOpen (editor-driven entry points)
     open_roots: Arc<RwLock<HashSet<FileId>>>,
     /// Workspace folders from last initialize - used to detect workspace changes
@@ -68,9 +70,43 @@ impl CompilerState {
             snapshot: ArcSwap::from_pointee(None),
             last_good_snapshots: Arc::new(RwLock::new(HashMap::new())),
             engine: Arc::new(engine),
+            engines_by_root: Arc::new(RwLock::new(HashMap::new())),
             open_roots: Arc::new(RwLock::new(HashSet::new())),
             workspace_folders: Arc::new(RwLock::new(None)),
         }
+    }
+
+    async fn engine_for_file(&self, file_id: FileId) -> Arc<Engine> {
+        let uri = {
+            let sm = self.source_manager.read().await;
+            sm.get_uri(file_id).cloned()
+        };
+
+        let Some(uri) = uri else {
+            return self.engine.clone();
+        };
+        let Ok(file_path) = uri.to_file_path() else {
+            return self.engine.clone();
+        };
+        let Some(project_root) = Self::find_project_root(&file_path) else {
+            return self.engine.clone();
+        };
+
+        // Fast path: cached engine
+        if let Some(engine) = self.engines_by_root.read().await.get(&project_root).cloned() {
+            return engine;
+        }
+
+        // Build and cache a project engine (stdlib + native modules).
+        let mut engine = Engine::new();
+        stdlib::load_stdlib_runtime(&mut engine);
+        if let Err(e) = crate::core::projectLoader::ProjectLoader::load_native_modules(&mut engine, &project_root) {
+            // Don't fail compilation just because native modules didn't load.
+            log::warn!("Failed to load native modules for {:?}: {}", project_root, e);
+        }
+        let engine = Arc::new(engine);
+        self.engines_by_root.write().await.insert(project_root, engine.clone());
+        engine
     }
     
     /// Mark a file as an open root (called from didOpen).
@@ -246,7 +282,7 @@ impl CompilerState {
                 existing_id
             } else {
                 // Load from disk and register
-                let content = std::fs::read_to_string(&module_path)
+                let _content = std::fs::read_to_string(&module_path)
                     .map_err(|e| format!("Failed to read module file {:?}: {}", module_path, e))?;
                 
                 // Note: We can't update source_manager here since we only have a read reference
@@ -358,7 +394,7 @@ impl CompilerState {
         log::debug!("Starting module discovery for file {}", root_file_id.0);
         
         // Discover modules (need source_manager for this)
-        let (module_paths, module_names) = {
+        let (module_paths, _module_names) = {
             let source_manager = self.source_manager.read().await;
             let current_uri = source_manager.get_uri(root_file_id).cloned();
             let current_path = match current_uri {
@@ -476,17 +512,19 @@ impl CompilerState {
 
         // Perform all compilation work in a block to ensure context is dropped before await
         eprintln!("[LSP] Entering HIR/symbols building block...");
-        let (hir, all_diagnostics, symbols, cst_id_to_symbol_id, cst_id_to_span) = {
+        let engine = self.engine_for_file(root_file_id).await;
+        let (hir, all_diagnostics, symbols, cst_id_to_span, file_to_module) = {
             eprintln!("[LSP] Inside HIR building block, creating context...");
             // Lower AST to HIR using CompileSession pattern
             // Note: CompileContext requires a 'static function pointer, so we need to
             // use a static check. For LSP, we'll create a simple context.
-            let native_descriptors = self.engine.native_function_descriptors();
+            let native_descriptors = engine.native_function_descriptors();
             
             // Create a static function that checks if an ID is native
             // Native function IDs start at 10000
-            fn is_native_function_static(id: u32) -> bool {
-                id >= 10000
+            use crate::core::entity_id::EntityId;
+            fn is_native_function_static(id: EntityId) -> bool {
+                id.as_u32() >= 10000
             }
 
             let context = CompileContext {
@@ -498,17 +536,10 @@ impl CompilerState {
             
             // Phase 3: Set up CST identity tracking
             use crate::core::cst::{CstId, Span as CstSpan};
-            use crate::core::hir_lowering::SymbolId;
-            let mut cst_id_to_symbol_id_map: std::collections::HashMap<CstId, SymbolId> = std::collections::HashMap::new();
             let mut cst_id_to_span_map: std::collections::HashMap<CstId, CstSpan> = std::collections::HashMap::new();
-            
-            // Set callback to collect CST identity mappings
-            unsafe {
-                hir_builder.set_bind_target(&mut cst_id_to_symbol_id_map);
-            }
-            
-            // Also collect spans from CST nodes during lowering
-            // We'll populate cst_id_to_span_map by walking the CST after lowering
+
+            // Collect spans from CST nodes after lowering by walking the CST
+            // This will be populated in the symbol building phase
             
             // Register native functions as builtin functions
             // CRITICAL: Each native function is registered twice - once with qualified name (e.g., "std.print")
@@ -540,7 +571,7 @@ impl CompilerState {
 
             // Build stdlib module maps from native_descriptors
             // Functions are registered with qualified names like "std.print", "math.round", etc.
-            let mut stdlib_modules: HashMap<String, HashMap<String, u32>> = HashMap::new();
+            let mut stdlib_modules: HashMap<String, HashMap<String, EntityId>> = HashMap::new();
             for native in native_descriptors {
                 // Look for qualified names (e.g., "std.print", "math.round")
                 if let Some(dot_pos) = native.name.find('.') {
@@ -560,7 +591,7 @@ impl CompilerState {
 
             // STEP 2: Build HIR from all ASTs (root + modules)
             // Register user-defined modules first
-            for (module_file_id, module_ast) in &file_asts {
+            for (module_file_id, _module_ast) in &file_asts {
                 if *module_file_id == root_file_id {
                     continue; // Root will be built as __main__
                 }
@@ -614,6 +645,13 @@ impl CompilerState {
             // This allows semantic tokens and symbol queries to work with partial data
             eprintln!("[LSP] Building HIR...");
             log_to_file("Building HIR...");
+
+            // CRITICAL: Extract symbol_resolver BEFORE taking the AST
+            // The symbol_resolver contains all recorded definitions and references from HIR lowering
+            let symbol_resolver = std::mem::replace(&mut hir_builder.symbol_resolver, crate::core::symbol_resolver::SymbolResolver::new());
+            eprintln!("[LSP] Extracted symbol_resolver with {} entities",
+                symbol_resolver.entity_metadata_map().len());
+
             let hir = if all_diagnostics.is_empty() {
                 eprintln!("[LSP] No diagnostics, taking HIR");
                 log_to_file("No diagnostics, taking HIR");
@@ -629,38 +667,49 @@ impl CompilerState {
             eprintln!("[LSP] HIR built: {}", if hir.is_some() { "Some" } else { "None" });
             log_to_file(&format!("HIR built: {}", if hir.is_some() { "Some" } else { "None" }));
 
-            // STEP 3: Build symbol table and semantic index from ALL files
-            // Combine CSTs from all files for complete semantic view
-            // Note: For now, HIR only contains root file, but we can extract identifiers from all CSTs
-            eprintln!("[LSP] Building semantic index...");
-            log_to_file("Building semantic index...");
-            let symbols = if let Some(ref hir_ast) = hir {
-                // Build semantic index using root HIR/AST, but include all CSTs for identifier extraction
-                // This gives us identifier spans from all files, even if symbols are only from root
-                eprintln!("[LSP] Calling build_semantic_index_multi...");
-                log_to_file("Calling build_semantic_index_multi...");
-                log_to_file(&format!("file_csts has {} files", file_csts.len()));
-                let sym = CompilerState::build_semantic_index_multi(hir_ast, &root_ast, &file_csts);
-                eprintln!("[LSP] Semantic index built: {} symbols", sym.symbol_info.len());
-                log_to_file(&format!("Semantic index built: {} symbols", sym.symbol_info.len()));
-                Some(sym)
-            } else {
-                eprintln!("[LSP] No HIR, skipping semantic index");
-                log_to_file("No HIR, skipping semantic index");
-                None
-            };
-            
             // Phase 3: Collect CST spans by walking all CSTs
             // This populates cst_id_to_span_map for all CST nodes
+            // IMPORTANT: Must be done BEFORE building symbol table
             eprintln!("[LSP] Collecting CST spans...");
             for (_, (cst, _)) in &file_csts {
                 Self::collect_cst_spans(cst, &mut cst_id_to_span_map);
             }
             eprintln!("[LSP] CST spans collected: {} mappings", cst_id_to_span_map.len());
-            
+
+            // (debug hooks removed)
+
+            // STEP 3: Build symbol table using SymbolResolver (identity-first architecture)
+            // This replaces the old name-based symbol matching with direct CST→Entity→Symbol mapping
+            eprintln!("[LSP] Building symbol table from SymbolResolver...");
+            log_to_file("Building symbol table from SymbolResolver...");
+
+            // Build file_id mapping for each CST ID (for now, all from root file)
+            // TODO: Multi-file support - track which file each CstId comes from
+            let mut cst_id_to_file = HashMap::new();
+            for (cst_id, _) in &cst_id_to_span_map {
+                cst_id_to_file.insert(*cst_id, root_file_id);
+            }
+
+            let symbols = if hir.is_some() {
+                let sym = symbol_resolver.build_symbol_table(&cst_id_to_span_map, &cst_id_to_file);
+                eprintln!("[LSP] Symbol table built: {} symbols, {} span mappings",
+                    sym.symbol_info.len(), sym.span_to_symbol.len());
+                log_to_file(&format!("Symbol table built: {} symbols, {} span mappings",
+                    sym.symbol_info.len(), sym.span_to_symbol.len()));
+                Some(sym)
+            } else {
+                eprintln!("[LSP] No HIR, skipping symbol table");
+                log_to_file("No HIR, skipping symbol table");
+                None
+            };
+
+            // Build file-to-module mapping
+            let mut file_to_module = HashMap::new();
+            file_to_module.insert(root_file_id, "__main__".to_string());
+
             eprintln!("[LSP] Exiting HIR building block, returning results...");
             // Context is dropped here when block ends
-            (hir, all_diagnostics, symbols, cst_id_to_symbol_id_map, cst_id_to_span_map)
+            (hir, all_diagnostics, symbols, cst_id_to_span_map, file_to_module)
         };
         eprintln!("[LSP] HIR building block completed, hir={}, symbols={}", 
             if hir.is_some() { "Some" } else { "None" },
@@ -688,8 +737,8 @@ impl CompilerState {
             hir.clone(),
             diagnostics_map.clone(),
             symbols.clone(),
-            cst_id_to_symbol_id,
             cst_id_to_span,
+            file_to_module,
         );
         eprintln!("[LSP] CompilerSnapshot created");
         
@@ -1030,7 +1079,9 @@ impl CompilerState {
 
     /// Phase 3: Collect all CST node spans into a map.
     /// Walks the CST tree and records CstId → Span mappings.
-    fn collect_cst_spans(
+    ///
+    /// This is public for testing purposes.
+    pub fn collect_cst_spans(
         cst: &CstProgram,
         span_map: &mut std::collections::HashMap<crate::core::cst::CstId, crate::core::cst::Span>,
     ) {
@@ -1039,7 +1090,12 @@ impl CompilerState {
         fn walk_expr(expr: &crate::core::cst::Spanned<CstExpr>, span_map: &mut std::collections::HashMap<crate::core::cst::CstId, crate::core::cst::Span>) {
             // Record this expression's span
             span_map.insert(expr.id, expr.span);
-            
+            if let CstExpr::Identifier(name_spanned) = &expr.node {
+                // CRITICAL: Also collect the identifier name's CstId!
+                // In CST, Identifier contains Spanned<String>, so we need both IDs
+                span_map.insert(name_spanned.id, name_spanned.span);
+            }
+
             // Recurse into children
             match &expr.node {
                 CstExpr::Identifier(_) | CstExpr::Literal(_) => {
@@ -1077,15 +1133,19 @@ impl CompilerState {
                         }
                     }
                 }
-                CstExpr::MemberAccess { object, .. } => {
+                CstExpr::MemberAccess { object, members, .. } => {
                     walk_expr(object, span_map);
+                    for m in members {
+                        span_map.insert(m.id, m.span);
+                    }
                 }
                 CstExpr::Compose { lhs, rhs, .. } => {
                     walk_expr(lhs, span_map);
                     walk_expr(rhs, span_map);
                 }
-                CstExpr::FieldAccess { object, .. } => {
+                CstExpr::FieldAccess { object, field, .. } => {
                     walk_expr(object, span_map);
+                    span_map.insert(field.id, field.span);
                 }
                 CstExpr::Array { elements, .. } => {
                     for elem in elements {
@@ -1116,6 +1176,14 @@ impl CompilerState {
                                 }
                             }
                         }
+                    }
+                }
+                CstExpr::StructInit { struct_name, fields, .. } => {
+                    // Record struct name identifier span and recurse into field value expressions.
+                    span_map.insert(struct_name.id, struct_name.span);
+                    for field in fields {
+                        span_map.insert(field.node.name.id, field.node.name.span);
+                        walk_expr(&field.node.value, span_map);
                     }
                 }
                 CstExpr::Group { inner, .. } => {
@@ -1171,9 +1239,91 @@ impl CompilerState {
                 CstStatement::Expression(expr) => {
                     walk_expr(expr, span_map);
                 }
-                _ => {
-                    // Other statement types
+                CstStatement::Return { expression, .. } => {
+                    walk_expr(expression, span_map);
                 }
+                CstStatement::Break { expression, .. } => {
+                    if let Some(expr) = expression {
+                        walk_expr(expr, span_map);
+                    }
+                }
+                CstStatement::Assign { identifier, expression, .. } => {
+                    span_map.insert(identifier.id, identifier.span);
+                    walk_expr(expression, span_map);
+                }
+                CstStatement::AssignIncrement { identifier, expression, .. } => {
+                    span_map.insert(identifier.id, identifier.span);
+                    walk_expr(expression, span_map);
+                }
+                CstStatement::AssignDecrement { identifier, expression, .. } => {
+                    span_map.insert(identifier.id, identifier.span);
+                    walk_expr(expression, span_map);
+                }
+                CstStatement::If { arms, else_block, .. } => {
+                    for (condition, body) in arms {
+                        walk_expr(condition, span_map);
+                        walk_block(&body.node, span_map);
+                    }
+                    if let Some(else_body) = else_block {
+                        walk_block(&else_body.node, span_map);
+                    }
+                }
+                CstStatement::While { condition, body, .. } => {
+                    walk_expr(condition, span_map);
+                    walk_block(&body.node, span_map);
+                }
+                CstStatement::For { var_name, start, end, body, .. } => {
+                    span_map.insert(var_name.id, var_name.span);
+                    walk_expr(start, span_map);
+                    walk_expr(end, span_map);
+                    walk_block(&body.node, span_map);
+                }
+                CstStatement::Loop { init_vars, body, .. } => {
+                    for (var_name, _, expr) in init_vars {
+                        span_map.insert(var_name.id, var_name.span);
+                        walk_expr(expr, span_map);
+                    }
+                    walk_block(&body.node, span_map);
+                }
+                CstStatement::Match { expression, cases, .. } => {
+                    walk_expr(expression, span_map);
+                    for (pattern, body) in cases {
+                        if let Some(expr) = pattern {
+                            walk_expr(expr, span_map);
+                        }
+                        walk_block(&body.node, span_map);
+                    }
+                }
+                CstStatement::Use { selector, path, .. } => {
+                    // Record selector + contained identifier spans
+                    span_map.insert(selector.id, selector.span);
+                    match &selector.node {
+                        crate::core::cst::CstImportSelector::Single(name) => {
+                            span_map.insert(name.id, name.span);
+                        }
+                        crate::core::cst::CstImportSelector::Multiple(names) => {
+                            for name in names {
+                                span_map.insert(name.id, name.span);
+                            }
+                        }
+                        crate::core::cst::CstImportSelector::Wildcard(_) => {}
+                    }
+                    // Record module path segment spans
+                    for p in path {
+                        span_map.insert(p.id, p.span);
+                    }
+                }
+                CstStatement::Mod { identifier } => {
+                    span_map.insert(identifier.id, identifier.span);
+                }
+                CstStatement::Struct { name, fields, .. } => {
+                    span_map.insert(name.id, name.span);
+                    for field in fields {
+                        span_map.insert(field.id, field.span);
+                        span_map.insert(field.node.name.id, field.node.name.span);
+                    }
+                }
+                _ => {}
             }
         }
         
@@ -1239,6 +1389,7 @@ impl CompilerState {
                 name: symbol.name.clone(),
                 kind: symbol.kind.clone(),
                 ty: symbol.ty.clone(),
+                entity_id: symbol.entity_id,
                 stability,
             });
             

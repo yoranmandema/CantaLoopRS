@@ -1,0 +1,1032 @@
+[1768332377] === compile_changed_files called with 1 changed files ===
+[1768332377] Root files to compile: 1
+[1768332377] Primary root file: FileId(0)
+[1768332377] Building HIR...
+[1768332377] No diagnostics, taking HIR
+[1768332377] HIR built: Some
+[1768332377] Building semantic index...
+[1768332377] Calling build_semantic_index_multi...
+[1768332377] file_csts has 1 files
+[1768332377] build_semantic_index_multi: file_csts has 1 files
+[1768332377] Found root CST, calling build_semantic_index...
+[1768332377] build_semantic_index called with CST having 1 blocks
+[1768332377] About to call build_symbol_table...
+[1768332377] build_symbol_table returned 48 symbols
+[1768332377] build_semantic_index returned 48 symbols
+[1768332377] Semantic index built: 48 symbols
+[1768332379] Processing Use statement:
+[1768332379]   use_keyword: 0..3 = 'use'
+[1768332379]   from_keyword: 10..14 = 'from'
+[1768332379]   selector: 4..9 = 'print'
+[1768332379]   path: 15..18 = 'std'
+[1768332379] Token at byte 0..2 -> line=0, col=0, delta_line=0, delta_start=0, length=2, type=1
+[1768332379] Token at byte 4..9 -> line=0, col=4, delta_line=0, delta_start=2, length=5, type=0
+[1768332379] Token at byte 10..14 -> line=0, col=10, delta_line=0, delta_start=1, length=4, type=3
+[1768332379] Token at byte 15..18 -> line=0, col=15, delta_line=0, delta_start=1, length=3, type=8
+[1768332379] Token at byte 21..24 -> line=2, col=0, delta_line=2, delta_start=0, length=3, type=3
+[1768332379] Token at byte 25..27 -> line=2, col=4, delta_line=0, delta_start=1, length=2, type=1
+[1768332379] Token at byte 105..110 -> line=5, col=16, delta_line=3, delta_start=16, length=0, type=7
+[1768332379] Token at byte 126..131 -> line=6, col=16, delta_line=1, delta_start=16, length=0, type=7
+[1768332379] Token at byte 147..183 -> line=7, col=16, delta_line=1, delta_start=16, length=0, type=7
+[1768332379] Token at byte 251..300 -> line=10, col=19, delta_line=3, delta_start=19, length=0, type=7
+[1768332379] Token at byte 370..422 -> line=13, col=20, delta_line=3, delta_start=20, length=0, type=7
+[1768332379] Token at byte 479..509 -> line=16, col=18, delta_line=3, delta_start=18, length=0, type=7
+[1768332379] Token at byte 564..596 -> line=19, col=18, delta_line=3, delta_start=18, length=0, type=7
+[1768332379] Token at byte 649..692 -> line=22, col=17, delta_line=3, delta_start=17, length=0, type=7
+[1768332379] Token at byte 763..799 -> line=25, col=22, delta_line=3, delta_start=22, length=0, type=7
+[1768332379] Token at byte 856..876 -> line=28, col=20, delta_line=3, delta_start=20, length=0, type=7
+[1768332379] Token at byte 896..935 -> line=29, col=20, delta_line=1, delta_start=20, length=0, type=7
+[1768332379] Token at byte 955..1007 -> line=30, col=20, delta_line=1, delta_start=20, length=0, type=7
+[1768332379] Token at byte 1009..1012 -> line=33, col=0, delta_line=3, delta_start=0, length=3, type=3
+[1768332379] Token at byte 1013..1015 -> line=33, col=4, delta_line=0, delta_start=1, length=2, type=1
+[1768332379] Processing Use statement:
+[1768332379]   use_keyword: 0..3 = 'use'
+[1768332379]   from_keyword: 10..14 = 'from'
+[1768332379]   selector: 4..9 = 'print'
+[1768332379]   path: 15..18 = 'std'
+[1768332379] Token at byte 0..2 -> line=0, col=0, delta_line=0, delta_start=0, length=2, type=1
+[1768332379] Token at byte 4..9 -> line=0, col=4, delta_line=0, delta_start=2, length=5, type=0
+[1768332379] Token at byte 10..14 -> line=0, col=10, delta_line=0, delta_start=1, length=4, type=3
+[1768332379] Token at byte 15..18 -> line=0, col=15, delta_line=0, delta_start=1, length=3, type=8
+[1768332379] Token at byte 21..24 -> line=2, col=0, delta_line=2, delta_start=0, length=3, type=3
+[1768332379] Token at byte 25..27 -> line=2, col=4, delta_line=0, delta_start=1, length=2, type=1
+[1768332379] Token at byte 105..110 -> line=5, col=16, delta_line=3, delta_start=16, length=0, type=7
+[1768332379] Token at byte 126..131 -> line=6, col=16, delta_line=1, delta_start=16, length=0, type=7
+[1768332379] Token at byte 147..183 -> line=7, col=16, delta_line=1, delta_start=16, length=0, type=7
+[1768332379] Token at byte 251..300 -> line=10, col=19, delta_line=3, delta_start=19, length=0, type=7
+[1768332379] Token at byte 370..422 -> line=13, col=20, delta_line=3, delta_start=20, length=0, type=7
+[1768332379] Token at byte 479..509 -> line=16, col=18, delta_line=3, delta_start=18, length=0, type=7
+[1768332379] Token at byte 564..596 -> line=19, col=18, delta_line=3, delta_start=18, length=0, type=7
+[1768332379] Token at byte 649..692 -> line=22, col=17, delta_line=3, delta_start=17, length=0, type=7
+[1768332379] Token at byte 763..799 -> line=25, col=22, delta_line=3, delta_start=22, length=0, type=7
+[1768332379] Token at byte 856..876 -> line=28, col=20, delta_line=3, delta_start=20, length=0, type=7
+[1768332379] Token at byte 896..935 -> line=29, col=20, delta_line=1, delta_start=20, length=0, type=7
+[1768332379] Token at byte 955..1007 -> line=30, col=20, delta_line=1, delta_start=20, length=0, type=7
+[1768332379] Token at byte 1009..1012 -> line=33, col=0, delta_line=3, delta_start=0, length=3, type=3
+[1768332379] Token at byte 1013..1015 -> line=33, col=4, delta_line=0, delta_start=1, length=2, type=1
+[1768333048] === compile_changed_files called with 1 changed files ===
+[1768333048] Root files to compile: 1
+[1768333048] Primary root file: FileId(0)
+[1768333048] Building HIR...
+[1768333048] No diagnostics, taking HIR
+[1768333048] HIR built: Some
+[1768333048] Building semantic index...
+[1768333048] Calling build_semantic_index_multi...
+[1768333048] file_csts has 1 files
+[1768333048] build_semantic_index_multi: file_csts has 1 files
+[1768333048] Found root CST, calling build_semantic_index...
+[1768333048] build_semantic_index called with CST having 1 blocks
+[1768333048] About to call build_symbol_table...
+[1768333048] build_symbol_table returned 83 symbols
+[1768333048] build_semantic_index returned 83 symbols
+[1768333048] Semantic index built: 83 symbols
+[1768333049] Processing Use statement:
+[1768333049]   use_keyword: 0..3 = 'use'
+[1768333049]   from_keyword: 10..14 = 'from'
+[1768333049]   selector: 4..9 = 'print'
+[1768333049]   path: 15..18 = 'std'
+[1768333049] Token at byte 0..2 -> line=0, col=0, delta_line=0, delta_start=0, length=2, type=1
+[1768333049] Token at byte 4..9 -> line=0, col=4, delta_line=0, delta_start=2, length=5, type=0
+[1768333049] Token at byte 10..14 -> line=0, col=10, delta_line=0, delta_start=1, length=4, type=3
+[1768333049] Token at byte 15..18 -> line=0, col=15, delta_line=0, delta_start=1, length=3, type=8
+[1768333049] Token at byte 21..24 -> line=2, col=0, delta_line=2, delta_start=0, length=3, type=3
+[1768333049] Token at byte 25..27 -> line=2, col=4, delta_line=0, delta_start=1, length=2, type=1
+[1768333049] Token at byte 105..110 -> line=5, col=16, delta_line=3, delta_start=16, length=0, type=7
+[1768333049] Token at byte 126..131 -> line=6, col=16, delta_line=1, delta_start=16, length=0, type=7
+[1768333049] Token at byte 147..183 -> line=7, col=16, delta_line=1, delta_start=16, length=0, type=7
+[1768333049] Token at byte 251..300 -> line=10, col=19, delta_line=3, delta_start=19, length=0, type=7
+[1768333049] Token at byte 370..422 -> line=13, col=20, delta_line=3, delta_start=20, length=0, type=7
+[1768333049] Token at byte 479..509 -> line=16, col=18, delta_line=3, delta_start=18, length=0, type=7
+[1768333049] Token at byte 564..596 -> line=19, col=18, delta_line=3, delta_start=18, length=0, type=7
+[1768333049] Token at byte 649..692 -> line=22, col=17, delta_line=3, delta_start=17, length=0, type=7
+[1768333049] Token at byte 763..799 -> line=25, col=22, delta_line=3, delta_start=22, length=0, type=7
+[1768333049] Token at byte 856..876 -> line=28, col=20, delta_line=3, delta_start=20, length=0, type=7
+[1768333049] Token at byte 896..935 -> line=29, col=20, delta_line=1, delta_start=20, length=0, type=7
+[1768333049] Token at byte 955..1007 -> line=30, col=20, delta_line=1, delta_start=20, length=0, type=7
+[1768333049] Token at byte 1009..1012 -> line=33, col=0, delta_line=3, delta_start=0, length=3, type=3
+[1768333049] Token at byte 1013..1015 -> line=33, col=4, delta_line=0, delta_start=1, length=2, type=1
+[1768333049] Processing Use statement:
+[1768333049]   use_keyword: 0..3 = 'use'
+[1768333049]   from_keyword: 10..14 = 'from'
+[1768333049]   selector: 4..9 = 'print'
+[1768333049]   path: 15..18 = 'std'
+[1768333049] Token at byte 0..2 -> line=0, col=0, delta_line=0, delta_start=0, length=2, type=1
+[1768333049] Token at byte 4..9 -> line=0, col=4, delta_line=0, delta_start=2, length=5, type=0
+[1768333049] Token at byte 10..14 -> line=0, col=10, delta_line=0, delta_start=1, length=4, type=3
+[1768333049] Token at byte 15..18 -> line=0, col=15, delta_line=0, delta_start=1, length=3, type=8
+[1768333049] Token at byte 21..24 -> line=2, col=0, delta_line=2, delta_start=0, length=3, type=3
+[1768333049] Token at byte 25..27 -> line=2, col=4, delta_line=0, delta_start=1, length=2, type=1
+[1768333049] Token at byte 105..110 -> line=5, col=16, delta_line=3, delta_start=16, length=0, type=7
+[1768333049] Token at byte 126..131 -> line=6, col=16, delta_line=1, delta_start=16, length=0, type=7
+[1768333049] Token at byte 147..183 -> line=7, col=16, delta_line=1, delta_start=16, length=0, type=7
+[1768333049] Token at byte 251..300 -> line=10, col=19, delta_line=3, delta_start=19, length=0, type=7
+[1768333049] Token at byte 370..422 -> line=13, col=20, delta_line=3, delta_start=20, length=0, type=7
+[1768333049] Token at byte 479..509 -> line=16, col=18, delta_line=3, delta_start=18, length=0, type=7
+[1768333049] Token at byte 564..596 -> line=19, col=18, delta_line=3, delta_start=18, length=0, type=7
+[1768333049] Token at byte 649..692 -> line=22, col=17, delta_line=3, delta_start=17, length=0, type=7
+[1768333049] Token at byte 763..799 -> line=25, col=22, delta_line=3, delta_start=22, length=0, type=7
+[1768333049] Token at byte 856..876 -> line=28, col=20, delta_line=3, delta_start=20, length=0, type=7
+[1768333049] Token at byte 896..935 -> line=29, col=20, delta_line=1, delta_start=20, length=0, type=7
+[1768333049] Token at byte 955..1007 -> line=30, col=20, delta_line=1, delta_start=20, length=0, type=7
+[1768333049] Token at byte 1009..1012 -> line=33, col=0, delta_line=3, delta_start=0, length=3, type=3
+[1768333049] Token at byte 1013..1015 -> line=33, col=4, delta_line=0, delta_start=1, length=2, type=1
+[1768333119] === compile_changed_files called with 1 changed files ===
+[1768333119] Root files to compile: 1
+[1768333119] Primary root file: FileId(0)
+[1768333119] Building HIR...
+[1768333119] No diagnostics, taking HIR
+[1768333119] HIR built: Some
+[1768333119] Building semantic index...
+[1768333119] Calling build_semantic_index_multi...
+[1768333119] file_csts has 1 files
+[1768333119] build_semantic_index_multi: file_csts has 1 files
+[1768333119] Found root CST, calling build_semantic_index...
+[1768333119] build_semantic_index called with CST having 1 blocks
+[1768333119] About to call build_symbol_table...
+[1768333119] build_symbol_table returned 83 symbols
+[1768333119] build_semantic_index returned 83 symbols
+[1768333119] Semantic index built: 83 symbols
+[1768333120] Processing Use statement:
+[1768333120]   use_keyword: 0..3 = 'use'
+[1768333120]   from_keyword: 10..14 = 'from'
+[1768333120]   selector: 4..9 = 'print'
+[1768333120]   path: 15..18 = 'std'
+[1768333120] Token at byte 0..2 -> line=0, col=0, delta_line=0, delta_start=0, length=2, type=1
+[1768333120] Token at byte 4..9 -> line=0, col=4, delta_line=0, delta_start=2, length=5, type=0
+[1768333120] Token at byte 10..14 -> line=0, col=10, delta_line=0, delta_start=1, length=4, type=3
+[1768333120] Token at byte 15..18 -> line=0, col=15, delta_line=0, delta_start=1, length=3, type=8
+[1768333120] Token at byte 21..24 -> line=2, col=0, delta_line=2, delta_start=0, length=3, type=3
+[1768333120] Token at byte 25..27 -> line=2, col=4, delta_line=0, delta_start=1, length=2, type=1
+[1768333120] Token at byte 105..110 -> line=5, col=16, delta_line=3, delta_start=16, length=0, type=7
+[1768333120] Token at byte 126..131 -> line=6, col=16, delta_line=1, delta_start=16, length=0, type=7
+[1768333120] Token at byte 147..183 -> line=7, col=16, delta_line=1, delta_start=16, length=0, type=7
+[1768333120] Token at byte 251..300 -> line=10, col=19, delta_line=3, delta_start=19, length=0, type=7
+[1768333120] Token at byte 370..422 -> line=13, col=20, delta_line=3, delta_start=20, length=0, type=7
+[1768333120] Token at byte 479..509 -> line=16, col=18, delta_line=3, delta_start=18, length=0, type=7
+[1768333120] Token at byte 564..596 -> line=19, col=18, delta_line=3, delta_start=18, length=0, type=7
+[1768333120] Token at byte 649..692 -> line=22, col=17, delta_line=3, delta_start=17, length=0, type=7
+[1768333120] Token at byte 763..799 -> line=25, col=22, delta_line=3, delta_start=22, length=0, type=7
+[1768333120] Token at byte 856..876 -> line=28, col=20, delta_line=3, delta_start=20, length=0, type=7
+[1768333120] Token at byte 896..935 -> line=29, col=20, delta_line=1, delta_start=20, length=0, type=7
+[1768333120] Token at byte 955..1007 -> line=30, col=20, delta_line=1, delta_start=20, length=0, type=7
+[1768333120] Token at byte 1009..1012 -> line=33, col=0, delta_line=3, delta_start=0, length=3, type=3
+[1768333120] Token at byte 1013..1015 -> line=33, col=4, delta_line=0, delta_start=1, length=2, type=1
+[1768333458] === compile_changed_files called with 1 changed files ===
+[1768333458] Root files to compile: 1
+[1768333458] Primary root file: FileId(0)
+[1768333458] Building HIR...
+[1768333458] No diagnostics, taking HIR
+[1768333458] HIR built: Some
+[1768333458] Building semantic index...
+[1768333458] Calling build_semantic_index_multi...
+[1768333458] file_csts has 1 files
+[1768333458] build_semantic_index_multi: file_csts has 1 files
+[1768333458] Found root CST, calling build_semantic_index...
+[1768333458] build_semantic_index called with CST having 1 blocks
+[1768333458] About to call build_symbol_table...
+[1768333458] build_symbol_table returned 83 symbols
+[1768333458] build_semantic_index returned 83 symbols
+[1768333458] Semantic index built: 83 symbols
+[1768333459] Processing Use statement:
+[1768333459]   use_keyword: 0..3 = 'use'
+[1768333459]   from_keyword: 10..14 = 'from'
+[1768333459]   selector: 4..9 = 'print'
+[1768333459]   path: 15..18 = 'std'
+[1768333459] Token at byte 0..2 -> line=0, col=0, delta_line=0, delta_start=0, length=2, type=1
+[1768333459] Token at byte 4..9 -> line=0, col=4, delta_line=0, delta_start=2, length=5, type=0
+[1768333459] Token at byte 10..14 -> line=0, col=10, delta_line=0, delta_start=1, length=4, type=3
+[1768333459] Token at byte 15..18 -> line=0, col=15, delta_line=0, delta_start=1, length=3, type=8
+[1768333459] Token at byte 21..24 -> line=2, col=0, delta_line=2, delta_start=0, length=3, type=3
+[1768333459] Token at byte 25..27 -> line=2, col=4, delta_line=0, delta_start=1, length=2, type=1
+[1768333459] Token at byte 105..110 -> line=5, col=16, delta_line=3, delta_start=16, length=0, type=7
+[1768333459] Token at byte 126..131 -> line=6, col=16, delta_line=1, delta_start=16, length=0, type=7
+[1768333459] Token at byte 147..183 -> line=7, col=16, delta_line=1, delta_start=16, length=0, type=7
+[1768333459] Token at byte 251..300 -> line=10, col=19, delta_line=3, delta_start=19, length=0, type=7
+[1768333459] Token at byte 370..422 -> line=13, col=20, delta_line=3, delta_start=20, length=0, type=7
+[1768333459] Token at byte 479..509 -> line=16, col=18, delta_line=3, delta_start=18, length=0, type=7
+[1768333459] Token at byte 564..596 -> line=19, col=18, delta_line=3, delta_start=18, length=0, type=7
+[1768333459] Token at byte 649..692 -> line=22, col=17, delta_line=3, delta_start=17, length=0, type=7
+[1768333459] Token at byte 763..799 -> line=25, col=22, delta_line=3, delta_start=22, length=0, type=7
+[1768333459] Token at byte 856..876 -> line=28, col=20, delta_line=3, delta_start=20, length=0, type=7
+[1768333459] Token at byte 896..935 -> line=29, col=20, delta_line=1, delta_start=20, length=0, type=7
+[1768333459] Token at byte 955..1007 -> line=30, col=20, delta_line=1, delta_start=20, length=0, type=7
+[1768333459] Token at byte 1009..1012 -> line=33, col=0, delta_line=3, delta_start=0, length=3, type=3
+[1768333459] Token at byte 1013..1015 -> line=33, col=4, delta_line=0, delta_start=1, length=2, type=1
+[1768333460] Processing Use statement:
+[1768333460]   use_keyword: 0..3 = 'use'
+[1768333460]   from_keyword: 10..14 = 'from'
+[1768333460]   selector: 4..9 = 'print'
+[1768333460]   path: 15..18 = 'std'
+[1768333460] Token at byte 0..2 -> line=0, col=0, delta_line=0, delta_start=0, length=2, type=1
+[1768333460] Token at byte 4..9 -> line=0, col=4, delta_line=0, delta_start=2, length=5, type=0
+[1768333460] Token at byte 10..14 -> line=0, col=10, delta_line=0, delta_start=1, length=4, type=3
+[1768333460] Token at byte 15..18 -> line=0, col=15, delta_line=0, delta_start=1, length=3, type=8
+[1768333460] Token at byte 21..24 -> line=2, col=0, delta_line=2, delta_start=0, length=3, type=3
+[1768333460] Token at byte 25..27 -> line=2, col=4, delta_line=0, delta_start=1, length=2, type=1
+[1768333460] Token at byte 105..110 -> line=5, col=16, delta_line=3, delta_start=16, length=0, type=7
+[1768333460] Token at byte 126..131 -> line=6, col=16, delta_line=1, delta_start=16, length=0, type=7
+[1768333460] Token at byte 147..183 -> line=7, col=16, delta_line=1, delta_start=16, length=0, type=7
+[1768333460] Token at byte 251..300 -> line=10, col=19, delta_line=3, delta_start=19, length=0, type=7
+[1768333460] Token at byte 370..422 -> line=13, col=20, delta_line=3, delta_start=20, length=0, type=7
+[1768333460] Token at byte 479..509 -> line=16, col=18, delta_line=3, delta_start=18, length=0, type=7
+[1768333460] Token at byte 564..596 -> line=19, col=18, delta_line=3, delta_start=18, length=0, type=7
+[1768333460] Token at byte 649..692 -> line=22, col=17, delta_line=3, delta_start=17, length=0, type=7
+[1768333460] Token at byte 763..799 -> line=25, col=22, delta_line=3, delta_start=22, length=0, type=7
+[1768333460] Token at byte 856..876 -> line=28, col=20, delta_line=3, delta_start=20, length=0, type=7
+[1768333460] Token at byte 896..935 -> line=29, col=20, delta_line=1, delta_start=20, length=0, type=7
+[1768333460] Token at byte 955..1007 -> line=30, col=20, delta_line=1, delta_start=20, length=0, type=7
+[1768333460] Token at byte 1009..1012 -> line=33, col=0, delta_line=3, delta_start=0, length=3, type=3
+[1768333460] Token at byte 1013..1015 -> line=33, col=4, delta_line=0, delta_start=1, length=2, type=1
+[1768333479] === compile_changed_files called with 1 changed files ===
+[1768333479] Root files to compile: 2
+[1768333479] Primary root file: FileId(1)
+[1768333479] Building HIR...
+[1768333479] No diagnostics, taking HIR
+[1768333479] HIR built: Some
+[1768333479] Building semantic index...
+[1768333479] Calling build_semantic_index_multi...
+[1768333479] file_csts has 2 files
+[1768333479] build_semantic_index_multi: file_csts has 2 files
+[1768333479] Found root CST, calling build_semantic_index...
+[1768333479] build_semantic_index called with CST having 1 blocks
+[1768333479] About to call build_symbol_table...
+[1768333479] build_symbol_table returned 43 symbols
+[1768333479] build_semantic_index returned 43 symbols
+[1768333479] Semantic index built: 43 symbols
+[1768333482] === compile_changed_files called with 1 changed files ===
+[1768333482] Root files to compile: 2
+[1768333482] Primary root file: FileId(1)
+[1768333482] Building HIR...
+[1768333482] No diagnostics, taking HIR
+[1768333482] HIR built: Some
+[1768333482] Building semantic index...
+[1768333482] Calling build_semantic_index_multi...
+[1768333482] file_csts has 2 files
+[1768333482] build_semantic_index_multi: file_csts has 2 files
+[1768333482] Found root CST, calling build_semantic_index...
+[1768333482] build_semantic_index called with CST having 1 blocks
+[1768333482] About to call build_symbol_table...
+[1768333482] build_symbol_table returned 65 symbols
+[1768333482] build_semantic_index returned 65 symbols
+[1768333482] Semantic index built: 65 symbols
+[1768333482] Token at byte 0..5 -> line=0, col=0, delta_line=0, delta_start=0, length=5, type=0
+[1768333482] Token at byte 15..18 -> line=0, col=15, delta_line=0, delta_start=10, length=3, type=8
+[1768333482] === compile_changed_files called with 1 changed files ===
+[1768333482] Root files to compile: 2
+[1768333482] Primary root file: FileId(1)
+[1768333482] Building HIR...
+[1768333482] No diagnostics, taking HIR
+[1768333482] HIR built: Some
+[1768333482] Building semantic index...
+[1768333482] Calling build_semantic_index_multi...
+[1768333482] file_csts has 2 files
+[1768333482] build_semantic_index_multi: file_csts has 2 files
+[1768333482] Found root CST, calling build_semantic_index...
+[1768333482] build_semantic_index called with CST having 1 blocks
+[1768333482] About to call build_symbol_table...
+[1768333482] build_symbol_table returned 65 symbols
+[1768333482] build_semantic_index returned 65 symbols
+[1768333482] Semantic index built: 65 symbols
+[1768333482] Token at byte 0..5 -> line=0, col=0, delta_line=0, delta_start=0, length=5, type=0
+[1768333482] Token at byte 15..18 -> line=0, col=15, delta_line=0, delta_start=10, length=3, type=8
+[1768333482] === compile_changed_files called with 1 changed files ===
+[1768333482] Root files to compile: 2
+[1768333482] Primary root file: FileId(1)
+[1768333482] Token at byte 0..5 -> line=0, col=0, delta_line=0, delta_start=0, length=5, type=0
+[1768333482] Token at byte 15..18 -> line=0, col=15, delta_line=0, delta_start=10, length=3, type=8
+[1768333482] === compile_changed_files called with 1 changed files ===
+[1768333482] Root files to compile: 2
+[1768333482] Primary root file: FileId(1)
+[1768333482] Token at byte 0..5 -> line=0, col=0, delta_line=0, delta_start=0, length=5, type=0
+[1768333482] Token at byte 15..18 -> line=0, col=15, delta_line=0, delta_start=10, length=3, type=8
+[1768333482] === compile_changed_files called with 1 changed files ===
+[1768333482] Root files to compile: 2
+[1768333482] Primary root file: FileId(1)
+[1768333482] Token at byte 0..5 -> line=0, col=0, delta_line=0, delta_start=0, length=5, type=0
+[1768333482] Token at byte 15..18 -> line=0, col=15, delta_line=0, delta_start=10, length=3, type=8
+[1768333483] === compile_changed_files called with 1 changed files ===
+[1768333483] Root files to compile: 2
+[1768333483] Primary root file: FileId(1)
+[1768333483] Token at byte 0..5 -> line=0, col=0, delta_line=0, delta_start=0, length=5, type=0
+[1768333483] Token at byte 15..18 -> line=0, col=15, delta_line=0, delta_start=10, length=3, type=8
+[1768333483] === compile_changed_files called with 1 changed files ===
+[1768333483] Root files to compile: 2
+[1768333483] Primary root file: FileId(1)
+[1768333483] Token at byte 0..5 -> line=0, col=0, delta_line=0, delta_start=0, length=5, type=0
+[1768333483] Token at byte 15..18 -> line=0, col=15, delta_line=0, delta_start=10, length=3, type=8
+[1768333483] === compile_changed_files called with 1 changed files ===
+[1768333483] Root files to compile: 2
+[1768333483] Primary root file: FileId(1)
+[1768333483] Token at byte 0..5 -> line=0, col=0, delta_line=0, delta_start=0, length=5, type=0
+[1768333483] Token at byte 15..18 -> line=0, col=15, delta_line=0, delta_start=10, length=3, type=8
+[1768333483] === compile_changed_files called with 1 changed files ===
+[1768333483] Root files to compile: 2
+[1768333483] Primary root file: FileId(1)
+[1768333483] Token at byte 0..5 -> line=0, col=0, delta_line=0, delta_start=0, length=5, type=0
+[1768333483] Token at byte 15..18 -> line=0, col=15, delta_line=0, delta_start=10, length=3, type=8
+[1768333483] === compile_changed_files called with 1 changed files ===
+[1768333483] Root files to compile: 2
+[1768333483] Primary root file: FileId(1)
+[1768333483] Token at byte 0..5 -> line=0, col=0, delta_line=0, delta_start=0, length=5, type=0
+[1768333483] Token at byte 15..18 -> line=0, col=15, delta_line=0, delta_start=10, length=3, type=8
+[1768333483] === compile_changed_files called with 1 changed files ===
+[1768333483] Root files to compile: 2
+[1768333483] Primary root file: FileId(1)
+[1768333484] Token at byte 0..5 -> line=0, col=0, delta_line=0, delta_start=0, length=5, type=0
+[1768333484] Token at byte 15..18 -> line=0, col=15, delta_line=0, delta_start=10, length=3, type=8
+[1768333484] === compile_changed_files called with 1 changed files ===
+[1768333484] Root files to compile: 2
+[1768333484] Primary root file: FileId(1)
+[1768333484] === compile_changed_files called with 1 changed files ===
+[1768333484] Root files to compile: 2
+[1768333484] Primary root file: FileId(1)
+[1768333484] Token at byte 0..5 -> line=0, col=0, delta_line=0, delta_start=0, length=5, type=0
+[1768333484] Token at byte 15..18 -> line=0, col=15, delta_line=0, delta_start=10, length=3, type=8
+[1768333484] Token at byte 0..5 -> line=0, col=0, delta_line=0, delta_start=0, length=5, type=0
+[1768333484] Token at byte 15..18 -> line=0, col=15, delta_line=0, delta_start=10, length=3, type=8
+[1768333484] === compile_changed_files called with 1 changed files ===
+[1768333484] Root files to compile: 2
+[1768333484] Primary root file: FileId(1)
+[1768333484] Token at byte 0..5 -> line=0, col=0, delta_line=0, delta_start=0, length=5, type=0
+[1768333484] Token at byte 15..18 -> line=0, col=15, delta_line=0, delta_start=10, length=3, type=8
+[1768333484] === compile_changed_files called with 1 changed files ===
+[1768333484] Root files to compile: 2
+[1768333484] Primary root file: FileId(1)
+[1768333484] Token at byte 0..5 -> line=0, col=0, delta_line=0, delta_start=0, length=5, type=0
+[1768333484] Token at byte 15..18 -> line=0, col=15, delta_line=0, delta_start=10, length=3, type=8
+[1768333485] === compile_changed_files called with 1 changed files ===
+[1768333485] Root files to compile: 2
+[1768333485] Primary root file: FileId(1)
+[1768333485] Token at byte 0..5 -> line=0, col=0, delta_line=0, delta_start=0, length=5, type=0
+[1768333485] Token at byte 15..18 -> line=0, col=15, delta_line=0, delta_start=10, length=3, type=8
+[1768333485] === compile_changed_files called with 1 changed files ===
+[1768333485] Root files to compile: 2
+[1768333485] Primary root file: FileId(1)
+[1768333485] Token at byte 0..5 -> line=0, col=0, delta_line=0, delta_start=0, length=5, type=0
+[1768333485] Token at byte 15..18 -> line=0, col=15, delta_line=0, delta_start=10, length=3, type=8
+[1768333485] === compile_changed_files called with 1 changed files ===
+[1768333485] Root files to compile: 2
+[1768333485] Primary root file: FileId(1)
+[1768333485] Token at byte 0..5 -> line=0, col=0, delta_line=0, delta_start=0, length=5, type=0
+[1768333485] Token at byte 15..18 -> line=0, col=15, delta_line=0, delta_start=10, length=3, type=8
+[1768333486] === compile_changed_files called with 1 changed files ===
+[1768333486] Root files to compile: 2
+[1768333486] Primary root file: FileId(1)
+[1768333486] Building HIR...
+[1768333486] No diagnostics, taking HIR
+[1768333486] HIR built: Some
+[1768333486] Building semantic index...
+[1768333486] Calling build_semantic_index_multi...
+[1768333486] file_csts has 2 files
+[1768333486] build_semantic_index_multi: file_csts has 2 files
+[1768333486] Found root CST, calling build_semantic_index...
+[1768333486] build_semantic_index called with CST having 1 blocks
+[1768333486] About to call build_symbol_table...
+[1768333486] build_symbol_table returned 67 symbols
+[1768333486] build_semantic_index returned 67 symbols
+[1768333486] Semantic index built: 67 symbols
+[1768333486] Processing Use statement:
+[1768333486]   use_keyword: 0..3 = 'use'
+[1768333486]   from_keyword: 10..14 = 'from'
+[1768333486]   selector: 4..9 = 'print'
+[1768333486]   path: 15..18 = 'std'
+[1768333486] Token at byte 0..3 -> line=0, col=0, delta_line=0, delta_start=0, length=3, type=3
+[1768333486] Token at byte 4..9 -> line=0, col=4, delta_line=0, delta_start=1, length=5, type=0
+[1768333486] Token at byte 10..14 -> line=0, col=10, delta_line=0, delta_start=1, length=4, type=3
+[1768333486] Token at byte 15..18 -> line=0, col=15, delta_line=0, delta_start=1, length=3, type=8
+[1768335199] === compile_changed_files called with 1 changed files ===
+[1768335199] Root files to compile: 1
+[1768335199] Primary root file: FileId(0)
+[1768335199] Building HIR...
+[1768335199] No diagnostics, taking HIR
+[1768335199] HIR built: Some
+[1768335199] Building semantic index...
+[1768335199] Calling build_semantic_index_multi...
+[1768335199] file_csts has 1 files
+[1768335199] build_semantic_index_multi: file_csts has 1 files
+[1768335199] Found root CST, calling build_semantic_index...
+[1768335199] build_semantic_index called with CST having 1 blocks
+[1768335199] About to call build_symbol_table...
+[1768335199] build_symbol_table returned 46 symbols
+[1768335199] build_semantic_index returned 46 symbols
+[1768335199] Semantic index built: 46 symbols
+[1768335201] Processing Use statement:
+[1768335201]   use_keyword: 0..3 = 'use'
+[1768335201]   from_keyword: 10..14 = 'from'
+[1768335201]   selector: 4..9 = 'print'
+[1768335201]   path: 15..18 = 'std'
+[1768335201] Token at byte 0..3 -> line=0, col=0, delta_line=0, delta_start=0, length=3, type=3
+[1768335201] Token at byte 4..9 -> line=0, col=4, delta_line=0, delta_start=1, length=5, type=0
+[1768335201] Token at byte 10..14 -> line=0, col=10, delta_line=0, delta_start=1, length=4, type=3
+[1768335201] Token at byte 15..18 -> line=0, col=15, delta_line=0, delta_start=1, length=3, type=8
+[1768335201] Processing Use statement:
+[1768335201]   use_keyword: 0..3 = 'use'
+[1768335201]   from_keyword: 10..14 = 'from'
+[1768335201]   selector: 4..9 = 'print'
+[1768335201]   path: 15..18 = 'std'
+[1768335201] Token at byte 0..3 -> line=0, col=0, delta_line=0, delta_start=0, length=3, type=3
+[1768335201] Token at byte 4..9 -> line=0, col=4, delta_line=0, delta_start=1, length=5, type=0
+[1768335201] Token at byte 10..14 -> line=0, col=10, delta_line=0, delta_start=1, length=4, type=3
+[1768335201] Token at byte 15..18 -> line=0, col=15, delta_line=0, delta_start=1, length=3, type=8
+[1768335205] === compile_changed_files called with 1 changed files ===
+[1768335205] Root files to compile: 2
+[1768335205] Primary root file: FileId(1)
+[1768335205] Building HIR...
+[1768335205] No diagnostics, taking HIR
+[1768335205] HIR built: Some
+[1768335205] Building semantic index...
+[1768335205] Calling build_semantic_index_multi...
+[1768335205] file_csts has 2 files
+[1768335205] build_semantic_index_multi: file_csts has 2 files
+[1768335205] Found root CST, calling build_semantic_index...
+[1768335205] build_semantic_index called with CST having 1 blocks
+[1768335205] About to call build_symbol_table...
+[1768335205] build_symbol_table returned 48 symbols
+[1768335205] build_semantic_index returned 48 symbols
+[1768335205] Semantic index built: 48 symbols
+[1768335205] Processing Use statement:
+[1768335205]   use_keyword: 0..3 = 'use'
+[1768335205]   from_keyword: 10..14 = 'from'
+[1768335205]   selector: 4..9 = 'print'
+[1768335205]   path: 15..18 = 'std'
+[1768335205] Token at byte 0..3 -> line=0, col=0, delta_line=0, delta_start=0, length=3, type=3
+[1768335205] Token at byte 4..9 -> line=0, col=4, delta_line=0, delta_start=1, length=5, type=0
+[1768335205] Token at byte 10..14 -> line=0, col=10, delta_line=0, delta_start=1, length=4, type=3
+[1768335205] Token at byte 15..18 -> line=0, col=15, delta_line=0, delta_start=1, length=3, type=8
+[1768335205] Token at byte 21..24 -> line=2, col=0, delta_line=2, delta_start=0, length=3, type=3
+[1768335205] Token at byte 105..110 -> line=5, col=16, delta_line=3, delta_start=16, length=0, type=7
+[1768335205] Token at byte 126..131 -> line=6, col=16, delta_line=1, delta_start=16, length=0, type=7
+[1768335205] Token at byte 147..183 -> line=7, col=16, delta_line=1, delta_start=16, length=0, type=7
+[1768335205] Token at byte 251..300 -> line=10, col=19, delta_line=3, delta_start=19, length=0, type=7
+[1768335205] Token at byte 370..422 -> line=13, col=20, delta_line=3, delta_start=20, length=0, type=7
+[1768335205] Token at byte 479..509 -> line=16, col=18, delta_line=3, delta_start=18, length=0, type=7
+[1768335205] Token at byte 564..596 -> line=19, col=18, delta_line=3, delta_start=18, length=0, type=7
+[1768335205] Token at byte 649..692 -> line=22, col=17, delta_line=3, delta_start=17, length=0, type=7
+[1768335205] Token at byte 763..799 -> line=25, col=22, delta_line=3, delta_start=22, length=0, type=7
+[1768335205] Token at byte 856..876 -> line=28, col=20, delta_line=3, delta_start=20, length=0, type=7
+[1768335205] Token at byte 896..935 -> line=29, col=20, delta_line=1, delta_start=20, length=0, type=7
+[1768335205] Token at byte 955..1007 -> line=30, col=20, delta_line=1, delta_start=20, length=0, type=7
+[1768335205] Token at byte 1009..1012 -> line=33, col=0, delta_line=3, delta_start=0, length=3, type=3
+[1768335205] Processing Use statement:
+[1768335205]   use_keyword: 0..3 = 'use'
+[1768335205]   from_keyword: 10..14 = 'from'
+[1768335205]   selector: 4..9 = 'print'
+[1768335205]   path: 15..18 = 'std'
+[1768335205] Token at byte 0..3 -> line=0, col=0, delta_line=0, delta_start=0, length=3, type=3
+[1768335205] Token at byte 4..9 -> line=0, col=4, delta_line=0, delta_start=1, length=5, type=0
+[1768335205] Token at byte 10..14 -> line=0, col=10, delta_line=0, delta_start=1, length=4, type=3
+[1768335205] Token at byte 15..18 -> line=0, col=15, delta_line=0, delta_start=1, length=3, type=8
+[1768335205] Token at byte 21..24 -> line=2, col=0, delta_line=2, delta_start=0, length=3, type=3
+[1768335205] Token at byte 105..110 -> line=5, col=16, delta_line=3, delta_start=16, length=0, type=7
+[1768335205] Token at byte 126..131 -> line=6, col=16, delta_line=1, delta_start=16, length=0, type=7
+[1768335205] Token at byte 147..183 -> line=7, col=16, delta_line=1, delta_start=16, length=0, type=7
+[1768335205] Token at byte 251..300 -> line=10, col=19, delta_line=3, delta_start=19, length=0, type=7
+[1768335205] Token at byte 370..422 -> line=13, col=20, delta_line=3, delta_start=20, length=0, type=7
+[1768335205] Token at byte 479..509 -> line=16, col=18, delta_line=3, delta_start=18, length=0, type=7
+[1768335205] Token at byte 564..596 -> line=19, col=18, delta_line=3, delta_start=18, length=0, type=7
+[1768335205] Token at byte 649..692 -> line=22, col=17, delta_line=3, delta_start=17, length=0, type=7
+[1768335205] Token at byte 763..799 -> line=25, col=22, delta_line=3, delta_start=22, length=0, type=7
+[1768335205] Token at byte 856..876 -> line=28, col=20, delta_line=3, delta_start=20, length=0, type=7
+[1768335205] Token at byte 896..935 -> line=29, col=20, delta_line=1, delta_start=20, length=0, type=7
+[1768335205] Token at byte 955..1007 -> line=30, col=20, delta_line=1, delta_start=20, length=0, type=7
+[1768335205] Token at byte 1009..1012 -> line=33, col=0, delta_line=3, delta_start=0, length=3, type=3
+[1768335266] === compile_changed_files called with 1 changed files ===
+[1768335266] Root files to compile: 1
+[1768335266] Primary root file: FileId(0)
+[1768335266] Building HIR...
+[1768335266] No diagnostics, taking HIR
+[1768335266] HIR built: Some
+[1768335266] Building semantic index...
+[1768335266] Calling build_semantic_index_multi...
+[1768335266] file_csts has 1 files
+[1768335266] build_semantic_index_multi: file_csts has 1 files
+[1768335266] Found root CST, calling build_semantic_index...
+[1768335266] build_semantic_index called with CST having 1 blocks
+[1768335266] About to call build_symbol_table...
+[1768335266] build_symbol_table returned 83 symbols
+[1768335266] build_semantic_index returned 83 symbols
+[1768335266] Semantic index built: 83 symbols
+[1768335267] Processing Use statement:
+[1768335267]   use_keyword: 0..3 = 'use'
+[1768335267]   from_keyword: 10..14 = 'from'
+[1768335267]   selector: 4..9 = 'print'
+[1768335267]   path: 15..18 = 'std'
+[1768335267] Token at byte 0..2 -> line=0, col=0, delta_line=0, delta_start=0, length=2, type=1
+[1768335267] Token at byte 4..9 -> line=0, col=4, delta_line=0, delta_start=2, length=5, type=0
+[1768335267] Token at byte 10..14 -> line=0, col=10, delta_line=0, delta_start=1, length=4, type=3
+[1768335267] Token at byte 15..18 -> line=0, col=15, delta_line=0, delta_start=1, length=3, type=8
+[1768335267] Token at byte 21..24 -> line=2, col=0, delta_line=2, delta_start=0, length=3, type=3
+[1768335267] Token at byte 25..27 -> line=2, col=4, delta_line=0, delta_start=1, length=2, type=1
+[1768335267] Token at byte 105..110 -> line=5, col=16, delta_line=3, delta_start=16, length=0, type=7
+[1768335267] Token at byte 126..131 -> line=6, col=16, delta_line=1, delta_start=16, length=0, type=7
+[1768335267] Token at byte 147..183 -> line=7, col=16, delta_line=1, delta_start=16, length=0, type=7
+[1768335267] Token at byte 251..300 -> line=10, col=19, delta_line=3, delta_start=19, length=0, type=7
+[1768335267] Token at byte 370..422 -> line=13, col=20, delta_line=3, delta_start=20, length=0, type=7
+[1768335267] Token at byte 479..509 -> line=16, col=18, delta_line=3, delta_start=18, length=0, type=7
+[1768335267] Token at byte 564..596 -> line=19, col=18, delta_line=3, delta_start=18, length=0, type=7
+[1768335267] Token at byte 649..692 -> line=22, col=17, delta_line=3, delta_start=17, length=0, type=7
+[1768335267] Token at byte 763..799 -> line=25, col=22, delta_line=3, delta_start=22, length=0, type=7
+[1768335267] Token at byte 856..876 -> line=28, col=20, delta_line=3, delta_start=20, length=0, type=7
+[1768335267] Token at byte 896..935 -> line=29, col=20, delta_line=1, delta_start=20, length=0, type=7
+[1768335267] Token at byte 955..1007 -> line=30, col=20, delta_line=1, delta_start=20, length=0, type=7
+[1768335267] Token at byte 1009..1012 -> line=33, col=0, delta_line=3, delta_start=0, length=3, type=3
+[1768335267] Token at byte 1013..1015 -> line=33, col=4, delta_line=0, delta_start=1, length=2, type=1
+[1768335296] === compile_changed_files called with 1 changed files ===
+[1768335296] Root files to compile: 2
+[1768335296] Primary root file: FileId(1)
+[1768335296] Building HIR...
+[1768335296] No diagnostics, taking HIR
+[1768335296] HIR built: Some
+[1768335296] Building semantic index...
+[1768335296] Calling build_semantic_index_multi...
+[1768335296] file_csts has 2 files
+[1768335296] build_semantic_index_multi: file_csts has 2 files
+[1768335296] Found root CST, calling build_semantic_index...
+[1768335296] build_semantic_index called with CST having 1 blocks
+[1768335296] About to call build_symbol_table...
+[1768335296] build_symbol_table returned 46 symbols
+[1768335296] build_semantic_index returned 46 symbols
+[1768335296] Semantic index built: 46 symbols
+[1768335296] Processing Use statement:
+[1768335296]   use_keyword: 0..3 = 'use'
+[1768335296]   from_keyword: 10..14 = 'from'
+[1768335296]   selector: 4..9 = 'print'
+[1768335296]   path: 15..18 = 'std'
+[1768335296] Token at byte 0..3 -> line=0, col=0, delta_line=0, delta_start=0, length=3, type=3
+[1768335296] Token at byte 4..9 -> line=0, col=4, delta_line=0, delta_start=1, length=5, type=0
+[1768335296] Token at byte 10..14 -> line=0, col=10, delta_line=0, delta_start=1, length=4, type=3
+[1768335296] Token at byte 15..18 -> line=0, col=15, delta_line=0, delta_start=1, length=3, type=8
+[1768335296] Processing Use statement:
+[1768335296]   use_keyword: 0..3 = 'use'
+[1768335296]   from_keyword: 10..14 = 'from'
+[1768335296]   selector: 4..9 = 'print'
+[1768335296]   path: 15..18 = 'std'
+[1768335296] Token at byte 0..3 -> line=0, col=0, delta_line=0, delta_start=0, length=3, type=3
+[1768335296] Token at byte 4..9 -> line=0, col=4, delta_line=0, delta_start=1, length=5, type=0
+[1768335296] Token at byte 10..14 -> line=0, col=10, delta_line=0, delta_start=1, length=4, type=3
+[1768335296] Token at byte 15..18 -> line=0, col=15, delta_line=0, delta_start=1, length=3, type=8
+[1768337438] === compile_changed_files called with 1 changed files ===
+[1768337438] Root files to compile: 1
+[1768337438] Primary root file: FileId(0)
+[1768337438] Building HIR...
+[1768337438] No diagnostics, taking HIR
+[1768337438] HIR built: Some
+[1768337438] Building semantic index...
+[1768337438] Calling build_semantic_index_multi...
+[1768337438] file_csts has 1 files
+[1768337438] build_semantic_index_multi: file_csts has 1 files
+[1768337438] Found root CST, calling build_semantic_index...
+[1768337438] build_semantic_index called with CST having 1 blocks
+[1768337438] About to call build_symbol_table...
+[1768337438] build_symbol_table returned 46 symbols
+[1768337438] build_semantic_index returned 46 symbols
+[1768337438] Semantic index built: 46 symbols
+[1768337440] Processing Use statement:
+[1768337440]   use_keyword: 0..3 = 'use'
+[1768337440]   from_keyword: 10..14 = 'from'
+[1768337440]   selector: 4..9 = 'print'
+[1768337440]   path: 15..18 = 'std'
+[1768337440] Token at byte 0..3 -> line=0, col=0, delta_line=0, delta_start=0, length=3, type=3
+[1768337440] Token at byte 4..9 -> line=0, col=4, delta_line=0, delta_start=1, length=5, type=0
+[1768337440] Token at byte 10..14 -> line=0, col=10, delta_line=0, delta_start=1, length=4, type=3
+[1768337440] Token at byte 15..18 -> line=0, col=15, delta_line=0, delta_start=1, length=3, type=8
+[1768337440] Processing Use statement:
+[1768337440]   use_keyword: 0..3 = 'use'
+[1768337440]   from_keyword: 10..14 = 'from'
+[1768337440]   selector: 4..9 = 'print'
+[1768337440]   path: 15..18 = 'std'
+[1768337440] Token at byte 0..3 -> line=0, col=0, delta_line=0, delta_start=0, length=3, type=3
+[1768337440] Token at byte 4..9 -> line=0, col=4, delta_line=0, delta_start=1, length=5, type=0
+[1768337440] Token at byte 10..14 -> line=0, col=10, delta_line=0, delta_start=1, length=4, type=3
+[1768337440] Token at byte 15..18 -> line=0, col=15, delta_line=0, delta_start=1, length=3, type=8
+[1768337755] === compile_changed_files called with 1 changed files ===
+[1768337755] Root files to compile: 1
+[1768337755] Primary root file: FileId(0)
+[1768337755] Building HIR...
+[1768337755] No diagnostics, taking HIR
+[1768337755] HIR built: Some
+[1768337755] Building semantic index...
+[1768337755] Calling build_semantic_index_multi...
+[1768337755] file_csts has 1 files
+[1768337755] build_semantic_index_multi: file_csts has 1 files
+[1768337755] Found root CST, calling build_semantic_index...
+[1768337755] build_semantic_index called with CST having 1 blocks
+[1768337755] About to call build_symbol_table...
+[1768337755] build_symbol_table returned 46 symbols
+[1768337755] build_semantic_index returned 46 symbols
+[1768337755] Semantic index built: 46 symbols
+[1768337756] Processing Use statement:
+[1768337756]   use_keyword: 0..3 = 'use'
+[1768337756]   from_keyword: 10..14 = 'from'
+[1768337756]   selector: 4..9 = 'print'
+[1768337756]   path: 15..18 = 'std'
+[1768337756] Token at byte 0..3 -> line=0, col=0, delta_line=0, delta_start=0, length=3, type=3
+[1768337756] Token at byte 4..9 -> line=0, col=4, delta_line=0, delta_start=1, length=5, type=0
+[1768337756] Token at byte 10..14 -> line=0, col=10, delta_line=0, delta_start=1, length=4, type=3
+[1768337756] Token at byte 15..18 -> line=0, col=15, delta_line=0, delta_start=1, length=3, type=8
+[1768337757] Processing Use statement:
+[1768337757]   use_keyword: 0..3 = 'use'
+[1768337757]   from_keyword: 10..14 = 'from'
+[1768337757]   selector: 4..9 = 'print'
+[1768337757]   path: 15..18 = 'std'
+[1768337757] Token at byte 0..3 -> line=0, col=0, delta_line=0, delta_start=0, length=3, type=3
+[1768337757] Token at byte 4..9 -> line=0, col=4, delta_line=0, delta_start=1, length=5, type=0
+[1768337757] Token at byte 10..14 -> line=0, col=10, delta_line=0, delta_start=1, length=4, type=3
+[1768337757] Token at byte 15..18 -> line=0, col=15, delta_line=0, delta_start=1, length=3, type=8
+[1768337761] === compile_changed_files called with 1 changed files ===
+[1768337761] Root files to compile: 2
+[1768337761] Primary root file: FileId(1)
+[1768337761] Building HIR...
+[1768337761] No diagnostics, taking HIR
+[1768337761] HIR built: Some
+[1768337761] Building semantic index...
+[1768337761] Calling build_semantic_index_multi...
+[1768337761] file_csts has 2 files
+[1768337761] build_semantic_index_multi: file_csts has 2 files
+[1768337761] Found root CST, calling build_semantic_index...
+[1768337761] build_semantic_index called with CST having 1 blocks
+[1768337761] About to call build_symbol_table...
+[1768337761] build_symbol_table returned 83 symbols
+[1768337761] build_semantic_index returned 83 symbols
+[1768337761] Semantic index built: 83 symbols
+[1768337761] Processing Use statement:
+[1768337761]   use_keyword: 0..3 = 'use'
+[1768337761]   from_keyword: 10..14 = 'from'
+[1768337761]   selector: 4..9 = 'print'
+[1768337761]   path: 15..18 = 'std'
+[1768337761] Token at byte 0..2 -> line=0, col=0, delta_line=0, delta_start=0, length=2, type=1
+[1768337761] Token at byte 4..9 -> line=0, col=4, delta_line=0, delta_start=2, length=5, type=0
+[1768337761] Token at byte 10..14 -> line=0, col=10, delta_line=0, delta_start=1, length=4, type=3
+[1768337761] Token at byte 15..18 -> line=0, col=15, delta_line=0, delta_start=1, length=3, type=8
+[1768337761] Token at byte 21..24 -> line=2, col=0, delta_line=2, delta_start=0, length=3, type=3
+[1768337761] Token at byte 25..27 -> line=2, col=4, delta_line=0, delta_start=1, length=2, type=1
+[1768337761] Token at byte 105..110 -> line=5, col=16, delta_line=3, delta_start=16, length=0, type=7
+[1768337761] Token at byte 126..131 -> line=6, col=16, delta_line=1, delta_start=16, length=0, type=7
+[1768337761] Token at byte 147..183 -> line=7, col=16, delta_line=1, delta_start=16, length=0, type=7
+[1768337761] Token at byte 251..300 -> line=10, col=19, delta_line=3, delta_start=19, length=0, type=7
+[1768337761] Token at byte 370..422 -> line=13, col=20, delta_line=3, delta_start=20, length=0, type=7
+[1768337761] Token at byte 479..509 -> line=16, col=18, delta_line=3, delta_start=18, length=0, type=7
+[1768337761] Token at byte 564..596 -> line=19, col=18, delta_line=3, delta_start=18, length=0, type=7
+[1768337761] Token at byte 649..692 -> line=22, col=17, delta_line=3, delta_start=17, length=0, type=7
+[1768337761] Token at byte 763..799 -> line=25, col=22, delta_line=3, delta_start=22, length=0, type=7
+[1768337761] Token at byte 856..876 -> line=28, col=20, delta_line=3, delta_start=20, length=0, type=7
+[1768337761] Token at byte 896..935 -> line=29, col=20, delta_line=1, delta_start=20, length=0, type=7
+[1768337761] Token at byte 955..1007 -> line=30, col=20, delta_line=1, delta_start=20, length=0, type=7
+[1768337761] Token at byte 1009..1012 -> line=33, col=0, delta_line=3, delta_start=0, length=3, type=3
+[1768337761] Token at byte 1013..1015 -> line=33, col=4, delta_line=0, delta_start=1, length=2, type=1
+[1768337761] Processing Use statement:
+[1768337761]   use_keyword: 0..3 = 'use'
+[1768337761]   from_keyword: 10..14 = 'from'
+[1768337761]   selector: 4..9 = 'print'
+[1768337761]   path: 15..18 = 'std'
+[1768337761] Token at byte 0..2 -> line=0, col=0, delta_line=0, delta_start=0, length=2, type=1
+[1768337761] Token at byte 4..9 -> line=0, col=4, delta_line=0, delta_start=2, length=5, type=0
+[1768337761] Token at byte 10..14 -> line=0, col=10, delta_line=0, delta_start=1, length=4, type=3
+[1768337761] Token at byte 15..18 -> line=0, col=15, delta_line=0, delta_start=1, length=3, type=8
+[1768337761] Token at byte 21..24 -> line=2, col=0, delta_line=2, delta_start=0, length=3, type=3
+[1768337761] Token at byte 25..27 -> line=2, col=4, delta_line=0, delta_start=1, length=2, type=1
+[1768337761] Token at byte 105..110 -> line=5, col=16, delta_line=3, delta_start=16, length=0, type=7
+[1768337761] Token at byte 126..131 -> line=6, col=16, delta_line=1, delta_start=16, length=0, type=7
+[1768337761] Token at byte 147..183 -> line=7, col=16, delta_line=1, delta_start=16, length=0, type=7
+[1768337761] Token at byte 251..300 -> line=10, col=19, delta_line=3, delta_start=19, length=0, type=7
+[1768337761] Token at byte 370..422 -> line=13, col=20, delta_line=3, delta_start=20, length=0, type=7
+[1768337761] Token at byte 479..509 -> line=16, col=18, delta_line=3, delta_start=18, length=0, type=7
+[1768337761] Token at byte 564..596 -> line=19, col=18, delta_line=3, delta_start=18, length=0, type=7
+[1768337761] Token at byte 649..692 -> line=22, col=17, delta_line=3, delta_start=17, length=0, type=7
+[1768337761] Token at byte 763..799 -> line=25, col=22, delta_line=3, delta_start=22, length=0, type=7
+[1768337761] Token at byte 856..876 -> line=28, col=20, delta_line=3, delta_start=20, length=0, type=7
+[1768337761] Token at byte 896..935 -> line=29, col=20, delta_line=1, delta_start=20, length=0, type=7
+[1768337761] Token at byte 955..1007 -> line=30, col=20, delta_line=1, delta_start=20, length=0, type=7
+[1768337761] Token at byte 1009..1012 -> line=33, col=0, delta_line=3, delta_start=0, length=3, type=3
+[1768337761] Token at byte 1013..1015 -> line=33, col=4, delta_line=0, delta_start=1, length=2, type=1
+[1768338061] === compile_changed_files called with 1 changed files ===
+[1768338061] Root files to compile: 1
+[1768338061] Primary root file: FileId(0)
+[1768338061] Building HIR...
+[1768338061] No diagnostics, taking HIR
+[1768338061] HIR built: Some
+[1768338061] Building symbol table from SymbolResolver...
+[1768338061] Symbol table built: 2 symbols
+[1768338062] Processing Use statement:
+[1768338062]   use_keyword: 0..3 = 'use'
+[1768338062]   from_keyword: 10..14 = 'from'
+[1768338062]   selector: 4..9 = 'print'
+[1768338062]   path: 15..18 = 'std'
+[1768338062] Token at byte 0..3 -> line=0, col=0, delta_line=0, delta_start=0, length=3, type=3
+[1768338062] Token at byte 4..9 -> line=0, col=4, delta_line=0, delta_start=1, length=5, type=1
+[1768338062] Token at byte 10..14 -> line=0, col=10, delta_line=0, delta_start=1, length=4, type=3
+[1768338062] Token at byte 15..18 -> line=0, col=15, delta_line=0, delta_start=1, length=3, type=4
+[1768338062] Token at byte 21..24 -> line=2, col=0, delta_line=2, delta_start=0, length=3, type=3
+[1768338062] Token at byte 25..27 -> line=2, col=4, delta_line=0, delta_start=1, length=2, type=1
+[1768338062] Token at byte 105..110 -> line=5, col=16, delta_line=3, delta_start=16, length=4, type=7
+[1768338062] Token at byte 126..131 -> line=6, col=16, delta_line=1, delta_start=16, length=4, type=7
+[1768338062] Token at byte 147..183 -> line=7, col=16, delta_line=1, delta_start=16, length=35, type=7
+[1768338062] Token at byte 251..300 -> line=10, col=19, delta_line=3, delta_start=19, length=48, type=7
+[1768338062] Token at byte 370..422 -> line=13, col=20, delta_line=3, delta_start=20, length=51, type=7
+[1768338062] Token at byte 479..509 -> line=16, col=18, delta_line=3, delta_start=18, length=29, type=7
+[1768338062] Token at byte 564..596 -> line=19, col=18, delta_line=3, delta_start=18, length=31, type=7
+[1768338062] Token at byte 649..692 -> line=22, col=17, delta_line=3, delta_start=17, length=42, type=7
+[1768338062] Token at byte 763..799 -> line=25, col=22, delta_line=3, delta_start=22, length=35, type=7
+[1768338062] Token at byte 856..876 -> line=28, col=20, delta_line=3, delta_start=20, length=19, type=7
+[1768338062] Token at byte 896..935 -> line=29, col=20, delta_line=1, delta_start=20, length=38, type=7
+[1768338062] Token at byte 955..1007 -> line=30, col=20, delta_line=1, delta_start=20, length=51, type=7
+[1768338062] Token at byte 1009..1012 -> line=33, col=0, delta_line=3, delta_start=0, length=3, type=3
+[1768338062] Token at byte 1013..1015 -> line=33, col=4, delta_line=0, delta_start=1, length=2, type=1
+[1768338063] Processing Use statement:
+[1768338063]   use_keyword: 0..3 = 'use'
+[1768338063]   from_keyword: 10..14 = 'from'
+[1768338063]   selector: 4..9 = 'print'
+[1768338063]   path: 15..18 = 'std'
+[1768338063] Token at byte 0..3 -> line=0, col=0, delta_line=0, delta_start=0, length=3, type=3
+[1768338063] Token at byte 4..9 -> line=0, col=4, delta_line=0, delta_start=1, length=5, type=1
+[1768338063] Token at byte 10..14 -> line=0, col=10, delta_line=0, delta_start=1, length=4, type=3
+[1768338063] Token at byte 15..18 -> line=0, col=15, delta_line=0, delta_start=1, length=3, type=4
+[1768338063] Token at byte 21..24 -> line=2, col=0, delta_line=2, delta_start=0, length=3, type=3
+[1768338063] Token at byte 25..27 -> line=2, col=4, delta_line=0, delta_start=1, length=2, type=1
+[1768338063] Token at byte 105..110 -> line=5, col=16, delta_line=3, delta_start=16, length=4, type=7
+[1768338063] Token at byte 126..131 -> line=6, col=16, delta_line=1, delta_start=16, length=4, type=7
+[1768338063] Token at byte 147..183 -> line=7, col=16, delta_line=1, delta_start=16, length=35, type=7
+[1768338063] Token at byte 251..300 -> line=10, col=19, delta_line=3, delta_start=19, length=48, type=7
+[1768338063] Token at byte 370..422 -> line=13, col=20, delta_line=3, delta_start=20, length=51, type=7
+[1768338063] Token at byte 479..509 -> line=16, col=18, delta_line=3, delta_start=18, length=29, type=7
+[1768338063] Token at byte 564..596 -> line=19, col=18, delta_line=3, delta_start=18, length=31, type=7
+[1768338063] Token at byte 649..692 -> line=22, col=17, delta_line=3, delta_start=17, length=42, type=7
+[1768338063] Token at byte 763..799 -> line=25, col=22, delta_line=3, delta_start=22, length=35, type=7
+[1768338063] Token at byte 856..876 -> line=28, col=20, delta_line=3, delta_start=20, length=19, type=7
+[1768338063] Token at byte 896..935 -> line=29, col=20, delta_line=1, delta_start=20, length=38, type=7
+[1768338063] Token at byte 955..1007 -> line=30, col=20, delta_line=1, delta_start=20, length=51, type=7
+[1768338063] Token at byte 1009..1012 -> line=33, col=0, delta_line=3, delta_start=0, length=3, type=3
+[1768338063] Token at byte 1013..1015 -> line=33, col=4, delta_line=0, delta_start=1, length=2, type=1
+[1768338098] === compile_changed_files called with 1 changed files ===
+[1768338098] Root files to compile: 2
+[1768338098] Primary root file: FileId(0)
+[1768338098] Building HIR...
+[1768338098] Using partial HIR despite 1 diagnostics
+[1768338098] HIR built: Some
+[1768338098] Building symbol table from SymbolResolver...
+[1768338098] Symbol table built: 0 symbols
+[1768338098] Processing Use statement:
+[1768338098]   use_keyword: 0..3 = 'use'
+[1768338098]   from_keyword: 10..14 = 'from'
+[1768338098]   selector: 4..9 = 'print'
+[1768338098]   path: 15..18 = 'std'
+[1768338098] Token at byte 0..3 -> line=0, col=0, delta_line=0, delta_start=0, length=3, type=3
+[1768338098] Token at byte 4..9 -> line=0, col=4, delta_line=0, delta_start=1, length=5, type=1
+[1768338098] Token at byte 10..14 -> line=0, col=10, delta_line=0, delta_start=1, length=4, type=3
+[1768338098] Token at byte 15..18 -> line=0, col=15, delta_line=0, delta_start=1, length=3, type=4
+[1768338098] Processing Use statement:
+[1768338098]   use_keyword: 0..3 = 'use'
+[1768338098]   from_keyword: 10..14 = 'from'
+[1768338098]   selector: 4..9 = 'print'
+[1768338098]   path: 15..18 = 'std'
+[1768338098] Token at byte 0..3 -> line=0, col=0, delta_line=0, delta_start=0, length=3, type=3
+[1768338098] Token at byte 4..9 -> line=0, col=4, delta_line=0, delta_start=1, length=5, type=1
+[1768338098] Token at byte 10..14 -> line=0, col=10, delta_line=0, delta_start=1, length=4, type=3
+[1768338098] Token at byte 15..18 -> line=0, col=15, delta_line=0, delta_start=1, length=3, type=4
+[1768338101] === compile_changed_files called with 1 changed files ===
+[1768338101] Root files to compile: 2
+[1768338101] Primary root file: FileId(0)
+[1768338101] Building HIR...
+[1768338101] Using partial HIR despite 1 diagnostics
+[1768338101] HIR built: Some
+[1768338101] Building symbol table from SymbolResolver...
+[1768338101] Symbol table built: 0 symbols
+[1768338101] Processing Use statement:
+[1768338101]   use_keyword: 0..3 = 'use'
+[1768338101]   from_keyword: 10..14 = 'from'
+[1768338101]   selector: 4..9 = 'print'
+[1768338101]   path: 15..18 = 'std'
+[1768338101] Token at byte 0..3 -> line=0, col=0, delta_line=0, delta_start=0, length=3, type=3
+[1768338101] Token at byte 4..9 -> line=0, col=4, delta_line=0, delta_start=1, length=5, type=1
+[1768338101] Token at byte 10..14 -> line=0, col=10, delta_line=0, delta_start=1, length=4, type=3
+[1768338101] Token at byte 15..18 -> line=0, col=15, delta_line=0, delta_start=1, length=3, type=4
+[1768338101] Token at byte 21..24 -> line=2, col=0, delta_line=2, delta_start=0, length=3, type=3
+[1768338101] Token at byte 105..110 -> line=5, col=16, delta_line=3, delta_start=16, length=4, type=7
+[1768338101] Token at byte 126..131 -> line=6, col=16, delta_line=1, delta_start=16, length=4, type=7
+[1768338101] Token at byte 147..183 -> line=7, col=16, delta_line=1, delta_start=16, length=35, type=7
+[1768338101] Token at byte 251..300 -> line=10, col=19, delta_line=3, delta_start=19, length=48, type=7
+[1768338101] Token at byte 370..422 -> line=13, col=20, delta_line=3, delta_start=20, length=51, type=7
+[1768338101] Token at byte 479..509 -> line=16, col=18, delta_line=3, delta_start=18, length=29, type=7
+[1768338101] Token at byte 564..596 -> line=19, col=18, delta_line=3, delta_start=18, length=31, type=7
+[1768338101] Token at byte 649..692 -> line=22, col=17, delta_line=3, delta_start=17, length=42, type=7
+[1768338101] Token at byte 763..799 -> line=25, col=22, delta_line=3, delta_start=22, length=35, type=7
+[1768338101] Token at byte 856..876 -> line=28, col=20, delta_line=3, delta_start=20, length=19, type=7
+[1768338101] Token at byte 896..935 -> line=29, col=20, delta_line=1, delta_start=20, length=38, type=7
+[1768338101] Token at byte 955..1007 -> line=30, col=20, delta_line=1, delta_start=20, length=51, type=7
+[1768338101] Token at byte 1009..1012 -> line=33, col=0, delta_line=3, delta_start=0, length=3, type=3
+[1768338101] Processing Use statement:
+[1768338101]   use_keyword: 0..3 = 'use'
+[1768338101]   from_keyword: 10..14 = 'from'
+[1768338101]   selector: 4..9 = 'print'
+[1768338101]   path: 15..18 = 'std'
+[1768338101] Token at byte 0..3 -> line=0, col=0, delta_line=0, delta_start=0, length=3, type=3
+[1768338101] Token at byte 4..9 -> line=0, col=4, delta_line=0, delta_start=1, length=5, type=1
+[1768338101] Token at byte 10..14 -> line=0, col=10, delta_line=0, delta_start=1, length=4, type=3
+[1768338101] Token at byte 15..18 -> line=0, col=15, delta_line=0, delta_start=1, length=3, type=4
+[1768338101] Token at byte 21..24 -> line=2, col=0, delta_line=2, delta_start=0, length=3, type=3
+[1768338101] Token at byte 105..110 -> line=5, col=16, delta_line=3, delta_start=16, length=4, type=7
+[1768338101] Token at byte 126..131 -> line=6, col=16, delta_line=1, delta_start=16, length=4, type=7
+[1768338101] Token at byte 147..183 -> line=7, col=16, delta_line=1, delta_start=16, length=35, type=7
+[1768338101] Token at byte 251..300 -> line=10, col=19, delta_line=3, delta_start=19, length=48, type=7
+[1768338101] Token at byte 370..422 -> line=13, col=20, delta_line=3, delta_start=20, length=51, type=7
+[1768338101] Token at byte 479..509 -> line=16, col=18, delta_line=3, delta_start=18, length=29, type=7
+[1768338101] Token at byte 564..596 -> line=19, col=18, delta_line=3, delta_start=18, length=31, type=7
+[1768338101] Token at byte 649..692 -> line=22, col=17, delta_line=3, delta_start=17, length=42, type=7
+[1768338101] Token at byte 763..799 -> line=25, col=22, delta_line=3, delta_start=22, length=35, type=7
+[1768338101] Token at byte 856..876 -> line=28, col=20, delta_line=3, delta_start=20, length=19, type=7
+[1768338101] Token at byte 896..935 -> line=29, col=20, delta_line=1, delta_start=20, length=38, type=7
+[1768338101] Token at byte 955..1007 -> line=30, col=20, delta_line=1, delta_start=20, length=51, type=7
+[1768338101] Token at byte 1009..1012 -> line=33, col=0, delta_line=3, delta_start=0, length=3, type=3
+[1768518642] === compile_changed_files called with 1 changed files ===
+[1768518642] Root files to compile: 1
+[1768518642] Primary root file: FileId(0)
+[1768518642] Building HIR...
+[1768518642] No diagnostics, taking HIR
+[1768518642] HIR built: Some
+[1768518642] Building symbol table from SymbolResolver...
+[1768518642] Symbol table built: 4 symbols, 39 span mappings
+[1768518642] Processing Use statement:
+[1768518642]   use_keyword: 0..3 = 'use'
+[1768518642]   from_keyword: 10..14 = 'from'
+[1768518642]   selector: 4..9 = 'print'
+[1768518642]   path: 15..18 = 'std'
+[1768518642] Token at line=0, col=0, len=3, delta_line=0, delta_start=0, type=3
+[1768518642] Token at line=0, col=4, len=5, delta_line=0, delta_start=4, type=0
+[1768518642] Token at line=0, col=10, len=4, delta_line=0, delta_start=6, type=3
+[1768518642] Token at line=0, col=15, len=3, delta_line=0, delta_start=5, type=8
+[1768518642] Token at line=2, col=0, len=3, delta_line=2, delta_start=0, type=3
+[1768518642] Token at line=2, col=4, len=2, delta_line=0, delta_start=4, type=1
+[1768518642] Token at line=4, col=0, len=5, delta_line=2, delta_start=0, type=0
+[1768518642] Token at line=4, col=29, len=1, delta_line=0, delta_start=29, type=4
+[1768518642] Token at line=5, col=0, len=5, delta_line=1, delta_start=0, type=0
+[1768518642] Token at line=5, col=6, len=2, delta_line=0, delta_start=6, type=1
+[1768518642] Token at line=5, col=12, len=1, delta_line=0, delta_start=6, type=4
+[1768518642] Token at line=5, col=16, len=4, delta_line=0, delta_start=4, type=7
+[1768518642] Token at line=6, col=0, len=5, delta_line=1, delta_start=0, type=0
+[1768518642] Token at line=6, col=6, len=2, delta_line=0, delta_start=6, type=1
+[1768518642] Token at line=6, col=12, len=1, delta_line=0, delta_start=6, type=4
+[1768518642] Token at line=6, col=16, len=4, delta_line=0, delta_start=4, type=7
+[1768518642] Token at line=7, col=0, len=5, delta_line=1, delta_start=0, type=0
+[1768518642] Token at line=7, col=6, len=2, delta_line=0, delta_start=6, type=1
+[1768518642] Token at line=7, col=9, len=1, delta_line=0, delta_start=3, type=4
+[1768518642] Token at line=7, col=13, len=1, delta_line=0, delta_start=4, type=4
+[1768518642] Token at line=7, col=16, len=35, delta_line=0, delta_start=3, type=7
+[1768518642] Token at line=9, col=0, len=5, delta_line=2, delta_start=0, type=0
+[1768518642] Token at line=9, col=45, len=1, delta_line=0, delta_start=45, type=4
+[1768518642] Token at line=10, col=0, len=5, delta_line=1, delta_start=0, type=0
+[1768518642] Token at line=10, col=6, len=2, delta_line=0, delta_start=6, type=1
+[1768518642] Token at line=10, col=15, len=1, delta_line=0, delta_start=9, type=4
+[1768518642] Token at line=10, col=19, len=48, delta_line=0, delta_start=4, type=7
+[1768518642] Token at line=12, col=0, len=5, delta_line=2, delta_start=0, type=0
+[1768518642] Token at line=12, col=46, len=1, delta_line=0, delta_start=46, type=4
+[1768518642] Token at line=13, col=0, len=5, delta_line=1, delta_start=0, type=0
+[1768518642] Token at line=13, col=6, len=2, delta_line=0, delta_start=6, type=1
+[1768518642] Token at line=13, col=16, len=1, delta_line=0, delta_start=10, type=4
+[1768518642] Token at line=13, col=20, len=51, delta_line=0, delta_start=4, type=7
+[1768518642] Token at line=15, col=0, len=5, delta_line=2, delta_start=0, type=0
+[1768518642] Token at line=15, col=35, len=1, delta_line=0, delta_start=35, type=4
+[1768518642] Token at line=16, col=0, len=5, delta_line=1, delta_start=0, type=0
+[1768518642] Token at line=16, col=6, len=2, delta_line=0, delta_start=6, type=1
+[1768518642] Token at line=16, col=14, len=1, delta_line=0, delta_start=8, type=4
+[1768518642] Token at line=16, col=18, len=29, delta_line=0, delta_start=4, type=7
+[1768518642] Token at line=18, col=0, len=5, delta_line=2, delta_start=0, type=0
+[1768518642] Token at line=18, col=33, len=1, delta_line=0, delta_start=33, type=4
+[1768518642] Token at line=19, col=0, len=5, delta_line=1, delta_start=0, type=0
+[1768518642] Token at line=19, col=6, len=2, delta_line=0, delta_start=6, type=1
+[1768518642] Token at line=19, col=14, len=1, delta_line=0, delta_start=8, type=4
+[1768518642] Token at line=19, col=18, len=31, delta_line=0, delta_start=4, type=7
+[1768518642] Token at line=21, col=0, len=5, delta_line=2, delta_start=0, type=0
+[1768518642] Token at line=21, col=32, len=1, delta_line=0, delta_start=32, type=4
+[1768518642] Token at line=22, col=0, len=5, delta_line=1, delta_start=0, type=0
+[1768518642] Token at line=22, col=6, len=2, delta_line=0, delta_start=6, type=1
+[1768518642] Token at line=22, col=13, len=1, delta_line=0, delta_start=7, type=4
+[1768518642] Token at line=22, col=17, len=42, delta_line=0, delta_start=4, type=7
+[1768518642] Token at line=24, col=0, len=5, delta_line=2, delta_start=0, type=0
+[1768518642] Token at line=24, col=45, len=1, delta_line=0, delta_start=45, type=4
+[1768518642] Token at line=25, col=0, len=5, delta_line=1, delta_start=0, type=0
+[1768518642] Token at line=25, col=6, len=2, delta_line=0, delta_start=6, type=1
+[1768518642] Token at line=25, col=18, len=1, delta_line=0, delta_start=12, type=4
+[1768518642] Token at line=25, col=22, len=35, delta_line=0, delta_start=4, type=7
+[1768518642] Token at line=27, col=0, len=5, delta_line=2, delta_start=0, type=0
+[1768518642] Token at line=27, col=33, len=1, delta_line=0, delta_start=33, type=4
+[1768518642] Token at line=28, col=0, len=5, delta_line=1, delta_start=0, type=0
+[1768518642] Token at line=28, col=6, len=2, delta_line=0, delta_start=6, type=1
+[1768518642] Token at line=28, col=9, len=1, delta_line=0, delta_start=3, type=4
+[1768518642] Token at line=28, col=13, len=1, delta_line=0, delta_start=4, type=4
+[1768518642] Token at line=28, col=20, len=19, delta_line=0, delta_start=7, type=7
+[1768518642] Token at line=29, col=0, len=5, delta_line=1, delta_start=0, type=0
+[1768518642] Token at line=29, col=6, len=2, delta_line=0, delta_start=6, type=1
+[1768518642] Token at line=29, col=9, len=1, delta_line=0, delta_start=3, type=4
+[1768518642] Token at line=29, col=15, len=1, delta_line=0, delta_start=6, type=4
+[1768518642] Token at line=29, col=20, len=38, delta_line=0, delta_start=5, type=7
+[1768518642] Token at line=30, col=0, len=5, delta_line=1, delta_start=0, type=0
+[1768518642] Token at line=30, col=6, len=2, delta_line=0, delta_start=6, type=1
+[1768518642] Token at line=30, col=11, len=1, delta_line=0, delta_start=5, type=4
+[1768518642] Token at line=30, col=15, len=1, delta_line=0, delta_start=4, type=4
+[1768518642] Token at line=30, col=20, len=51, delta_line=0, delta_start=5, type=7
+[1768518642] Token at line=33, col=0, len=3, delta_line=3, delta_start=0, type=3
+[1768518642] Token at line=33, col=4, len=2, delta_line=0, delta_start=4, type=1
+[1768518642] Token at line=34, col=0, len=5, delta_line=1, delta_start=0, type=0
+[1768518642] Token at line=34, col=6, len=2, delta_line=0, delta_start=6, type=1
+[1768518642] Token at line=34, col=9, len=2, delta_line=0, delta_start=3, type=1
+[1768518642] Token at line=34, col=13, len=1, delta_line=0, delta_start=4, type=4
+[1768518645] === compile_changed_files called with 1 changed files ===
+[1768518645] Root files to compile: 2
+[1768518645] Primary root file: FileId(0)
+[1768518645] Building HIR...
+[1768518645] No diagnostics, taking HIR
+[1768518645] HIR built: Some
+[1768518645] Building symbol table from SymbolResolver...
+[1768518645] Symbol table built: 4 symbols, 39 span mappings
+[1768518645] Processing Use statement:
+[1768518645]   use_keyword: 0..3 = 'use'
+[1768518645]   from_keyword: 10..14 = 'from'
+[1768518645]   selector: 4..9 = 'print'
+[1768518645]   path: 15..18 = 'std'
+[1768518645] Token at line=0, col=0, len=3, delta_line=0, delta_start=0, type=3
+[1768518645] Token at line=0, col=4, len=5, delta_line=0, delta_start=4, type=0
+[1768518645] Token at line=0, col=10, len=4, delta_line=0, delta_start=6, type=3
+[1768518645] Token at line=0, col=15, len=3, delta_line=0, delta_start=5, type=8
+[1768518645] Token at line=0, col=25, len=2, delta_line=0, delta_start=10, type=1
+[1768518645] Token at line=0, col=57, len=5, delta_line=0, delta_start=32, type=0
+[1768518645] Token at line=0, col=89, len=5, delta_line=0, delta_start=32, type=0
+[1768518645] Token at line=0, col=95, len=2, delta_line=0, delta_start=6, type=1
+[1768518645] Token at line=0, col=110, len=5, delta_line=0, delta_start=15, type=0
+[1768518645] Token at line=0, col=116, len=2, delta_line=0, delta_start=6, type=1
+[1768518645] Token at line=0, col=131, len=5, delta_line=0, delta_start=15, type=0
+[1768518645] Token at line=0, col=137, len=2, delta_line=0, delta_start=6, type=1
+[1768518645] Token at line=0, col=184, len=5, delta_line=0, delta_start=47, type=0
+[1768518645] Token at line=0, col=232, len=5, delta_line=0, delta_start=48, type=0
+[1768518645] Token at line=0, col=238, len=2, delta_line=0, delta_start=6, type=1
+[1768518645] Token at line=0, col=301, len=5, delta_line=0, delta_start=63, type=0
+[1768518645] Token at line=0, col=350, len=5, delta_line=0, delta_start=49, type=0
+[1768518645] Token at line=0, col=356, len=2, delta_line=0, delta_start=6, type=1
+[1768518645] Token at line=0, col=423, len=5, delta_line=0, delta_start=67, type=0
+[1768518645] Token at line=0, col=461, len=5, delta_line=0, delta_start=38, type=0
+[1768518645] Token at line=0, col=467, len=2, delta_line=0, delta_start=6, type=1
+[1768518645] Token at line=0, col=510, len=5, delta_line=0, delta_start=43, type=0
+[1768518645] Token at line=0, col=546, len=5, delta_line=0, delta_start=36, type=0
+[1768518645] Token at line=0, col=552, len=2, delta_line=0, delta_start=6, type=1
+[1768518645] Token at line=0, col=597, len=5, delta_line=0, delta_start=45, type=0
+[1768518645] Token at line=0, col=632, len=5, delta_line=0, delta_start=35, type=0
+[1768518645] Token at line=0, col=638, len=2, delta_line=0, delta_start=6, type=1
+[1768518645] Token at line=0, col=693, len=5, delta_line=0, delta_start=55, type=0
+[1768518645] Token at line=0, col=741, len=5, delta_line=0, delta_start=48, type=0
+[1768518645] Token at line=0, col=747, len=2, delta_line=0, delta_start=6, type=1
+[1768518645] Token at line=0, col=800, len=5, delta_line=0, delta_start=53, type=0
+[1768518645] Token at line=0, col=836, len=5, delta_line=0, delta_start=36, type=0
+[1768518645] Token at line=0, col=842, len=2, delta_line=0, delta_start=6, type=1
+[1768518645] Token at line=0, col=876, len=5, delta_line=0, delta_start=34, type=0
+[1768518645] Token at line=0, col=882, len=2, delta_line=0, delta_start=6, type=1
+[1768518645] Token at line=0, col=935, len=5, delta_line=0, delta_start=53, type=0
+[1768518645] Token at line=0, col=941, len=2, delta_line=0, delta_start=6, type=1
+[1768518645] Token at line=0, col=1013, len=2, delta_line=0, delta_start=72, type=1
+[1768518645] Token at line=0, col=1023, len=5, delta_line=0, delta_start=10, type=0
+[1768518645] Token at line=0, col=1029, len=2, delta_line=0, delta_start=6, type=1
+[1768518645] Token at line=0, col=1032, len=2, delta_line=0, delta_start=3, type=1
+[1768518645] Processing Use statement:
+[1768518645]   use_keyword: 0..3 = 'use'
+[1768518645]   from_keyword: 10..14 = 'from'
+[1768518645]   selector: 4..9 = 'print'
+[1768518645]   path: 15..18 = 'std'
+[1768518645] Token at line=0, col=0, len=3, delta_line=0, delta_start=0, type=3
+[1768518645] Token at line=0, col=4, len=5, delta_line=0, delta_start=4, type=0
+[1768518645] Token at line=0, col=10, len=4, delta_line=0, delta_start=6, type=3
+[1768518645] Token at line=0, col=15, len=3, delta_line=0, delta_start=5, type=8
+[1768518645] Token at line=0, col=25, len=2, delta_line=0, delta_start=10, type=1
+[1768518645] Token at line=0, col=57, len=5, delta_line=0, delta_start=32, type=0
+[1768518645] Token at line=0, col=89, len=5, delta_line=0, delta_start=32, type=0
+[1768518645] Token at line=0, col=95, len=2, delta_line=0, delta_start=6, type=1
+[1768518645] Token at line=0, col=110, len=5, delta_line=0, delta_start=15, type=0
+[1768518645] Token at line=0, col=116, len=2, delta_line=0, delta_start=6, type=1
+[1768518645] Token at line=0, col=131, len=5, delta_line=0, delta_start=15, type=0
+[1768518645] Token at line=0, col=137, len=2, delta_line=0, delta_start=6, type=1
+[1768518645] Token at line=0, col=184, len=5, delta_line=0, delta_start=47, type=0
+[1768518645] Token at line=0, col=232, len=5, delta_line=0, delta_start=48, type=0
+[1768518645] Token at line=0, col=238, len=2, delta_line=0, delta_start=6, type=1
+[1768518645] Token at line=0, col=301, len=5, delta_line=0, delta_start=63, type=0
+[1768518645] Token at line=0, col=350, len=5, delta_line=0, delta_start=49, type=0
+[1768518645] Token at line=0, col=356, len=2, delta_line=0, delta_start=6, type=1
+[1768518645] Token at line=0, col=423, len=5, delta_line=0, delta_start=67, type=0
+[1768518645] Token at line=0, col=461, len=5, delta_line=0, delta_start=38, type=0
+[1768518645] Token at line=0, col=467, len=2, delta_line=0, delta_start=6, type=1
+[1768518645] Token at line=0, col=510, len=5, delta_line=0, delta_start=43, type=0
+[1768518645] Token at line=0, col=546, len=5, delta_line=0, delta_start=36, type=0
+[1768518645] Token at line=0, col=552, len=2, delta_line=0, delta_start=6, type=1
+[1768518645] Token at line=0, col=597, len=5, delta_line=0, delta_start=45, type=0
+[1768518645] Token at line=0, col=632, len=5, delta_line=0, delta_start=35, type=0
+[1768518645] Token at line=0, col=638, len=2, delta_line=0, delta_start=6, type=1
+[1768518645] Token at line=0, col=693, len=5, delta_line=0, delta_start=55, type=0
+[1768518645] Token at line=0, col=741, len=5, delta_line=0, delta_start=48, type=0
+[1768518645] Token at line=0, col=747, len=2, delta_line=0, delta_start=6, type=1
+[1768518645] Token at line=0, col=800, len=5, delta_line=0, delta_start=53, type=0
+[1768518645] Token at line=0, col=836, len=5, delta_line=0, delta_start=36, type=0
+[1768518645] Token at line=0, col=842, len=2, delta_line=0, delta_start=6, type=1
+[1768518645] Token at line=0, col=876, len=5, delta_line=0, delta_start=34, type=0
+[1768518645] Token at line=0, col=882, len=2, delta_line=0, delta_start=6, type=1
+[1768518645] Token at line=0, col=935, len=5, delta_line=0, delta_start=53, type=0
+[1768518645] Token at line=0, col=941, len=2, delta_line=0, delta_start=6, type=1
+[1768518645] Token at line=0, col=1013, len=2, delta_line=0, delta_start=72, type=1
+[1768518645] Token at line=0, col=1023, len=5, delta_line=0, delta_start=10, type=0
+[1768518645] Token at line=0, col=1029, len=2, delta_line=0, delta_start=6, type=1
+[1768518645] Token at line=0, col=1032, len=2, delta_line=0, delta_start=3, type=1

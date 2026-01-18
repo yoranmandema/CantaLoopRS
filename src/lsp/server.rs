@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tower_lsp::{Client, LanguageServer, LspService, Server};
+use tower_lsp::{Client, LanguageServer};
 use tower_lsp::lsp_types::*;
 
 use crate::core::source_manager::SourceManager;
@@ -103,5 +103,25 @@ impl LanguageServer for CantaLoopServer {
 
     async fn semantic_tokens_full(&self, params: SemanticTokensParams) -> tower_lsp::jsonrpc::Result<Option<SemanticTokensResult>> {
         crate::lsp::handlers::tokens::handle_semantic_tokens_full(self, params).await
+    }
+
+    async fn completion(&self, params: CompletionParams) -> tower_lsp::jsonrpc::Result<Option<CompletionResponse>> {
+        crate::lsp::handlers::completion::handle_completion(self, params).await
+    }
+
+    async fn document_symbol(&self, params: DocumentSymbolParams) -> tower_lsp::jsonrpc::Result<Option<DocumentSymbolResponse>> {
+        crate::lsp::handlers::document_symbol::handle_document_symbol(self, params).await
+    }
+
+    async fn code_action(&self, params: CodeActionParams) -> tower_lsp::jsonrpc::Result<Option<CodeActionResponse>> {
+        crate::lsp::handlers::code_action::handle_code_action(self, params).await
+    }
+
+    async fn formatting(&self, params: DocumentFormattingParams) -> tower_lsp::jsonrpc::Result<Option<Vec<TextEdit>>> {
+        crate::lsp::handlers::formatting::handle_formatting(self, params).await
+    }
+
+    async fn range_formatting(&self, params: DocumentRangeFormattingParams) -> tower_lsp::jsonrpc::Result<Option<Vec<TextEdit>>> {
+        crate::lsp::handlers::formatting::handle_range_formatting(self, params).await
     }
 }

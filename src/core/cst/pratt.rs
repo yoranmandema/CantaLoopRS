@@ -8,11 +8,10 @@
 //! easily pass `&mut CstIdGenerator` through closures.
 
 use pest::iterators::{Pair, Pairs};
-use pest::RuleType;
 
 use crate::core::parser::Rule;
 use crate::core::cst::{
-    CstExpr, CstBinaryOp, CstComposeOp, CstUnaryOp, CstPostfixOp,
+    CstExpr, CstBinaryOp, CstComposeOp, CstUnaryOp,
     Span, Spanned, CstIdGenerator,
 };
 use crate::core::cst::builder::build_cst_atom;
@@ -206,10 +205,10 @@ fn parse_atom(
 }
 
 fn parse_postfix(
-    lhs: Spanned<CstExpr>,
-    op_pair: Pair<Rule>,
-    iter: &mut std::iter::Peekable<Pairs<Rule>>,
-    id_gen: &mut CstIdGenerator,
+    _lhs: Spanned<CstExpr>,
+    _op_pair: Pair<Rule>,
+    _iter: &mut std::iter::Peekable<Pairs<Rule>>,
+    _id_gen: &mut CstIdGenerator,
 ) -> Result<Spanned<CstExpr>, pest::error::Error<Rule>> {
     // Postfix operators are handled in build_cst_atom
     // This function should not be called in the current architecture

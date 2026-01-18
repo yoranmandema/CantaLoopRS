@@ -83,8 +83,8 @@ fn load_stdlib_module_for_compile(
                 panic!("Function '{}' (or '{}') not found in native_functions. Make sure to call load_stdlib_runtime before compile_with_project.", func.name, qualified_name);
             });
 
-        // Add to module's function map
-        module_functions.insert(func.name.to_string(), func_id);
+        // Add to module's function map (convert u32 to EntityId)
+        module_functions.insert(func.name.to_string(), crate::core::entity_id::EntityId::new(func_id));
     }
 
     // Register all structs in this module

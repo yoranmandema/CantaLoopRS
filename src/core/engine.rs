@@ -6,6 +6,7 @@ use std::{
 
 use crate::core::ast::Program;
 use crate::core::compileSession::{CompileContext, CompileSession};
+use crate::core::entity_id::EntityId;
 use crate::core::hir_lowering::HirAst;
 use crate::core::{
     bytecode::OpCode,
@@ -107,7 +108,7 @@ pub struct NativeFunction {
 
 #[derive(Clone)]
 pub struct NativeFunctionDescriptor {
-    pub id: u32,
+    pub id: crate::core::EntityId,
     pub name: String,
     pub signature: FunctionSignature,
     pub arity: Arity,
@@ -387,10 +388,12 @@ struct ModuleStructInfo {
 }
 
 pub struct Engine {
-    pub functions: HashMap<u32, NativeFunction>,
+    pub functions: HashMap<crate::core::EntityId, NativeFunction>,
     pub native_descriptors: Vec<NativeFunctionDescriptor>,
     /// Registered structs by module (for compile-time registration)
     registered_structs: HashMap<String, Vec<ModuleStructInfo>>,
+    /// ID generator for native functions
+    id_generator: crate::core::EntityIdGenerator,
 }
 
 impl Engine {
@@ -399,6 +402,7 @@ impl Engine {
             functions: HashMap::new(),
             native_descriptors: vec![],
             registered_structs: HashMap::new(),
+            id_generator: crate::core::EntityIdGenerator::new(),
         }
     }
 
@@ -419,10 +423,9 @@ impl Engine {
         signature: FunctionSignature,
         arity: Arity,
         func: Box<dyn Fn(Vec<Value>, &mut ValueHeap) -> Value + Send + Sync>,
-    ) -> u32 {
-        // Create a function ID - note: this should match the function registry
-        // For built-in functions, we'll use a special ID range (e.g., starting from 10000)
-        let id = 10000 + self.functions.len() as u32;
+    ) -> crate::core::EntityId {
+        // Use EntityIdGenerator to create a native function ID
+        let id = self.id_generator.next_native_func();
 
         self.functions.insert(
             id,
@@ -450,10 +453,9 @@ impl Engine {
         _signature: FunctionSignature,
         arity: Arity,
         func: Box<dyn Fn(Vec<Value>, &mut ValueHeap) -> Value + Send + Sync>,
-    ) -> u32 {
-        // Create a function ID - note: this should match the function registry
-        // For built-in functions, we'll use a special ID range (e.g., starting from 10000)
-        let id = 10000 + self.functions.len() as u32;
+    ) -> EntityId {
+        // Use EntityIdGenerator to create a native function ID
+        let id = self.id_generator.next_native_func();
 
         self.functions.insert(id, NativeFunction { arity, func });
 
@@ -531,7 +533,7 @@ impl Engine {
         } else {
             format!("{}.{}", base_path, module.name)
         };
-        
+
         // Extract struct information
         let structs: Vec<ModuleStructInfo> = module.structs.iter().map(|s| {
             ModuleStructInfo {
@@ -542,7 +544,7 @@ impl Engine {
         if !structs.is_empty() {
             self.registered_structs.insert(module_path.clone(), structs);
         }
-        
+
         // Delegate to the existing implementation for runtime registration
         self.load_stdlib(module, base_path);
     }
@@ -583,17 +585,17 @@ impl Engine {
     fn register_native_modules_for_compile(engine: &Engine, session: &mut CompileSession) {
         use std::collections::HashMap;
         use crate::core::hir_lowering::StructDef;
-        
+
         // Build module maps from native_descriptors
         // Functions are registered with qualified names like "std.print", "math.round", "mymath.hypot"
-        let mut native_modules: HashMap<String, (HashMap<String, u32>, HashMap<String, StructDef>)> = HashMap::new();
-        
+        let mut native_modules: HashMap<String, (HashMap<String, EntityId>, HashMap<String, StructDef>)> = HashMap::new();
+
         for native in engine.native_function_descriptors() {
             // Look for qualified names (e.g., "std.print", "math.round", "mymath.hypot")
             if let Some(dot_pos) = native.name.find('.') {
                 let module_name = &native.name[..dot_pos];
                 let function_name = &native.name[dot_pos + 1..];
-                
+
                 let (functions, _) = native_modules
                     .entry(module_name.to_string())
                     .or_insert_with(|| (HashMap::new(), HashMap::new()));
@@ -778,7 +780,7 @@ impl Engine {
         for block in &ast.blocks {
             for stmt in &block.statements {
                 if let Statement::Mod { identifier } = stmt {
-                    return Some(identifier.clone());
+                    return Some(identifier.name.clone());
                 }
             }
         }
@@ -842,7 +844,7 @@ impl Engine {
     
         // Build stdlib module maps from native_descriptors
         // Functions are registered with qualified names like "std.print", "math.round", etc.
-        let mut stdlib_modules: HashMap<String, HashMap<String, u32>> = HashMap::new();
+        let mut stdlib_modules: HashMap<String, HashMap<String, EntityId>> = HashMap::new();
         eprintln!("Building modules from {} native descriptors", self.native_function_descriptors().len());
         for native in self.native_function_descriptors() {
             // Look for qualified names (e.g., "std.print", "math.round", "mymath.hypot")
@@ -856,12 +858,12 @@ impl Engine {
                     .insert(function_name.to_string(), native.id);
             }
         }
-        
+
         // Debug: print registered modules
         if !stdlib_modules.is_empty() {
             eprintln!("Registered modules: {:?}", stdlib_modules.keys().collect::<Vec<_>>());
         }
-    
+
         // Register stdlib modules with their functions
         for (module_name, functions) in stdlib_modules {
             eprintln!("Registering module '{}' with {} functions", module_name, functions.len());

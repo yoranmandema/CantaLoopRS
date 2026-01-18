@@ -42,10 +42,13 @@ pub struct CompilerSnapshot {
     symbols: Option<SymbolTable>,
     /// Phase 3: Mapping from CST node IDs to symbol IDs.
     /// This enables identity-based symbol resolution: Span → CstId → SymbolId
+    /// NOTE: This is deprecated - symbols are now built from SymbolResolver
     cst_id_to_symbol_id: HashMap<CstId, SymbolId>,
     /// Phase 3: Mapping from CST node IDs to their source spans.
     /// This enables fast span lookup after CST is dropped.
     cst_id_to_span: HashMap<CstId, CstSpan>,
+    /// File → module name mapping (for multi-file projects)
+    file_to_module: HashMap<FileId, String>,
 }
 
 /// Symbol table with span information for LSP queries.
@@ -132,6 +135,8 @@ pub struct SymbolInfo {
     pub name: String,
     pub kind: crate::core::hir_lowering::SymbolKind,
     pub ty: crate::core::hir_lowering::ValueKind,
+    /// Entity ID of the underlying compiler entity (for direct lookup).
+    pub entity_id: Option<crate::core::EntityId>,
     /// Stability classification for this symbol.
     ///
     /// Determines which IDE features can safely operate on this symbol.
@@ -148,16 +153,17 @@ impl CompilerSnapshot {
         hir: Option<HirAst>,
         diagnostics: HashMap<FileId, Vec<HirError>>,
         symbols: Option<SymbolTable>,
-        cst_id_to_symbol_id: HashMap<CstId, SymbolId>,
         cst_id_to_span: HashMap<CstId, CstSpan>,
+        file_to_module: HashMap<FileId, String>,
     ) -> Self {
         Self {
             csts,
             hir,
             diagnostics,
             symbols,
-            cst_id_to_symbol_id,
+            cst_id_to_symbol_id: HashMap::new(), // No longer used - symbols are built from SymbolResolver
             cst_id_to_span,
+            file_to_module,
         }
     }
 
@@ -251,48 +257,44 @@ impl CompilerSnapshot {
 
     /// Find all symbols that have spans containing the given byte offset.
     /// 
-    /// Phase 3: Uses CST identity (Span → CstId → SymbolId) when available,
-    /// falling back to span-based lookup for backward compatibility.
+    /// Uses span-based lookup from the symbol table, which includes both definitions and references.
     /// 
     /// Returns an iterator over (span, symbol_id) pairs where the span contains the offset.
     /// The iterator is ordered by span size (smallest first) to prefer more specific matches.
     pub fn symbols_at_offset(&self, file_id: FileId, byte_offset: usize) -> impl Iterator<Item = (HirSpan, SymbolId)> + '_ {
         let mut matches: Vec<(HirSpan, SymbolId)> = Vec::new();
-        
-        // Phase 3: Try CST identity-based lookup first (more accurate)
-        if let Some(cst) = self.cst(file_id) {
-            // Find CST nodes at this offset
-            let cst_nodes = Self::find_cst_nodes_at_offset(cst, byte_offset);
-            
-            for cst_id in cst_nodes {
-                // Look up symbol ID via CST identity
-                if let Some(&symbol_id) = self.cst_id_to_symbol_id.get(&cst_id) {
-                    // Get span for this CST node
-                    if let Some(&cst_span) = self.cst_id_to_span.get(&cst_id) {
-                        let hir_span = HirSpan::new(cst_span.start as usize, cst_span.end as usize);
-                        matches.push((hir_span, symbol_id));
-                    }
+
+        eprintln!("[LSP_API] symbols_at_offset: Looking for symbols at byte_offset={}", byte_offset);
+
+        // Use span-based lookup from symbol table (includes both definitions and references)
+        // CRITICAL: Spans are half-open intervals [start, end), so end is exclusive
+        if let Some(symbols) = self.symbols.as_ref() {
+            eprintln!("[LSP_API] symbols_at_offset: Checking {} span->symbol mappings", symbols.span_to_symbol.len());
+            for (span, symbol_id) in symbols.span_to_symbol.iter().take(5) {
+                if let Some(info) = symbols.symbol_info.get(symbol_id) {
+                    eprintln!("[LSP_API]   Sample span: {}..{} -> {} (symbol_id={:?})",
+                        span.start, span.end, info.name, symbol_id);
                 }
             }
-        }
-        
-        // Fallback: Use span-based lookup if no CST identity matches found
-        if matches.is_empty() {
-            if let Some(symbols) = self.symbols.as_ref() {
-                matches = symbols.span_to_symbol
-                    .iter()
-                    .filter_map(|(span, &symbol_id)| {
-                        if span.start <= byte_offset && byte_offset <= span.end {
-                            Some((*span, symbol_id))
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
-            }
+
+            matches = symbols.span_to_symbol
+                .iter()
+                .filter_map(|(span, &symbol_id)| {
+                    // Half-open interval: [start, end) - end is exclusive
+                    if span.start <= byte_offset && byte_offset < span.end {
+                        eprintln!("[LSP_API] symbols_at_offset: MATCH! span {}..{} contains offset {}",
+                            span.start, span.end, byte_offset);
+                        Some((*span, symbol_id))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
         }
         
         // Sort by span length (smallest first) to prefer more specific matches
+        // This ensures that when hovering over "x" in "let x = y", we get the "x" identifier
+        // rather than the larger "let x = y" expression span
         matches.sort_by_key(|(span, _)| span.end - span.start);
         
         matches.into_iter()
@@ -307,7 +309,8 @@ impl CompilerSnapshot {
         
         fn walk_expr(expr: &crate::core::cst::Spanned<CstExpr>, offset: usize, nodes: &mut Vec<CstId>) {
             let span = expr.span;
-            if span.start as usize <= offset && offset <= span.end as usize {
+            // CRITICAL: Spans are half-open intervals [start, end), so end is exclusive
+            if span.start as usize <= offset && offset < span.end as usize {
                 nodes.push(expr.id);
                 
                 // Recurse into children for more specific matches
@@ -347,25 +350,26 @@ impl CompilerSnapshot {
         // Walk through all blocks and statements
         for block in &cst.blocks {
             let block_span = block.span;
-            if block_span.start as usize <= byte_offset && byte_offset <= block_span.end as usize {
+            // CRITICAL: Spans are half-open intervals [start, end), so end is exclusive
+            if block_span.start as usize <= byte_offset && byte_offset < block_span.end as usize {
                 for stmt in &block.node.statements {
                     let stmt_span = stmt.span;
-                    if stmt_span.start as usize <= byte_offset && byte_offset <= stmt_span.end as usize {
+                    if stmt_span.start as usize <= byte_offset && byte_offset < stmt_span.end as usize {
                         match &stmt.node {
                             CstStatement::Let { identifier, expression, .. } => {
-                                if identifier.span.start as usize <= byte_offset && byte_offset <= identifier.span.end as usize {
+                                if identifier.span.start as usize <= byte_offset && byte_offset < identifier.span.end as usize {
                                     nodes.push(identifier.id);
                                 }
                                 walk_expr(expression, byte_offset, &mut nodes);
                             }
                             CstStatement::Const { identifier, expression, .. } => {
-                                if identifier.span.start as usize <= byte_offset && byte_offset <= identifier.span.end as usize {
+                                if identifier.span.start as usize <= byte_offset && byte_offset < identifier.span.end as usize {
                                     nodes.push(identifier.id);
                                 }
                                 walk_expr(expression, byte_offset, &mut nodes);
                             }
                             CstStatement::FunctionDeclaration { identifier, .. } => {
-                                if identifier.span.start as usize <= byte_offset && byte_offset <= identifier.span.end as usize {
+                                if identifier.span.start as usize <= byte_offset && byte_offset < identifier.span.end as usize {
                                     nodes.push(identifier.id);
                                 }
                             }

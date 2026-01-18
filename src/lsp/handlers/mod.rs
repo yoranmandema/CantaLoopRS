@@ -11,4 +11,8 @@ pub mod diagnostics;
 pub mod hover;
 pub mod goto;
 pub mod tokens;
+pub mod completion;
+pub mod document_symbol;
+pub mod code_action;
+pub mod formatting;
 

@@ -32,9 +32,12 @@ pub struct CstIdGenerator {
 }
 
 impl CstIdGenerator {
-    /// Create a new ID generator starting at 0.
+    /// Create a new ID generator.
+    ///
+    /// NOTE: `CstId(0)` is reserved as a sentinel for synthetic nodes (no source).
+    /// Real CST nodes must never use `0`, otherwise span→symbol binding becomes ambiguous.
     pub fn new() -> Self {
-        Self { next_id: 0 }
+        Self { next_id: 1 }
     }
 
     /// Generate the next unique CST ID.
@@ -46,7 +49,7 @@ impl CstIdGenerator {
 
     /// Reset the generator (for testing or reuse).
     pub fn reset(&mut self) {
-        self.next_id = 0;
+        self.next_id = 1;
     }
 }
 

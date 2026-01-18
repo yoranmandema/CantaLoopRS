@@ -2,6 +2,8 @@
 pub mod ast;
 pub mod cst;
 pub mod span;
+/// Unified entity identification system.
+pub mod entity_id;
 /// Bytecode compilation and instruction set.
 pub mod bytecode;
 /// Main engine orchestrating compilation and execution.
@@ -9,7 +11,7 @@ pub mod engine;
 /// Pest-based parser for CantaLoop source code.
 pub mod parser;
 /// HIR lowering pass: AST → HIR → CompilerState
-/// 
+///
 /// This module performs the lowering transformation from AST to High-level Intermediate Representation (HIR),
 /// and builds CompilerState as the single source of truth for semantic information.
 /// It is no longer just "semantic analysis" - it defines symbol identity, scoping, binding, and semantic meaning.
@@ -23,6 +25,7 @@ pub mod native_module_loader;
 pub mod source_manager;
 pub mod lsp_api;
 pub mod compiler_state;
+pub mod symbol_resolver;
 
 // Re-export commonly used types
 pub use engine::Engine;
@@ -30,4 +33,5 @@ pub use parser::parse_program;
 pub use vm::{VM, Value};
 pub use bytecode::{ByteCodeEmitter, OpCode};
 pub use hir_lowering::{CompilerState, FunctionSignature, ValueKind, HirBuilder, Symbol, SymbolKind, SymbolTable};
+pub use entity_id::{EntityId, EntityIdGenerator};
 

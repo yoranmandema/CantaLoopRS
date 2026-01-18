@@ -1,7 +1,13 @@
 {
   "permissions": {
     "allow": [
-      "Bash(cargo build:*)"
+      "Bash:*",
+      "Bash(python scripts/refactor_helper.py:*)",
+      "Bash(cargo build:*)",
+      "Bash(find:*)",
+      "Bash(cargo test:*)",
+      "Bash(cargo check:*)",
+      "Bash(cargo run:*)"
     ]
   }
 }
